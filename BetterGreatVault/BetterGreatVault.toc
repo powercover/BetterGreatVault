@@ -1,0 +1,16 @@
+## Interface: 120100, 120105
+## Title: Better Great Vault
+## Notes: Shows Great Vault progress and reward item level on each slot.
+## Author: powercover
+## Version: 1.0.0
+## SavedVariables: BetterGreatVaultDB
+## AllowLoadGameType: mainline
+## Category: User Interface
+## IconTexture: Interface\Icons\INV_Misc_Bag_10_Green
+
+Utils.lua
+Rewards.lua
+GreatVault.lua
+Tooltip.lua
+UI.lua
+Core.lua
