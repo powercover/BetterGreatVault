@@ -1,0 +1,311 @@
+local _, BGV = ...
+
+BGV.Tooltip = {}
+
+local Tooltip = BGV.Tooltip
+local Utils = BGV.Utils
+
+local CHECK = "|TInterface\\RaidFrame\\ReadyCheck-Ready:0|t "
+local MAX_LISTED = 12
+
+local function AddBlank()
+    if type(GameTooltip_AddBlankLineToTooltip) == "function" then
+        GameTooltip_AddBlankLineToTooltip(GameTooltip)
+    else
+        GameTooltip:AddLine(" ")
+    end
+end
+
+local function AddHeader(text)
+    GameTooltip:AddLine(text, 1, 0.82, 0)
+end
+
+local function AddBody(text, r, g, b)
+    GameTooltip:AddLine(text, r or 1, g or 1, b or 1, true)
+end
+
+local function AddList(rows, formatter)
+    local hidden = 0
+    for index, row in ipairs(rows) do
+        if index <= MAX_LISTED then
+            AddBody(formatter(row))
+        else
+            hidden = hidden + 1
+        end
+    end
+    if hidden > 0 then
+        AddBody(string.format("... and %d more", hidden), 0.7, 0.7, 0.7)
+    end
+end
+
+local function AppendDungeon(slot)
+    if type(slot.runs) ~= "table" or #slot.runs == 0 then
+        return
+    end
+
+    AddBlank()
+    AddHeader("Completed Activities")
+    AddList(slot.runs, function(run)
+        local line = run.text or "Mythic+"
+        if run.counts then
+            line = CHECK .. line
+            if run.setsReward then
+                line = line .. "  (sets reward)"
+            end
+            return line
+        end
+        return "|cff808080" .. line .. "|r"
+    end)
+end
+
+local function AppendRaid(slot)
+    if type(slot.encounters) ~= "table" or #slot.encounters == 0 then
+        return
+    end
+
+    AddBlank()
+    AddHeader("Bosses")
+    local lastInstance
+    local listed = 0
+    local hidden = 0
+    for _, encounter in ipairs(slot.encounters) do
+        if listed >= MAX_LISTED then
+            hidden = hidden + 1
+        else
+            if encounter.instanceName and encounter.instanceName ~= lastInstance then
+                AddBody(encounter.instanceName, 1, 0.82, 0)
+                lastInstance = encounter.instanceName
+            end
+            local line = encounter.name or "Boss"
+            if encounter.defeated then
+                line = CHECK .. line .. " (" .. (encounter.difficultyName or "Defeated") .. ")"
+                AddBody(line, 0.2, 1, 0.2)
+            else
+                AddBody(line, 0.5, 0.5, 0.5)
+            end
+            listed = listed + 1
+        end
+    end
+    if hidden > 0 then
+        AddBody(string.format("... and %d more", hidden), 0.7, 0.7, 0.7)
+    end
+end
+
+local function AppendWorld(slot)
+    if type(slot.worldTiers) ~= "table" or #slot.worldTiers == 0 then
+        return
+    end
+
+    AddBlank()
+    AddHeader("Completed Activities")
+    AddList(slot.worldTiers, function(tier)
+        local line = tier.text or "World"
+        if tier.counts then
+            return CHECK .. line
+        end
+        return "|cff808080" .. line .. "|r"
+    end)
+end
+
+local function ActivityFrameOf(frame)
+    if type(frame) ~= "table" then
+        return nil
+    end
+    if frame.bgvSlot or (frame.type and frame.index) then
+        return frame
+    end
+    if type(frame.GetParent) == "function" then
+        local parent = frame:GetParent()
+        if type(parent) == "table" and (parent.bgvSlot or (parent.type and parent.index)) then
+            return parent
+        end
+    end
+    return frame
+end
+
+local function SlotForFrame(activityFrame)
+    if type(activityFrame.bgvSlot) == "table" then
+        return activityFrame.bgvSlot
+    end
+    if activityFrame.type == nil or activityFrame.index == nil then
+        return nil
+    end
+    local slot = BGV.GreatVault.SlotFor(activityFrame.type, activityFrame.index)
+    if type(slot) == "table" then
+        activityFrame.bgvSlot = slot
+    end
+    return slot
+end
+
+local function EnsureOwner(activityFrame)
+    if GameTooltip:IsShown() and GameTooltip:GetOwner() then
+        return true
+    end
+
+    local owner = activityFrame
+    if activityFrame.ItemFrame and type(activityFrame.ItemFrame.IsMouseOver) == "function" and activityFrame.ItemFrame:IsMouseOver() then
+        owner = activityFrame.ItemFrame
+    elseif type(activityFrame.IsMouseOver) == "function" and not activityFrame:IsMouseOver() and activityFrame.ItemFrame then
+        owner = activityFrame.ItemFrame
+    end
+
+    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT", -7, -11)
+    return true
+end
+
+function Tooltip.ShowStandalone(activityFrame)
+    if not GameTooltip or type(activityFrame) ~= "table" then
+        return
+    end
+
+    local slot = activityFrame.bgvSlot
+    if type(slot) ~= "table" and activityFrame.type ~= nil and activityFrame.index ~= nil then
+        slot = BGV.GreatVault.SlotFor(activityFrame.type, activityFrame.index)
+        if type(slot) == "table" then
+            activityFrame.bgvSlot = slot
+        end
+    end
+    if type(slot) ~= "table" then
+        return
+    end
+
+    local owner = activityFrame.bgvHit or activityFrame
+    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT", 8, -8)
+    GameTooltip:ClearLines()
+
+    local ok, err = pcall(Tooltip.Write, slot)
+    if not ok then
+        BGV.lastError = err
+        GameTooltip:ClearLines()
+        GameTooltip:AddLine("Great Vault", 1, 0.82, 0)
+        GameTooltip:AddLine(BGV.GreatVault.ProgressText(slot), 1, 1, 1, true)
+        GameTooltip:Show()
+    end
+end
+
+function Tooltip.Append(frame)
+    if not GameTooltip or type(frame) ~= "table" then
+        return
+    end
+
+    local activityFrame = ActivityFrameOf(frame)
+    local ok, err = pcall(function()
+        local slot = SlotForFrame(activityFrame)
+        if type(slot) ~= "table" then
+            return
+        end
+        if not EnsureOwner(activityFrame) then
+            return
+        end
+        Tooltip.Write(slot)
+    end)
+    if not ok then
+        BGV.lastError = err
+    end
+end
+
+function Tooltip.Write(slot)
+    AddBlank()
+    AddHeader(string.format("Great Vault — %s", slot.category or "Reward"))
+    AddBlank()
+    AddHeader("Progress")
+    local progress = BGV.GreatVault.ProgressText(slot)
+    if slot.qualifier then
+        progress = progress .. " (" .. slot.qualifier .. ")"
+    end
+    AddBody(progress)
+
+    if type(slot.killSummary) == "string" then
+        AddBlank()
+        AddHeader("Bosses Killed")
+        AddBody(slot.killSummary)
+    end
+
+    if Utils.SameType(slot.type, Utils.ThresholdType("Activities")) then
+        AppendDungeon(slot)
+    elseif Utils.SameType(slot.type, Utils.ThresholdType("Raid")) then
+        AppendRaid(slot)
+    elseif Utils.SameType(slot.type, Utils.ThresholdType("World")) then
+        AppendWorld(slot)
+    elseif slot.qualifier then
+        AddBlank()
+        AddHeader("Activity")
+        AddBody(slot.qualifier)
+    end
+
+    if Utils.IsUsableNumber(slot.nextThreshold) then
+        AddBlank()
+        AddHeader("Next Slot")
+        AddBody(string.format("%d %s", slot.nextThreshold, slot.unit or "Activities"))
+        if Utils.IsUsableNumber(slot.nextProgress) and slot.nextProgress < slot.nextThreshold then
+            AddBody(string.format("%d more to unlock", slot.nextThreshold - slot.nextProgress), 0.8, 0.8, 0.8)
+        end
+    end
+
+    if slot.qualifier or slot.itemQuality or Utils.IsUsableNumber(slot.itemLevel) then
+        AddBlank()
+        AddHeader("Potential Reward")
+        if slot.qualifier then
+            AddBody("Difficulty: " .. slot.qualifier)
+        end
+        local upgradeText = BGV.GreatVault.RewardText(slot)
+        if upgradeText then
+            AddBody(upgradeText)
+        end
+    end
+
+    if type(slot.upgrade) == "table" and (slot.upgrade.nextLevel or slot.upgrade.itemLevel) then
+        AddBlank()
+        AddHeader("Higher Reward")
+        if Utils.SameType(slot.type, Utils.ThresholdType("Activities")) and Utils.IsUsableNumber(slot.upgrade.nextLevel) then
+            AddBody(string.format("Next key level: +%d", slot.upgrade.nextLevel))
+        elseif Utils.SameType(slot.type, Utils.ThresholdType("World")) and Utils.IsUsableNumber(slot.upgrade.nextLevel) then
+            AddBody(string.format("Next tier: %d", slot.upgrade.nextLevel))
+        elseif Utils.IsUsableNumber(slot.upgrade.nextLevel) then
+            local difficultyName = Utils.DifficultyName(slot.upgrade.nextLevel)
+            if difficultyName then
+                AddBody("Next difficulty: " .. difficultyName)
+            end
+        end
+        if Utils.IsUsableNumber(slot.upgrade.itemLevel) then
+            AddBody(string.format("Item level: %d", slot.upgrade.itemLevel))
+        end
+    end
+
+    GameTooltip:Show()
+end
+
+function Tooltip.Hook()
+    if Tooltip.hooked or type(WeeklyRewardsActivityMixin) ~= "table" then
+        return false
+    end
+
+    if type(WeeklyRewardsActivityMixin.ShowPreviewItemTooltip) == "function" then
+        hooksecurefunc(WeeklyRewardsActivityMixin, "ShowPreviewItemTooltip", function(self)
+            Tooltip.ShowStandalone(self)
+        end)
+    end
+
+    if type(WeeklyRewardsActivityMixin.OnEnter) == "function" then
+        hooksecurefunc(WeeklyRewardsActivityMixin, "OnEnter", function(self)
+            local showingPreview = false
+            if type(self.CanShowPreviewItemTooltip) == "function" then
+                local ok, preview = pcall(self.CanShowPreviewItemTooltip, self)
+                showingPreview = ok and preview
+            end
+            if not showingPreview then
+                Tooltip.ShowStandalone(self)
+            end
+        end)
+    end
+
+    if type(WeeklyRewardActivityItemMixin) == "table" and type(WeeklyRewardActivityItemMixin.OnEnter) == "function" then
+        hooksecurefunc(WeeklyRewardActivityItemMixin, "OnEnter", function(self)
+            local parent = self:GetParent()
+            Tooltip.ShowStandalone(parent or self)
+        end)
+    end
+
+    Tooltip.hooked = true
+    return true
+end
