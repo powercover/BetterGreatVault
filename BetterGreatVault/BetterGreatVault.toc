@@ -9,6 +9,7 @@
 ## IconTexture: Interface\Icons\INV_Misc_Bag_10_Green
 
 Utils.lua
+WorldLoot.lua
 Rewards.lua
 Bis.lua
 GreatVault.lua
