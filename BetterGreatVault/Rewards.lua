@@ -462,6 +462,90 @@ local function MythicPlusInstances()
     return ids
 end
 
+local function CurrentSpecID()
+    local specIndex = type(GetSpecialization) == "function" and GetSpecialization() or nil
+    if not specIndex or type(GetSpecializationInfo) ~= "function" then
+        return nil
+    end
+    return GetSpecializationInfo(specIndex)
+end
+
+local function SpecCanUse(itemID, specID)
+    if type(GetItemSpecInfo) ~= "function" or not specID then
+        return true
+    end
+    local specs = GetItemSpecInfo(itemID)
+    if type(specs) ~= "table" then
+        if C_Item and type(C_Item.RequestLoadItemDataByID) == "function" then
+            C_Item.RequestLoadItemDataByID(itemID)
+        end
+        return nil
+    end
+    for _, id in ipairs(specs) do
+        if id == specID then
+            return true
+        end
+    end
+    return false
+end
+
+local function WorldIcons()
+    local rows = BGV.WorldLoot
+    if type(rows) ~= "table" then
+        return {}, false
+    end
+    local specID = CurrentSpecID()
+    local icons = {}
+    local pending = false
+    for _, itemID in ipairs(rows) do
+        if Utils.IsUsableNumber(itemID) and IsVaultGear(itemID) then
+            local allowed = SpecCanUse(itemID, specID)
+            if allowed == nil then
+                pending = true
+            elseif allowed then
+                local icon
+                if type(GetItemInfoInstant) == "function" then
+                    icon = select(5, GetItemInfoInstant(itemID))
+                end
+                if (not icon or icon == 0) and C_Item and type(C_Item.GetItemIconByID) == "function" then
+                    icon = C_Item.GetItemIconByID(itemID)
+                end
+                if icon and icon ~= 0 and not Utils.IsSecret(icon) then
+                    icons[#icons + 1] = { itemID = itemID, icon = icon }
+                else
+                    pending = true
+                end
+            end
+        end
+    end
+    return icons, pending
+end
+
+local WORLD_REEL_LIMIT = 20
+
+local function SampleIcons(icons, limit)
+    local count = #icons
+    if count == 0 then
+        return icons
+    end
+    if count > limit then
+        count = limit
+    end
+    local pool = {}
+    for index = 1, #icons do
+        pool[index] = icons[index]
+    end
+    for index = #pool, 2, -1 do
+        local swap = math.random(index)
+        pool[index], pool[swap] = pool[swap], pool[index]
+    end
+    local sample = {}
+    for index = 1, count do
+        sample[index] = pool[index]
+    end
+    return sample
+end
+
 function Rewards.PossibleIcons(slot)
     if type(slot) ~= "table" or not slot.unlocked or not Rewards.ShowingWeeklyProgress() then
         return {}
@@ -493,60 +577,69 @@ function Rewards.PossibleIcons(slot)
         instanceIDs = MythicPlusInstances()
         key = "mplus:" .. tostring(specIndex)
     elseif Utils.SameType(slot.type, Utils.ThresholdType("World")) then
-        key = "world:" .. tostring(specIndex)
-        if iconLists[key] then
-            return iconLists[key]
-        end
-        local icons = {}
-        local itemIDs = BGV.Bis and BGV.Bis.WorldItems and BGV.Bis.WorldItems() or {}
-        for _, itemID in ipairs(itemIDs) do
-            if IsVaultGear(itemID) then
-            local icon
-            if type(GetItemInfoInstant) == "function" then
-                icon = select(5, GetItemInfoInstant(itemID))
-            end
-            if (not icon or icon == 0) and C_Item and C_Item.GetItemIconByID then
-                icon = C_Item.GetItemIconByID(itemID)
-            end
-            if icon and icon ~= 0 and not Utils.IsSecret(icon) then
-                icons[#icons + 1] = { itemID = itemID, icon = icon }
-            end
-            end
-        end
-        if #icons > 1 then
-            for index = #icons, 2, -1 do
-                local swap = math.random(index)
-                icons[index], icons[swap] = icons[swap], icons[index]
-            end
-        end
-        if #icons > 0 then
-            iconLists[key] = icons
-        end
-        return icons
+        local specID = CurrentSpecID()
+        key = "world:" .. tostring(specID)
     else
         return {}
     end
 
-    if iconLists[key] then
-        return iconLists[key]
+    local slotKey = key .. ":slot:" .. tostring(slot.index or 0)
+    if iconLists[slotKey] then
+        return iconLists[slotKey]
     end
 
-    local icons = CollectIcons(difficultyID, instanceIDs, encounterSet)
-    if #icons == 0 and encounterSet then
-        icons = CollectIcons(difficultyID, instanceIDs, nil)
-    end
-    if #icons == 0 and fallbackDifficulty and fallbackDifficulty ~= difficultyID then
-        icons = CollectIcons(fallbackDifficulty, instanceIDs, encounterSet)
-        if #icons == 0 and encounterSet then
-            icons = CollectIcons(fallbackDifficulty, instanceIDs, nil)
-        end
-    end
-    if #icons > 0 then
-        for index = #icons, 2, -1 do
-            local swap = math.random(index)
-            icons[index], icons[swap] = icons[swap], icons[index]
+    local icons = iconLists[key]
+    local worldSlot = Utils.SameType(slot.type, Utils.ThresholdType("World"))
+    if not icons then
+        if worldSlot then
+            local built, pending = WorldIcons()
+            if #built == 0 then
+                return built
+            end
+            if pending then
+                local loadingKey = slotKey .. ":loading"
+                if not iconLists[loadingKey] then
+                    iconLists[loadingKey] = SampleIcons(built, WORLD_REEL_LIMIT)
+                end
+                return iconLists[loadingKey]
+            end
+            icons = built
+        else
+            icons = CollectIcons(difficultyID, instanceIDs, encounterSet)
+            if #icons == 0 and encounterSet then
+                icons = CollectIcons(difficultyID, instanceIDs, nil)
+            end
+            if #icons == 0 and fallbackDifficulty and fallbackDifficulty ~= difficultyID then
+                icons = CollectIcons(fallbackDifficulty, instanceIDs, encounterSet)
+                if #icons == 0 and encounterSet then
+                    icons = CollectIcons(fallbackDifficulty, instanceIDs, nil)
+                end
+            end
+            if #icons == 0 then
+                return icons
+            end
         end
         iconLists[key] = icons
     end
-    return icons
+
+    if worldSlot then
+        local sample = SampleIcons(icons, WORLD_REEL_LIMIT)
+        iconLists[slotKey] = sample
+        return sample
+    end
+
+    if #icons < 2 then
+        iconLists[slotKey] = icons
+        return icons
+    end
+    local order = {}
+    for index = 1, #icons do
+        order[index] = icons[index]
+    end
+    for index = #order, 2, -1 do
+        local swap = math.random(index)
+        order[index], order[swap] = order[swap], order[index]
+    end
+    iconLists[slotKey] = order
+    return order
 end
