@@ -456,6 +456,7 @@ function GreatVault.RaidRows(activityType, index, threshold)
             journalEncounterID = Utils.IsUsableNumber(journalEncounterID) and journalEncounterID or nil,
             activityEncounterID = Utils.IsUsableNumber(encounter.encounterID) and encounter.encounterID or nil,
             difficultyID = Utils.IsUsableNumber(encounter.bestDifficulty) and encounter.bestDifficulty or nil,
+            uiOrder = Utils.IsUsableNumber(encounter.uiOrder) and encounter.uiOrder or nil,
             difficultyName = difficultyName,
             defeated = Utils.IsUsableNumber(encounter.bestDifficulty) and encounter.bestDifficulty > 0,
             counts = killIndex ~= nil,

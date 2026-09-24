@@ -178,6 +178,7 @@ local function EnsureFX(activityFrame)
     fx.offset = 0
     fx.cursor = 1
     fx.reveal = 0
+    fx.owner = activityFrame
     fx:Hide()
     activityFrame.bgvFX = fx
 end
@@ -212,6 +213,50 @@ local function LayoutDoors(fx)
     end
 end
 
+local function FadeCaption(activityFrame, alpha)
+    local text = activityFrame and activityFrame.bgvText
+    if not text then
+        return
+    end
+    text.bgvFadeTarget = alpha
+    if text.bgvFade then
+        text.bgvFade:Stop()
+    end
+    local from = text:GetAlpha() or 1
+    local function Lock()
+        text:SetAlpha(text.bgvFadeTarget or alpha)
+        if activityFrame.bgvProgress then
+            activityFrame.bgvProgress:SetAlpha(1)
+        end
+        if activityFrame.bgvReward then
+            activityFrame.bgvReward:SetAlpha(1)
+        end
+    end
+    if math.abs(from - alpha) < 0.02 then
+        Lock()
+        return
+    end
+    if not text.bgvFade then
+        local group = text:CreateAnimationGroup()
+        local anim = group:CreateAnimation("Alpha")
+        if anim.SetSmoothing then
+            anim:SetSmoothing("NONE")
+        end
+        group.anim = anim
+        group:SetScript("OnFinished", Lock)
+        text.bgvFade = group
+    end
+    local anim = text.bgvFade.anim
+    anim:SetDuration(0.1)
+    if anim.SetFromAlpha then
+        anim:SetFromAlpha(from)
+        anim:SetToAlpha(alpha)
+    else
+        anim:SetChange(alpha - from)
+    end
+    text.bgvFade:Play()
+end
+
 local function StopReel(fx)
     if fx.ticker then
         fx.ticker:Cancel()
@@ -234,6 +279,14 @@ local function EnsureReel(fx)
             fx.reveal = math.max(target, reveal - 0.04)
         end
         LayoutDoors(fx)
+        if (fx.reveal or 0) > 0 and fx.owner and fx.owner.bgvText then
+            local text = fx.owner.bgvText
+            if text.bgvFadeTarget ~= 0 then
+                FadeCaption(fx.owner, 0)
+            elseif text:GetAlpha() > 0.02 and not (text.bgvFade and text.bgvFade:IsPlaying()) then
+                text:SetAlpha(0)
+            end
+        end
         if type(fx.icons) == "table" and #fx.icons > 0 then
             fx.offset = (fx.offset or 0) - 2
             if fx.offset <= -CASE_STRIDE then
@@ -248,6 +301,7 @@ local function EnsureReel(fx)
             fx.reelReady = nil
             fx:Hide()
             LayoutDoors(fx)
+            FadeCaption(fx.owner, 1)
         end
     end)
 end
@@ -346,6 +400,7 @@ local function StopFX(activityFrame)
     if fx.bottomDoor then
         fx.bottomDoor:Hide()
     end
+    FadeCaption(activityFrame, 1)
 end
 
 local function FitCase(activityFrame)
@@ -425,6 +480,7 @@ local function StartCase(activityFrame)
     fx:Show()
     LayoutDoors(fx)
     EnsureReel(fx)
+    FadeCaption(activityFrame, 0)
 end
 
 local function CloseCase(activityFrame)
