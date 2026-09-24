@@ -378,7 +378,7 @@ local function EncounterName(encounterID)
         return nil, nil
     end
 
-    local name, _, _, _, _, journalInstanceID = Utils.Call(EJ_GetEncounterInfo, encounterID)
+    local name, _, journalEncounterID, _, _, journalInstanceID = Utils.Call(EJ_GetEncounterInfo, encounterID)
     local instanceName
     if Utils.IsUsableNumber(journalInstanceID) and type(EJ_GetInstanceInfo) == "function" then
         instanceName = Utils.Call(EJ_GetInstanceInfo, journalInstanceID)
@@ -390,10 +390,13 @@ local function EncounterName(encounterID)
     if not Utils.IsUsableString(instanceName) then
         instanceName = nil
     end
-    return name, instanceName
+    return name, instanceName, journalInstanceID, journalEncounterID
 end
 
 function GreatVault.RaidRows(activityType, index, threshold)
+    if BGV.Rewards and BGV.Rewards.EnsureJournal then
+        BGV.Rewards.EnsureJournal()
+    end
     local rows = {}
     if not (C_WeeklyRewards and type(C_WeeklyRewards.GetActivityEncounterInfo) == "function") then
         return rows
@@ -443,12 +446,16 @@ function GreatVault.RaidRows(activityType, index, threshold)
     end)
 
     for _, encounter in ipairs(ordered) do
-        local name, instanceName = EncounterName(encounter.encounterID)
+        local name, instanceName, journalInstanceID, journalEncounterID = EncounterName(encounter.encounterID)
         local difficultyName = Utils.DifficultyName(encounter.bestDifficulty)
         local killIndex = countedUntil[encounter]
         rows[#rows + 1] = {
             name = name or ("Encounter " .. tostring(encounter.encounterID)),
             instanceName = instanceName,
+            journalInstanceID = Utils.IsUsableNumber(journalInstanceID) and journalInstanceID or nil,
+            journalEncounterID = Utils.IsUsableNumber(journalEncounterID) and journalEncounterID or nil,
+            activityEncounterID = Utils.IsUsableNumber(encounter.encounterID) and encounter.encounterID or nil,
+            difficultyID = Utils.IsUsableNumber(encounter.bestDifficulty) and encounter.bestDifficulty or nil,
             difficultyName = difficultyName,
             defeated = Utils.IsUsableNumber(encounter.bestDifficulty) and encounter.bestDifficulty > 0,
             counts = killIndex ~= nil,
@@ -560,6 +567,7 @@ local function BuildSlot(activity, activities)
         slot.upgradeTrack = reward.upgradeTrack
         slot.upgradeLevel = reward.upgradeLevel
         slot.upgradeMax = reward.upgradeMax
+        slot.rewardIcon = reward.icon
     end
 
     if Utils.SameType(activity.type, Utils.ThresholdType("Activities")) then
