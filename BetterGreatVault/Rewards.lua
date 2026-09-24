@@ -368,23 +368,58 @@ local function RaidScope(slot)
     if type(slot.encounters) ~= "table" then
         return ids, encounters
     end
-    for _, encounter in ipairs(slot.encounters) do
+
+    local function AddEncounter(encounter)
+        if Utils.IsUsableNumber(encounter.journalEncounterID) then
+            encounters[encounter.journalEncounterID] = true
+        end
+        if Utils.IsUsableNumber(encounter.activityEncounterID) then
+            encounters[encounter.activityEncounterID] = true
+        end
+        local instanceID = encounter.journalInstanceID
+        if Utils.IsUsableNumber(instanceID) and not seen[instanceID] then
+            seen[instanceID] = true
+            ids[#ids + 1] = instanceID
+        end
+    end
+
+    local function CountsForSlot(encounter)
         local bossRank = RAID_RANK[encounter.difficultyID] or 0
-        local countsForSlot = encounter.defeated and (rewardRank == 0 or bossRank >= rewardRank)
-        if countsForSlot and (Utils.IsUsableNumber(encounter.journalEncounterID) or Utils.IsUsableNumber(encounter.activityEncounterID)) then
-            if Utils.IsUsableNumber(encounter.journalEncounterID) then
-                encounters[encounter.journalEncounterID] = true
+        return encounter.defeated and (rewardRank == 0 or bossRank >= rewardRank)
+    end
+
+    local byInstance = {}
+    for _, encounter in ipairs(slot.encounters) do
+        local instanceID = encounter.journalInstanceID
+        if Utils.IsUsableNumber(instanceID) then
+            local list = byInstance[instanceID]
+            if not list then
+                list = {}
+                byInstance[instanceID] = list
             end
-            if Utils.IsUsableNumber(encounter.activityEncounterID) then
-                encounters[encounter.activityEncounterID] = true
+            list[#list + 1] = encounter
+        elseif CountsForSlot(encounter) then
+            AddEncounter(encounter)
+        end
+    end
+
+    for _, list in pairs(byInstance) do
+        local furthest
+        for _, encounter in ipairs(list) do
+            if CountsForSlot(encounter) and Utils.IsUsableNumber(encounter.uiOrder) then
+                if not furthest or encounter.uiOrder > furthest then
+                    furthest = encounter.uiOrder
+                end
             end
-            local instanceID = encounter.journalInstanceID
-            if Utils.IsUsableNumber(instanceID) and not seen[instanceID] then
-                seen[instanceID] = true
-                ids[#ids + 1] = instanceID
+        end
+        for _, encounter in ipairs(list) do
+            local inPool = furthest and Utils.IsUsableNumber(encounter.uiOrder) and encounter.uiOrder <= furthest
+            if inPool or CountsForSlot(encounter) then
+                AddEncounter(encounter)
             end
         end
     end
+
     return ids, encounters
 end
 
@@ -463,7 +498,14 @@ function Rewards.PossibleIcons(slot)
     if Utils.SameType(slot.type, Utils.ThresholdType("Raid")) then
         difficultyID = slot.level
         instanceIDs, encounterSet = RaidScope(slot)
-        key = "raid:" .. tostring(difficultyID) .. ":" .. table.concat(instanceIDs, ",") .. ":" .. tostring(specIndex)
+        local encounterKey = {}
+        if type(encounterSet) == "table" then
+            for encounterID in pairs(encounterSet) do
+                encounterKey[#encounterKey + 1] = encounterID
+            end
+            table.sort(encounterKey)
+        end
+        key = "raid:" .. tostring(difficultyID) .. ":" .. table.concat(instanceIDs, ",") .. ":" .. table.concat(encounterKey, ",") .. ":" .. tostring(specIndex)
     elseif Utils.SameType(slot.type, Utils.ThresholdType("Activities")) then
         difficultyID = DifficultyUtil and DifficultyUtil.ID and DifficultyUtil.ID.DungeonMythic or 23
         fallbackDifficulty = 8
