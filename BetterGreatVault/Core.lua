@@ -22,10 +22,22 @@ local function AddonIsLoaded(name)
     return false
 end
 
+local function LoadVaultUI()
+    if AddonIsLoaded("Blizzard_WeeklyRewards") then
+        return
+    end
+    if C_AddOns and type(C_AddOns.LoadAddOn) == "function" then
+        C_AddOns.LoadAddOn("Blizzard_WeeklyRewards")
+    elseif type(LoadAddOn) == "function" then
+        LoadAddOn("Blizzard_WeeklyRewards")
+    end
+end
+
 local function AttachToVault()
     BGV.UI.Hook()
     BGV.Tooltip.Hook()
     if BGV.UI.hooked then
+        BGV.UI.Prepare()
         BGV.UI.RefreshOpenFrame()
     end
 end
@@ -112,7 +124,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     end
 
     if event == "PLAYER_LOGIN" then
-        BGV.GreatVault.RequestRunData()
+        LoadVaultUI()
         if AddonIsLoaded("Blizzard_WeeklyRewards") then
             AttachToVault()
         end
@@ -137,7 +149,12 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     if event == "WEEKLY_REWARDS_UPDATE" then
         BGV.Rewards.InvalidateIcons()
         BGV.GreatVault.Invalidate()
-        BGV.UI.RefreshOpenFrame()
+        if WeeklyRewardsFrame and type(WeeklyRewardsFrame.IsShown) == "function" and WeeklyRewardsFrame:IsShown() then
+            BGV.UI.RefreshOpenFrame()
+            BGV.UI.ScheduleContent(WeeklyRewardsFrame)
+        else
+            BGV.UI.Prepare()
+        end
         return
     end
 

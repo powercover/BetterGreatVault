@@ -5,7 +5,7 @@
 ## Version: 1.0.0
 ## SavedVariables: BetterGreatVaultDB
 ## AllowLoadGameType: mainline
-## Category: User Interface
+## Category: Character Advancement
 ## IconTexture: Interface\Icons\INV_Misc_Bag_10_Green
 
 Utils.lua
