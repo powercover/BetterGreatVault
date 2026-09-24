@@ -10,6 +10,7 @@
 
 Utils.lua
 Rewards.lua
+Bis.lua
 GreatVault.lua
 Tooltip.lua
 UI.lua

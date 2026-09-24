@@ -135,7 +135,14 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     end
 
     if event == "WEEKLY_REWARDS_UPDATE" then
+        BGV.Rewards.InvalidateIcons()
         BGV.GreatVault.Invalidate()
+        BGV.UI.RefreshOpenFrame()
+        return
+    end
+
+    if event == "EJ_LOOT_DATA_RECIEVED" then
+        BGV.Rewards.RetryEmptyIcons()
         BGV.UI.RefreshOpenFrame()
     end
 end)
@@ -143,6 +150,7 @@ end)
 frame:RegisterEvent("ADDON_LOADED")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("WEEKLY_REWARDS_UPDATE")
+frame:RegisterEvent("EJ_LOOT_DATA_RECIEVED")
 frame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 frame:RegisterEvent("CHALLENGE_MODE_MAPS_UPDATE")
 
