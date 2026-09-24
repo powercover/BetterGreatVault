@@ -42,13 +42,6 @@ function GreatVault.RequestRunData()
     Utils.Call(C_MythicPlus.RequestMapInfo)
 end
 
-local function ActivitySort(left, right)
-    if left.type ~= right.type then
-        return left.type < right.type
-    end
-    return left.index < right.index
-end
-
 local function RawActivities()
     if not (C_WeeklyRewards and type(C_WeeklyRewards.GetActivities) == "function") then
         return {}
@@ -235,6 +228,8 @@ local function ReadRunHistory()
     return best
 end
 
+local DungeonCounts
+
 local function CompletedRuns()
     if runCache then
         return runCache
@@ -260,11 +255,7 @@ local function CompletedRuns()
         end
     end
 
-    local numMythicPlus = 0
-    if C_WeeklyRewards and type(C_WeeklyRewards.GetNumCompletedDungeonRuns) == "function" then
-        local _, _, mythicPlus = Utils.Call(C_WeeklyRewards.GetNumCompletedDungeonRuns)
-        numMythicPlus = tonumber(mythicPlus) or 0
-    end
+    local _, _, numMythicPlus = DungeonCounts()
     local historyShort = numMythicPlus > #runs
     if not mapsReady or (historyShort and not retriedShortHistory) then
         if mapsReady and historyShort then
@@ -284,7 +275,7 @@ local function CompletedRuns()
     return runCache
 end
 
-local function DungeonCounts()
+function DungeonCounts()
     if not (C_WeeklyRewards and type(C_WeeklyRewards.GetNumCompletedDungeonRuns) == "function") then
         return 0, 0, 0
     end
@@ -622,8 +613,6 @@ function GreatVault.GetSnapshot()
             activities[#activities + 1] = activity
         end
     end
-
-    table.sort(activities, ActivitySort)
 
     local snapshot = {}
     for _, activity in ipairs(activities) do

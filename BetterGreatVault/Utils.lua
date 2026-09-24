@@ -124,10 +124,6 @@ function Utils.Print(message)
     DEFAULT_CHAT_FRAME:AddMessage(prefix .. ": " .. tostring(message))
 end
 
-function Utils.DebugEnabled()
-    return type(BetterGreatVaultDB) == "table" and BetterGreatVaultDB.debug == true
-end
-
 function Utils.Trim(value)
     if type(value) ~= "string" then
         return ""

@@ -153,15 +153,6 @@ function Rewards.ResolveReward(activity, onReady)
     return nil
 end
 
-function Rewards.ResolveItemLevel(activity, onReady)
-    local info = Rewards.ResolveReward(activity, onReady and function(resolved)
-        if resolved and resolved.itemLevel then
-            onReady(resolved.itemLevel)
-        end
-    end)
-    return info and info.itemLevel or nil
-end
-
 -- Next breakpoint from season data. This is an upgrade, not the current slot reward.
 function Rewards.GetNextIncrease(activity)
     if type(activity) ~= "table" then
@@ -195,15 +186,9 @@ function Rewards.GetNextIncrease(activity)
 end
 
 local iconLists = {}
-local emptyTries = {}
 
 function Rewards.InvalidateIcons()
     iconLists = {}
-    emptyTries = {}
-end
-
-function Rewards.RetryEmptyIcons()
-    emptyTries = {}
 end
 
 function Rewards.ShowingWeeklyProgress()
@@ -442,30 +427,26 @@ local function MythicPlusInstances()
     end
 
     local maps = Utils.Call(C_ChallengeMode.GetMapTable)
-    local wantedNames = {}
     if type(maps) == "table" then
-    for _, mapID in ipairs(maps) do
-        if type(C_ChallengeMode.GetMapUIInfo) == "function" then
-            local ok, name, infoID, _, _, _, uiMapID = pcall(C_ChallengeMode.GetMapUIInfo, mapID)
-            if ok then
-                if type(name) == "string" and name ~= "" and not Utils.IsSecret(name) then
-                    wantedNames[name] = true
-                end
-                if Utils.IsUsableNumber(uiMapID) and type(EJ_GetInstanceForMap) == "function" then
-                    local found, instanceID = pcall(EJ_GetInstanceForMap, uiMapID)
-                    if found then
-                        AddInstance(instanceID)
+        for _, mapID in ipairs(maps) do
+            if type(C_ChallengeMode.GetMapUIInfo) == "function" then
+                local ok, _, infoID, _, _, _, uiMapID = pcall(C_ChallengeMode.GetMapUIInfo, mapID)
+                if ok then
+                    if Utils.IsUsableNumber(uiMapID) and type(EJ_GetInstanceForMap) == "function" then
+                        local found, instanceID = pcall(EJ_GetInstanceForMap, uiMapID)
+                        if found then
+                            AddInstance(instanceID)
+                        end
                     end
-                end
-                if Utils.IsUsableNumber(infoID) and infoID ~= mapID and type(EJ_GetInstanceForMap) == "function" then
-                    local found, instanceID = pcall(EJ_GetInstanceForMap, infoID)
-                    if found then
-                        AddInstance(instanceID)
+                    if Utils.IsUsableNumber(infoID) and infoID ~= mapID and type(EJ_GetInstanceForMap) == "function" then
+                        local found, instanceID = pcall(EJ_GetInstanceForMap, infoID)
+                        if found then
+                            AddInstance(instanceID)
+                        end
                     end
                 end
             end
         end
-    end
     end
 
     if type(EJ_GetInstanceByIndex) == "function" then
@@ -566,9 +547,6 @@ function Rewards.PossibleIcons(slot)
             icons[index], icons[swap] = icons[swap], icons[index]
         end
         iconLists[key] = icons
-        emptyTries[key] = nil
-    else
-        emptyTries[key] = (emptyTries[key] or 0) + 1
     end
     return icons
 end

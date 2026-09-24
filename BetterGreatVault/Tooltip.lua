@@ -107,52 +107,6 @@ local function AppendWorld(slot)
     end)
 end
 
-local function ActivityFrameOf(frame)
-    if type(frame) ~= "table" then
-        return nil
-    end
-    if frame.bgvSlot or (frame.type and frame.index) then
-        return frame
-    end
-    if type(frame.GetParent) == "function" then
-        local parent = frame:GetParent()
-        if type(parent) == "table" and (parent.bgvSlot or (parent.type and parent.index)) then
-            return parent
-        end
-    end
-    return frame
-end
-
-local function SlotForFrame(activityFrame)
-    if type(activityFrame.bgvSlot) == "table" then
-        return activityFrame.bgvSlot
-    end
-    if activityFrame.type == nil or activityFrame.index == nil then
-        return nil
-    end
-    local slot = BGV.GreatVault.SlotFor(activityFrame.type, activityFrame.index)
-    if type(slot) == "table" then
-        activityFrame.bgvSlot = slot
-    end
-    return slot
-end
-
-local function EnsureOwner(activityFrame)
-    if GameTooltip:IsShown() and GameTooltip:GetOwner() then
-        return true
-    end
-
-    local owner = activityFrame
-    if activityFrame.ItemFrame and type(activityFrame.ItemFrame.IsMouseOver) == "function" and activityFrame.ItemFrame:IsMouseOver() then
-        owner = activityFrame.ItemFrame
-    elseif type(activityFrame.IsMouseOver) == "function" and not activityFrame:IsMouseOver() and activityFrame.ItemFrame then
-        owner = activityFrame.ItemFrame
-    end
-
-    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT", -7, -11)
-    return true
-end
-
 function Tooltip.ShowStandalone(activityFrame)
     if not GameTooltip or type(activityFrame) ~= "table" then
         return
@@ -180,27 +134,6 @@ function Tooltip.ShowStandalone(activityFrame)
         GameTooltip:AddLine("Great Vault", 1, 0.82, 0)
         GameTooltip:AddLine(BGV.GreatVault.ProgressText(slot), 1, 1, 1, true)
         GameTooltip:Show()
-    end
-end
-
-function Tooltip.Append(frame)
-    if not GameTooltip or type(frame) ~= "table" then
-        return
-    end
-
-    local activityFrame = ActivityFrameOf(frame)
-    local ok, err = pcall(function()
-        local slot = SlotForFrame(activityFrame)
-        if type(slot) ~= "table" then
-            return
-        end
-        if not EnsureOwner(activityFrame) then
-            return
-        end
-        Tooltip.Write(slot)
-    end)
-    if not ok then
-        BGV.lastError = err
     end
 end
 
