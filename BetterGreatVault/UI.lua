@@ -55,7 +55,7 @@ end
 local CASE_ICON = 40
 local CASE_STRIDE = 56
 local CASE_SLOTS = 12
-local GATE_CORNER = 12
+local GATE_CORNER = 16
 
 local function ColorTexture(texture, r, g, b, a)
     if texture.SetColorTexture then
@@ -81,7 +81,7 @@ local function EnsureFX(activityFrame)
 
     local shade = fx:CreateTexture(nil, "BACKGROUND")
     shade:SetAllPoints()
-    ColorTexture(shade, 0.02, 0.015, 0.01, 0.92)
+    ColorTexture(shade, 0.02, 0.015, 0.01, 1)
 
     local reel = CreateFrame("Frame", nil, fx)
     reel:SetWidth(CASE_STRIDE * CASE_SLOTS)
@@ -154,6 +154,21 @@ local function EnsureFX(activityFrame)
     marker:Hide()
     fx.marker = marker
     fx.markerLine = markerLine
+
+    local function MakeSeam()
+        local seam = CreateFrame("Frame", nil, activityFrame)
+        seam:SetFrameLevel(activityFrame:GetFrameLevel() + 9)
+        seam:SetHeight(2)
+        seam:EnableMouse(false)
+        local seamLine = seam:CreateTexture(nil, "OVERLAY")
+        seamLine:SetAllPoints()
+        seam.line = seamLine
+        seam:Hide()
+        return seam
+    end
+
+    fx.topSeam = MakeSeam()
+    fx.bottomSeam = MakeSeam()
 
     local function AddScale(group, fromY, toY, duration, smoothing)
         local scale = group:CreateAnimation("Scale")
@@ -246,6 +261,11 @@ local function ColorMarker(fx)
     end
     local color = specID and SPEC_LINE[specID] or { 0.85, 0.65, 0.2 }
     ColorTexture(line, color[1], color[2], color[3], 0.95)
+    for _, seam in ipairs({ fx.topSeam, fx.bottomSeam }) do
+        if seam and seam.line then
+            ColorTexture(seam.line, 0.62, 0.48, 0.28, 1)
+        end
+    end
 end
 
 local TIER_BACK = {
@@ -270,9 +290,9 @@ local function LayoutDoors(fx)
     fx:SetAlpha(1)
     local level = fx:GetFrameLevel()
     if fx.reel then
-        fx.reel:SetFrameLevel(level)
+        fx.reel:SetFrameLevel(level + 1)
         for _, cell in ipairs(fx.cells or {}) do
-            cell:SetFrameLevel(level)
+            cell:SetFrameLevel(level + 1)
         end
     end
     if fx.marker then
@@ -285,6 +305,18 @@ local function LayoutDoors(fx)
     for _, gate in ipairs({ fx.topDoor, fx.bottomDoor }) do
         gate:SetHeight(covered)
         gate:Show()
+    end
+    if fx.topSeam then
+        fx.topSeam:SetFrameLevel(level + 9)
+        fx.topSeam:ClearAllPoints()
+        fx.topSeam:SetPoint("LEFT", fx, "TOPLEFT", 0, -covered)
+        fx.topSeam:SetPoint("RIGHT", fx, "TOPRIGHT", 0, -covered)
+    end
+    if fx.bottomSeam then
+        fx.bottomSeam:SetFrameLevel(level + 9)
+        fx.bottomSeam:ClearAllPoints()
+        fx.bottomSeam:SetPoint("LEFT", fx, "BOTTOMLEFT", 0, covered)
+        fx.bottomSeam:SetPoint("RIGHT", fx, "BOTTOMRIGHT", 0, covered)
     end
 end
 
@@ -385,6 +417,10 @@ local function EnsureReel(fx)
             if fx.marker then
                 fx.marker:Hide()
             end
+            if fx.topSeam then
+                fx.topSeam:Hide()
+                fx.bottomSeam:Hide()
+            end
             LayoutDoors(fx)
             FadeCaption(fx.owner, 1)
         end
@@ -453,7 +489,7 @@ function PaintReel(fx)
         local tier = itemID and BGV.Bis and BGV.Bis.Tier(itemID) or nil
         local color = tier and TIER_BACK[tier] or nil
         if color then
-            ColorTexture(cell.back, color[1], color[2], color[3], 0.92)
+            ColorTexture(cell.back, color[1], color[2], color[3], 1)
             cell.back:Show()
         else
             cell.back:Hide()
@@ -481,6 +517,10 @@ local function StopFX(activityFrame)
     fx:Hide()
     if fx.marker then
         fx.marker:Hide()
+    end
+    if fx.topSeam then
+        fx.topSeam:Hide()
+        fx.bottomSeam:Hide()
     end
     if fx.topDoor then
         fx.topDoor:Hide()
@@ -526,7 +566,7 @@ local function PlaceCase(activityFrame)
     end
     fx:SetFrameLevel(level)
     if fx.reel then
-        fx.reel:SetFrameLevel(level)
+        fx.reel:SetFrameLevel(level + 1)
     end
     if fx.marker then
         fx.marker:SetFrameLevel(level + 2)
@@ -572,6 +612,10 @@ local function StartCase(activityFrame)
     if fx.marker then
         ColorMarker(fx)
         fx.marker:Show()
+    end
+    if fx.topSeam then
+        fx.topSeam:Show()
+        fx.bottomSeam:Show()
     end
     LayoutDoors(fx)
     EnsureReel(fx)
