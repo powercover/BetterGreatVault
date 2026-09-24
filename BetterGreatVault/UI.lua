@@ -55,6 +55,7 @@ end
 local CASE_ICON = 40
 local CASE_STRIDE = 56
 local CASE_SLOTS = 12
+local GATE_CORNER = 12
 
 local function ColorTexture(texture, r, g, b, a)
     if texture.SetColorTexture then
@@ -143,8 +144,8 @@ local function EnsureFX(activityFrame)
 
     local marker = CreateFrame("Frame", nil, activityFrame)
     marker:SetFrameLevel(activityFrame:GetFrameLevel() + 5)
-    marker:SetPoint("TOP", fx, "TOP", 0, 0)
-    marker:SetPoint("BOTTOM", fx, "BOTTOM", 0, 0)
+    marker:SetPoint("TOP", fx, "TOP", 0, -GATE_CORNER)
+    marker:SetPoint("BOTTOM", fx, "BOTTOM", 0, GATE_CORNER)
     marker:SetWidth(2)
     marker:EnableMouse(false)
     local markerLine = marker:CreateTexture(nil, "OVERLAY")
@@ -260,23 +261,30 @@ local function LayoutDoors(fx)
     if not height or height < 4 then
         height = 64
     end
-    local covered = height * 0.5 * (1 - (fx.reveal or 0))
+    local half = height * 0.5
+    local travel = math.max(0, half - GATE_CORNER)
+    local covered = GATE_CORNER + travel * (1 - (fx.reveal or 0))
+    if covered > half then
+        covered = half
+    end
     fx:SetAlpha(1)
     local level = fx:GetFrameLevel()
+    if fx.reel then
+        fx.reel:SetFrameLevel(level)
+        for _, cell in ipairs(fx.cells or {}) do
+            cell:SetFrameLevel(level)
+        end
+    end
     if fx.marker then
-        fx.marker:SetFrameLevel(level + 3)
+        fx.marker:SetFrameLevel(level + 2)
     end
     if fx.topDoor then
-        fx.topDoor:SetFrameLevel(level + 6)
-        fx.bottomDoor:SetFrameLevel(level + 6)
+        fx.topDoor:SetFrameLevel(level + 8)
+        fx.bottomDoor:SetFrameLevel(level + 8)
     end
     for _, gate in ipairs({ fx.topDoor, fx.bottomDoor }) do
-        if covered < 2 then
-            gate:Hide()
-        else
-            gate:SetHeight(covered)
-            gate:Show()
-        end
+        gate:SetHeight(covered)
+        gate:Show()
     end
 end
 
@@ -338,12 +346,19 @@ local function EnsureReel(fx)
         return
     end
     fx.ticker = C_Timer.NewTicker(0.02, function()
-        local target = fx.revealTarget or 0
-        local reveal = fx.reveal or 0
-        if reveal < target then
-            fx.reveal = math.min(target, reveal + 0.04)
-        elseif reveal > target then
-            fx.reveal = math.max(target, reveal - 0.04)
+        if (fx.revealTarget or 0) ~= fx.revealAim then
+            fx.revealAim = fx.revealTarget or 0
+            fx.revealFrom = fx.reveal or 0
+            fx.revealClock = 0
+        end
+        fx.revealClock = (fx.revealClock or 0) + 0.02
+        local delta = (fx.revealAim or 0) - (fx.revealFrom or 0)
+        local duration = math.max(0.16, 0.5 * math.abs(delta))
+        local progress = math.min(1, fx.revealClock / duration)
+        local eased = progress * progress * (3 - 2 * progress)
+        fx.reveal = (fx.revealFrom or 0) + delta * eased
+        if progress >= 1 then
+            fx.reveal = fx.revealAim or 0
         end
         LayoutDoors(fx)
         if (fx.reveal or 0) > 0 and fx.owner and fx.owner.bgvText then
@@ -379,8 +394,8 @@ end
 function PlaceReel(fx)
     fx.reel:SetWidth(CASE_STRIDE * CASE_SLOTS)
     fx.reel:ClearAllPoints()
-    fx.reel:SetPoint("TOPLEFT", fx, "TOPLEFT", fx.offset or 0, 0)
-    fx.reel:SetPoint("BOTTOMLEFT", fx, "BOTTOMLEFT", fx.offset or 0, 0)
+    fx.reel:SetPoint("TOPLEFT", fx, "TOPLEFT", fx.offset or 0, -GATE_CORNER)
+    fx.reel:SetPoint("BOTTOMLEFT", fx, "BOTTOMLEFT", fx.offset or 0, GATE_CORNER)
 end
 
 local function HideDefaultShine(activityFrame)
@@ -514,11 +529,11 @@ local function PlaceCase(activityFrame)
         fx.reel:SetFrameLevel(level)
     end
     if fx.marker then
-        fx.marker:SetFrameLevel(level + 3)
+        fx.marker:SetFrameLevel(level + 2)
     end
     if fx.topDoor then
-        fx.topDoor:SetFrameLevel(level + 6)
-        fx.bottomDoor:SetFrameLevel(level + 6)
+        fx.topDoor:SetFrameLevel(level + 8)
+        fx.bottomDoor:SetFrameLevel(level + 8)
     end
     if activityFrame.bgvText then
         activityFrame.bgvText:SetFrameLevel(level + 8)
