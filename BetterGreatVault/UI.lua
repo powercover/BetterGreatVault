@@ -171,34 +171,6 @@ local function EnsureFX(activityFrame)
     fx.topSeam = MakeSeam()
     fx.bottomSeam = MakeSeam()
 
-    local function AddScale(group, fromY, toY, duration, smoothing)
-        local scale = group:CreateAnimation("Scale")
-        scale:SetDuration(duration)
-        if scale.SetScaleFrom then
-            scale:SetScaleFrom(1, fromY)
-            scale:SetScaleTo(1, toY)
-        else
-            scale:SetScale(1, toY)
-        end
-        if scale.SetOrigin then
-            scale:SetOrigin("CENTER", 0, 0)
-        end
-        if smoothing and scale.SetSmoothing then
-            scale:SetSmoothing(smoothing)
-        end
-    end
-
-    local open = fx:CreateAnimationGroup()
-    AddScale(open, 0.05, 1, 0.51, "OUT")
-    fx.open = open
-
-    local close = fx:CreateAnimationGroup()
-    AddScale(close, 1, 0.05, 0.51, "IN")
-    close:SetScript("OnFinished", function()
-        fx:Hide()
-    end)
-    fx.close = close
-
     fx.offset = 0
     fx.cursor = 1
     fx.reveal = 0
@@ -486,68 +458,12 @@ local function KillAnim(anim)
     anim:Stop()
 end
 
-local function BuryProgressBar(bar)
-    if not bar then
-        return
-    end
-    BuryShownRegion(bar)
-    BuryShownRegion(bar.Bar)
-    BuryShownRegion(bar.Fill)
-    BuryShownRegion(bar.Texture)
-    if not bar.bgvShowWrapped then
-        bar.bgvShowWrapped = true
-        local show = bar.Show
-        function bar:Show(...)
-            local parent = self:GetParent()
-            while parent and not parent.bgvSlot and parent.GetParent do
-                parent = parent:GetParent()
-            end
-            if parent and parent.bgvSlot then
-                self:Hide()
-                self:SetAlpha(0)
-                return
-            end
-            return show(self, ...)
-        end
-    end
-    if type(hooksecurefunc) == "function" and type(bar.SetValue) == "function" and not bar.bgvValueHook then
-        bar.bgvValueHook = true
-        hooksecurefunc(bar, "SetValue", function(self)
-            local parent = self:GetParent()
-            while parent and not parent.bgvSlot and parent.GetParent do
-                parent = parent:GetParent()
-            end
-            if parent and parent.bgvSlot then
-                self:Hide()
-            end
-        end)
-    end
-    bar:Hide()
-    bar:SetAlpha(0)
-    local owner = bar.GetParent and bar:GetParent()
-    while owner and not owner.bgvSlot and owner.GetParent do
-        owner = owner:GetParent()
-    end
-    if owner and owner.GetFrameLevel and bar.SetFrameLevel then
-        bar:SetFrameLevel(owner:GetFrameLevel() + 1)
-    end
-end
-
-local function HideProgressBars(activityFrame)
-    if not activityFrame.bgvSlot or not activityFrame.bgvSlot.unlocked then
-        return
-    end
-    BuryProgressBar(activityFrame.ProgressBar)
-end
-
 local function HideDefaultShine(activityFrame)
     if not activityFrame then
         return
     end
-    HideProgressBars(activityFrame)
     BuryShownRegion(activityFrame.CompletedIcon)
     BuryShownRegion(activityFrame.CompletedActivityFlipbook)
-    BuryShownRegion(activityFrame.UncollectedGlow)
     BuryShownRegion(activityFrame.ItemGlow)
     KillAnim(activityFrame.CompletedActivityAnim)
     KillAnim(activityFrame.SheenAnim)
@@ -555,7 +471,8 @@ local function HideDefaultShine(activityFrame)
         KillAnim(activityFrame.UncollectedGlow.FadeAnim)
         BuryShownRegion(activityFrame.UncollectedGlow)
     end
-    if type(activityFrame.GetRegions) == "function" then
+    if not activityFrame.bgvGlowRegionsSealed and type(activityFrame.GetRegions) == "function" then
+        activityFrame.bgvGlowRegionsSealed = true
         for _, region in ipairs({ activityFrame:GetRegions() }) do
             local atlas = region.GetAtlas and region:GetAtlas()
             if type(atlas) == "string" then
@@ -615,18 +532,9 @@ local function StopFX(activityFrame)
     if not fx then
         return
     end
-    if fx.ticker then
-        fx.ticker:Cancel()
-        fx.ticker = nil
-    end
+    StopReel(fx)
     fx.reveal = 0
     fx.revealTarget = 0
-    if fx.open then
-        fx.open:Stop()
-    end
-    if fx.close then
-        fx.close:Stop()
-    end
     fx:Hide()
     if fx.marker then
         fx.marker:Hide()
@@ -644,12 +552,18 @@ local function StopFX(activityFrame)
     FadeCaption(activityFrame, 1)
 end
 
+local cachedVaultBackground
+
 local function VaultBackground()
+    if cachedVaultBackground then
+        return cachedVaultBackground
+    end
     local vault = WeeklyRewardsFrame
     if not vault then
         return nil
     end
     if vault.Background then
+        cachedVaultBackground = vault.Background
         return vault.Background
     end
     if type(vault.GetRegions) ~= "function" then
@@ -659,6 +573,7 @@ local function VaultBackground()
         if region and region.GetObjectType and region:GetObjectType() == "Texture" and region.GetAtlas then
             local atlas = region:GetAtlas()
             if type(atlas) == "string" and atlas:find("weeklyrewards", 1, true) and not atlas:find("reward", 1, true) then
+                cachedVaultBackground = region
                 return region
             end
         end
@@ -755,12 +670,6 @@ local function StartCase(activityFrame)
     local icons = fx.icons
 
     PlaceCase(activityFrame)
-    if fx.open then
-        fx.open:Stop()
-    end
-    if fx.close then
-        fx.close:Stop()
-    end
     fx.revealTarget = 1
     if type(icons) == "table" and #icons > 0 and not fx.reelReady then
         fx.cursor = math.random(#icons)
@@ -788,12 +697,6 @@ local function CloseCase(activityFrame)
     if not fx or not fx:IsShown() then
         return
     end
-    if fx.open then
-        fx.open:Stop()
-    end
-    if fx.close then
-        fx.close:Stop()
-    end
     fx.revealTarget = 0
     EnsureReel(fx)
 end
@@ -807,21 +710,12 @@ function ShutGates(activityFrame)
     if not fx then
         return
     end
-    if fx.ticker then
-        fx.ticker:Cancel()
-        fx.ticker = nil
-    end
+    StopReel(fx)
     local wasOpen = (fx.reveal or 0) > 0
     fx.reveal = 0
     fx.revealTarget = 0
     fx.revealAim = 0
     fx.reelReady = nil
-    if fx.open then
-        fx.open:Stop()
-    end
-    if fx.close then
-        fx.close:Stop()
-    end
     if fx.marker then
         fx.marker:Hide()
     end
@@ -858,19 +752,10 @@ function RestClosed(activityFrame)
     if not fx then
         return
     end
-    if fx.ticker then
-        fx.ticker:Cancel()
-        fx.ticker = nil
-    end
+    StopReel(fx)
     fx.reveal = 0
     fx.revealTarget = 0
     fx.revealAim = 0
-    if fx.open then
-        fx.open:Stop()
-    end
-    if fx.close then
-        fx.close:Stop()
-    end
     if fx.marker then
         fx.marker:Hide()
     end
@@ -1111,7 +996,7 @@ local function ShowReward(activityFrame, slot, info)
     UpdateFX(activityFrame, slot)
 end
 
-function UI.Apply(activityFrame, slot, playOpen)
+function UI.Apply(activityFrame, slot)
     if not activityFrame or type(slot) ~= "table" then
         return
     end
@@ -1158,8 +1043,6 @@ function UI.Update(weeklyRewardsFrame)
         return
     end
 
-    local playOpen = not weeklyRewardsFrame.bgvOpenPlayed
-    weeklyRewardsFrame.bgvOpenPlayed = true
     weeklyRewardsFrame.bgvShellReady = true
     BGV.GreatVault.Invalidate()
     local snapshot = BGV.GreatVault.GetSnapshot()
@@ -1169,7 +1052,7 @@ function UI.Update(weeklyRewardsFrame)
         local activityFrame = weeklyRewardsFrame:GetActivityFrame(slot.type, slot.index)
         if activityFrame then
             seen[activityFrame] = true
-            UI.Apply(activityFrame, slot, playOpen)
+            UI.Apply(activityFrame, slot)
         end
     end
 

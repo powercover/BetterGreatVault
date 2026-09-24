@@ -134,7 +134,6 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     if event == "CHALLENGE_MODE_COMPLETED" then
         BGV.GreatVault.PrepareForNewRuns()
         BGV.GreatVault.Invalidate()
-        BGV.GreatVault.RequestRunData()
         BGV.UI.RefreshOpenFrame()
         return
     end
@@ -159,7 +158,6 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     end
 
     if event == "EJ_LOOT_DATA_RECIEVED" then
-        BGV.Rewards.RetryEmptyIcons()
         BGV.UI.RefreshOpenFrame()
     end
 end)
