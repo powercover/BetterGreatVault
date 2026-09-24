@@ -141,11 +141,18 @@ local function EnsureFX(activityFrame)
     fx.topDoor = MakeGate("TOP")
     fx.bottomDoor = MakeGate("BOTTOM")
 
-    local marker = fx:CreateTexture(nil, "OVERLAY")
-    marker:SetPoint("TOP", fx, "TOP", 0, -3)
-    marker:SetPoint("BOTTOM", fx, "BOTTOM", 0, 3)
+    local marker = CreateFrame("Frame", nil, activityFrame)
+    marker:SetFrameLevel(activityFrame:GetFrameLevel() + 5)
+    marker:SetPoint("TOP", fx, "TOP", 0, 0)
+    marker:SetPoint("BOTTOM", fx, "BOTTOM", 0, 0)
     marker:SetWidth(2)
-    ColorTexture(marker, 1, 0.9, 0.45, 0.95)
+    marker:EnableMouse(false)
+    local markerLine = marker:CreateTexture(nil, "OVERLAY")
+    markerLine:SetAllPoints()
+    marker.line = markerLine
+    marker:Hide()
+    fx.marker = marker
+    fx.markerLine = markerLine
 
     local function AddScale(group, fromY, toY, duration, smoothing)
         local scale = group:CreateAnimation("Scale")
@@ -183,6 +190,63 @@ local function EnsureFX(activityFrame)
     activityFrame.bgvFX = fx
 end
 
+local SPEC_LINE = {
+    [250] = { 0.78, 0.06, 0.10 },
+    [251] = { 0.55, 0.86, 1.00 },
+    [252] = { 0.35, 0.82, 0.28 },
+    [577] = { 0.20, 0.85, 0.45 },
+    [581] = { 0.55, 0.20, 0.75 },
+    [1480] = { 0.48, 0.22, 0.90 },
+    [102] = { 0.35, 0.55, 1.00 },
+    [103] = { 1.00, 0.48, 0.12 },
+    [104] = { 0.82, 0.52, 0.16 },
+    [105] = { 0.25, 0.82, 0.38 },
+    [1467] = { 0.90, 0.28, 0.20 },
+    [1468] = { 0.22, 0.75, 0.55 },
+    [1473] = { 0.82, 0.62, 0.28 },
+    [253] = { 0.78, 0.68, 0.28 },
+    [254] = { 0.55, 0.75, 0.92 },
+    [255] = { 0.90, 0.42, 0.16 },
+    [62] = { 0.62, 0.38, 0.95 },
+    [63] = { 1.00, 0.42, 0.12 },
+    [64] = { 0.62, 0.90, 1.00 },
+    [268] = { 0.78, 0.48, 0.16 },
+    [269] = { 0.25, 0.88, 0.68 },
+    [270] = { 0.45, 0.85, 0.70 },
+    [65] = { 1.00, 0.86, 0.42 },
+    [66] = { 0.72, 0.74, 0.86 },
+    [70] = { 1.00, 0.72, 0.22 },
+    [256] = { 0.82, 0.88, 1.00 },
+    [257] = { 1.00, 0.94, 0.70 },
+    [258] = { 0.55, 0.28, 0.85 },
+    [259] = { 0.32, 0.78, 0.22 },
+    [260] = { 0.85, 0.22, 0.16 },
+    [261] = { 0.55, 0.40, 0.75 },
+    [262] = { 0.28, 0.55, 1.00 },
+    [263] = { 0.88, 0.50, 0.16 },
+    [264] = { 0.22, 0.62, 0.90 },
+    [265] = { 0.58, 0.32, 0.85 },
+    [266] = { 0.38, 0.75, 0.28 },
+    [267] = { 0.95, 0.32, 0.12 },
+    [71] = { 0.72, 0.28, 0.16 },
+    [72] = { 0.90, 0.16, 0.14 },
+    [73] = { 0.70, 0.58, 0.42 },
+}
+
+local function ColorMarker(fx)
+    local line = fx and fx.markerLine
+    if not line then
+        return
+    end
+    local specID
+    if type(GetSpecialization) == "function" and type(GetSpecializationInfo) == "function" then
+        local specIndex = GetSpecialization()
+        specID = specIndex and GetSpecializationInfo(specIndex)
+    end
+    local color = specID and SPEC_LINE[specID] or { 0.85, 0.65, 0.2 }
+    ColorTexture(line, color[1], color[2], color[3], 0.95)
+end
+
 local TIER_BACK = {
     D = { 0.45, 0.45, 0.45 },
     C = { 0.12, 0.55, 0.18 },
@@ -199,6 +263,9 @@ local function LayoutDoors(fx)
     local covered = height * 0.5 * (1 - (fx.reveal or 0))
     fx:SetAlpha(1)
     local level = fx:GetFrameLevel()
+    if fx.marker then
+        fx.marker:SetFrameLevel(level + 3)
+    end
     if fx.topDoor then
         fx.topDoor:SetFrameLevel(level + 6)
         fx.bottomDoor:SetFrameLevel(level + 6)
@@ -300,6 +367,9 @@ local function EnsureReel(fx)
             StopReel(fx)
             fx.reelReady = nil
             fx:Hide()
+            if fx.marker then
+                fx.marker:Hide()
+            end
             LayoutDoors(fx)
             FadeCaption(fx.owner, 1)
         end
@@ -394,6 +464,9 @@ local function StopFX(activityFrame)
         fx.close:Stop()
     end
     fx:Hide()
+    if fx.marker then
+        fx.marker:Hide()
+    end
     if fx.topDoor then
         fx.topDoor:Hide()
     end
@@ -440,6 +513,9 @@ local function PlaceCase(activityFrame)
     if fx.reel then
         fx.reel:SetFrameLevel(level)
     end
+    if fx.marker then
+        fx.marker:SetFrameLevel(level + 3)
+    end
     if fx.topDoor then
         fx.topDoor:SetFrameLevel(level + 6)
         fx.bottomDoor:SetFrameLevel(level + 6)
@@ -478,6 +554,10 @@ local function StartCase(activityFrame)
         fx.reelReady = true
     end
     fx:Show()
+    if fx.marker then
+        ColorMarker(fx)
+        fx.marker:Show()
+    end
     LayoutDoors(fx)
     EnsureReel(fx)
     FadeCaption(activityFrame, 0)
