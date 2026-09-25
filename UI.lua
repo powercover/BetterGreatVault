@@ -510,7 +510,13 @@ local function KillAnim(anim)
     if anim.HookScript and not anim.bgvBuryHook then
         anim.bgvBuryHook = true
         anim:HookScript("OnPlay", function(self)
-            self:Stop()
+            local owner = self.GetParent and self:GetParent()
+            while owner and not owner.bgvSlot and owner.GetParent do
+                owner = owner:GetParent()
+            end
+            if owner and owner.bgvSlot then
+                self:Stop()
+            end
         end)
     end
     anim:Stop()
@@ -802,6 +808,9 @@ local function RaiseAboveGlow(activityFrame)
     local sceneLevel = scene and scene.GetFrameLevel and scene:GetFrameLevel() or 300
     local parent = activityFrame:GetParent()
     if scene and parent and scene.GetParent and scene:GetParent() == parent then
+        if not activityFrame.bgvBaseLevel then
+            activityFrame.bgvBaseLevel = activityFrame:GetFrameLevel()
+        end
         if activityFrame:GetFrameLevel() <= sceneLevel then
             activityFrame:SetFrameLevel(sceneLevel + 20)
         end
@@ -1118,6 +1127,79 @@ local function ShowDefaultCaption(activityFrame)
     end
 end
 
+local function ProgressWeek()
+    return not (BGV.Rewards and BGV.Rewards.ShowingWeeklyProgress) or BGV.Rewards.ShowingWeeklyProgress()
+end
+
+local function RestoreScene()
+    local scene = WeeklyRewardsFrame and WeeklyRewardsFrame.ModelScene
+    if scene then
+        scene:SetAlpha(1)
+        scene:Show()
+    end
+end
+
+local function ReleaseRegion(region)
+    if not region then
+        return
+    end
+    region.bgvForcing = true
+    region:SetAlpha(1)
+    if region.Show then
+        region:Show()
+    end
+    region.bgvForcing = false
+end
+
+local function RestoreVanilla(activityFrame)
+    if not activityFrame then
+        return
+    end
+    activityFrame.bgvSlot = nil
+    activityFrame.bgvToken = (activityFrame.bgvToken or 0) + 1
+    if activityFrame.bgvProgress then
+        activityFrame.bgvProgress:Hide()
+        activityFrame.bgvReward:Hide()
+    end
+    if activityFrame.bgvText then
+        activityFrame.bgvText:Hide()
+    end
+    if activityFrame.bgvHit then
+        activityFrame.bgvHit:Hide()
+    end
+    StopFX(activityFrame)
+    HideClosedGates(activityFrame)
+    PlaceLock(activityFrame, nil)
+    ShowDefaultCaption(activityFrame)
+    if activityFrame.Threshold then
+        activityFrame.Threshold:SetAlpha(1)
+    end
+    if activityFrame.Progress then
+        activityFrame.Progress:SetAlpha(1)
+    end
+    ReleaseRegion(activityFrame.CompletedIcon)
+    ReleaseRegion(activityFrame.CompletedActivityFlipbook)
+    ReleaseRegion(activityFrame.ItemGlow)
+    ReleaseRegion(activityFrame.UncollectedGlow)
+    if activityFrame.RewardGenerated then
+        activityFrame.RewardGenerated:Hide()
+    end
+    if activityFrame.bgvBaseLevel then
+        activityFrame:SetFrameLevel(activityFrame.bgvBaseLevel)
+    end
+end
+
+local function RestoreVault(weeklyRewardsFrame)
+    RestoreScene()
+    local frames = weeklyRewardsFrame and weeklyRewardsFrame.Activities
+    if type(frames) ~= "table" then
+        return
+    end
+    for _, activityFrame in ipairs(frames) do
+        RestoreVanilla(activityFrame)
+    end
+end
+
 function UI.Clear(activityFrame)
     if not activityFrame then
         return
@@ -1218,6 +1300,11 @@ function UI.Update(weeklyRewardsFrame)
     if not weeklyRewardsFrame or type(weeklyRewardsFrame.GetActivityFrame) ~= "function" then
         return
     end
+    if not ProgressWeek() then
+        weeklyRewardsFrame.bgvShellReady = nil
+        RestoreVault(weeklyRewardsFrame)
+        return
+    end
 
     weeklyRewardsFrame.bgvShellReady = true
     BGV.GreatVault.Invalidate()
@@ -1273,6 +1360,9 @@ function UI.Prepare()
 end
 
 function UI.ScheduleContent(weeklyRewardsFrame)
+    if not ProgressWeek() then
+        return
+    end
     if not weeklyRewardsFrame or not VaultIsOpen() or weeklyRewardsFrame.bgvContentQueued then
         return
     end
@@ -1300,6 +1390,10 @@ function UI.ScheduleContent(weeklyRewardsFrame)
 end
 
 local function CloseOpenGates(weeklyRewardsFrame)
+    if not ProgressWeek() then
+        RestoreVault(weeklyRewardsFrame)
+        return
+    end
     local frames = weeklyRewardsFrame and weeklyRewardsFrame.Activities
     if type(frames) ~= "table" then
         return
@@ -1312,6 +1406,10 @@ local function CloseOpenGates(weeklyRewardsFrame)
 end
 
 local function KeepShell(weeklyRewardsFrame)
+    if not ProgressWeek() then
+        RestoreVault(weeklyRewardsFrame)
+        return
+    end
     local frames = weeklyRewardsFrame and weeklyRewardsFrame.Activities
     if type(frames) ~= "table" then
         return
@@ -1331,6 +1429,10 @@ function UI.Hook()
 
     if type(WeeklyRewardsMixin.Refresh) == "function" then
         hooksecurefunc(WeeklyRewardsMixin, "Refresh", function(self)
+            if not ProgressWeek() then
+                RestoreVault(self)
+                return
+            end
             if shellApplying or not self:IsShown() then
                 return
             end
@@ -1345,6 +1447,10 @@ function UI.Hook()
 
     if type(WeeklyRewardsMixin.OnShow) == "function" then
         hooksecurefunc(WeeklyRewardsMixin, "OnShow", function(self)
+            if not ProgressWeek() then
+                RestoreVault(self)
+                return
+            end
             if self.bgvShellReady then
                 KeepShell(self)
                 return
@@ -1404,6 +1510,9 @@ function UI.Hook()
     if WeeklyRewardsFrame and WeeklyRewardsFrame.HookScript and not WeeklyRewardsFrame.bgvAccentShow then
         WeeklyRewardsFrame.bgvAccentShow = true
         WeeklyRewardsFrame:HookScript("OnShow", function()
+            if not ProgressWeek() then
+                return
+            end
             if UI.RepaintAccent then
                 UI.RepaintAccent()
             end
@@ -1415,6 +1524,12 @@ function UI.Hook()
 end
 
 function UI.RefreshOpenFrame()
+    if not ProgressWeek() then
+        if WeeklyRewardsFrame then
+            RestoreVault(WeeklyRewardsFrame)
+        end
+        return
+    end
     if UI.RepaintAccent then
         UI.RepaintAccent()
     end

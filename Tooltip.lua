@@ -108,6 +108,9 @@ local function AppendWorld(slot)
 end
 
 function Tooltip.ShowStandalone(activityFrame)
+    if BGV.Rewards and BGV.Rewards.ShowingWeeklyProgress and not BGV.Rewards.ShowingWeeklyProgress() then
+        return
+    end
     if not GameTooltip or type(activityFrame) ~= "table" then
         return
     end
