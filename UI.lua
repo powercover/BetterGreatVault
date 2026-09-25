@@ -137,7 +137,7 @@ local function EnsureFX(activityFrame)
 
         local backing = gate:CreateTexture(nil, "BACKGROUND")
         backing:SetAllPoints(gate)
-        ColorTexture(backing, 0.20, 0.17, 0.13, 1)
+        ColorTexture(backing, 0.086, 0.075, 0.075, 1)
         gate.backing = backing
 
         local face = gate:CreateTexture(nil, "ARTWORK")
@@ -603,25 +603,9 @@ local function PaintGateBacking(gate)
     if not backing then
         return
     end
-    local source = VaultBackground()
     backing:ClearAllPoints()
-    if source and type(source.GetAtlas) == "function" and type(backing.SetAtlas) == "function" then
-        local atlas = source:GetAtlas()
-        if type(atlas) == "string" and atlas ~= "" then
-            backing:SetAtlas(atlas, false)
-            backing:SetAllPoints(source)
-            backing:SetVertexColor(1, 1, 1, 1)
-            return
-        end
-    end
-    if source and type(source.GetTexture) == "function" and source:GetTexture() then
-        backing:SetTexture(source:GetTexture())
-        backing:SetAllPoints(source)
-        backing:SetVertexColor(1, 1, 1, 1)
-        return
-    end
     backing:SetAllPoints(gate)
-    ColorTexture(backing, 0.20, 0.17, 0.13, 1)
+    ColorTexture(backing, 0.086, 0.075, 0.075, 1)
 end
 
 local function FitCase(activityFrame)
@@ -817,7 +801,7 @@ local function EnsureClosedGates(activityFrame)
         end
         local backing = door:CreateTexture(nil, "BACKGROUND")
         backing:SetAllPoints(door)
-        ColorTexture(backing, 0.20, 0.17, 0.13, 1)
+        ColorTexture(backing, 0.086, 0.075, 0.075, 1)
         door.backing = backing
 
         local face = door:CreateTexture(nil, "ARTWORK")
