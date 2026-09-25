@@ -773,6 +773,17 @@ function ShutGates(activityFrame)
     end
 end
 
+local function RaiseAboveGlow(activityFrame)
+    local scene = WeeklyRewardsFrame and WeeklyRewardsFrame.ModelScene
+    local sceneLevel = scene and scene.GetFrameLevel and scene:GetFrameLevel() or 300
+    local parent = activityFrame:GetParent()
+    if scene and parent and scene.GetParent and scene:GetParent() == parent then
+        if activityFrame:GetFrameLevel() <= sceneLevel then
+            activityFrame:SetFrameLevel(sceneLevel + 20)
+        end
+    end
+end
+
 local function HideClosedGates(activityFrame)
     local closed = activityFrame and activityFrame.bgvClosed
     if closed then
@@ -786,7 +797,8 @@ local function EnsureClosedGates(activityFrame)
     end
 
     local closed = CreateFrame("Frame", nil, activityFrame)
-    closed:SetAllPoints(activityFrame)
+    closed:SetPoint("TOPLEFT", activityFrame, "TOPLEFT", 0, 0)
+    closed:SetPoint("BOTTOMRIGHT", activityFrame, "BOTTOMRIGHT", 0, 0)
     closed:EnableMouse(false)
     closed:SetFrameLevel(activityFrame:GetFrameLevel() + 2)
 
@@ -803,9 +815,15 @@ local function EnsureClosedGates(activityFrame)
             door:SetPoint("BOTTOMLEFT", closed, "BOTTOMLEFT", 0, 0)
             door:SetPoint("BOTTOMRIGHT", closed, "BOTTOMRIGHT", 0, 0)
         end
+        local backing = door:CreateTexture(nil, "BACKGROUND")
+        backing:SetAllPoints(door)
+        ColorTexture(backing, 0.20, 0.17, 0.13, 1)
+        door.backing = backing
+
         local face = door:CreateTexture(nil, "ARTWORK")
         face:SetPoint("TOPLEFT", closed, "TOPLEFT", 0, 0)
         face:SetPoint("BOTTOMRIGHT", closed, "BOTTOMRIGHT", 0, 0)
+        face:SetAlpha(1)
         if face.SetAtlas then
             face:SetAtlas("evergreen-weeklyrewards-reward-unlocked")
         end
@@ -823,18 +841,38 @@ local function ShowClosedGates(activityFrame)
     if activityFrame.bgvFX then
         StopFX(activityFrame)
     end
+    RaiseAboveGlow(activityFrame)
     EnsureClosedGates(activityFrame)
     local closed = activityFrame.bgvClosed
-    local height = activityFrame:GetHeight()
-    if not height or height < 4 then
-        height = 126
+    local slot = activityFrame:GetHeight()
+    if not slot or slot < 4 then
+        slot = 126
     end
-    local half = height * 0.5
-    closed.topDoor:SetHeight(half)
-    closed.bottomDoor:SetHeight(half)
-    closed:SetFrameLevel(activityFrame:GetFrameLevel() + 2)
+    local half = slot * 0.5
+    local atlas = "evergreen-weeklyrewards-reward-unlocked"
+    local bg = activityFrame.Background
+    if bg and type(bg.GetAtlas) == "function" then
+        local current = bg:GetAtlas()
+        if type(current) == "string" and current ~= "" then
+            atlas = current
+        end
+    end
+    local level = activityFrame:GetFrameLevel() + 2
+    if activityFrame.ItemFrame and type(activityFrame.ItemFrame.GetFrameLevel) == "function" then
+        level = math.max(level, activityFrame.ItemFrame:GetFrameLevel() + 1)
+    end
+    level = level + 8
+    for _, door in ipairs({ closed.topDoor, closed.bottomDoor }) do
+        door:SetHeight(half)
+        if door.face and type(door.face.SetAtlas) == "function" then
+            door.face:SetAtlas(atlas)
+        end
+        PaintGateBacking(door)
+        door:Show()
+    end
+    closed:SetFrameLevel(level)
     if activityFrame.bgvText then
-        activityFrame.bgvText:SetFrameLevel(activityFrame:GetFrameLevel() + 3)
+        activityFrame.bgvText:SetFrameLevel(level + 2)
         activityFrame.bgvText:SetAlpha(1)
     end
     closed:Show()
@@ -858,6 +896,11 @@ function RestClosed(activityFrame)
     end
     PlaceCase(activityFrame)
     LayoutDoors(fx)
+    RaiseAboveGlow(activityFrame)
+    if fx.topDoor then
+        fx.topDoor:SetFrameLevel(activityFrame:GetFrameLevel() + 8)
+        fx.bottomDoor:SetFrameLevel(activityFrame:GetFrameLevel() + 8)
+    end
     fx:Hide()
     FadeCaption(activityFrame, 1)
 end
@@ -1108,6 +1151,7 @@ function UI.Apply(activityFrame, slot)
     end
 
     EnsureLines(activityFrame)
+    RaiseAboveGlow(activityFrame)
     activityFrame.bgvToken = (activityFrame.bgvToken or 0) + 1
     local token = activityFrame.bgvToken
     activityFrame.bgvSlot = slot
