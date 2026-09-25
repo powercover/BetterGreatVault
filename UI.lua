@@ -1021,6 +1021,9 @@ local function EnsureHit(activityFrame)
                 end
             end
         end
+        if button == "LeftButton" and not IsModifiedClick() and activityFrame.bgvSlot and BGV.LootTable and type(BGV.LootTable.ShowSlot) == "function" then
+            BGV.LootTable.ShowSlot(activityFrame.bgvSlot)
+        end
         if not hit.SetPropagateMouseClicks and button == "LeftButton" then
             local parent = activityFrame:GetParent()
             if parent and type(parent.SelectActivity) == "function" then
@@ -1222,6 +1225,12 @@ local function ShowReward(activityFrame, slot, info)
         end
         if type(info.qualityName) == "string" and info.qualityName ~= "" then
             slot.itemQuality = info.qualityName
+        end
+        if Utils.IsUsableNumber(info.quality) then
+            slot.quality = info.quality
+        end
+        if type(info.link) == "string" and info.link ~= "" then
+            slot.rewardLink = info.link
         end
         if type(info.upgradeTrack) == "string" and info.upgradeTrack ~= "" then
             slot.upgradeTrack = info.upgradeTrack

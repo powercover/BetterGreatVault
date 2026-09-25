@@ -1,0 +1,829 @@
+local _, BGV = ...
+
+BGV.LootTable = {}
+
+local FILTERS = {
+    { id = "ALL", label = "All gear" },
+    { id = "Head", label = "Head" },
+    { id = "Neck", label = "Neck" },
+    { id = "Shoulder", label = "Shoulder" },
+    { id = "Cloak", label = "Cloak" },
+    { id = "Chest", label = "Chest" },
+    { id = "Wrist", label = "Wrist" },
+    { id = "Hands", label = "Hands" },
+    { id = "Waist", label = "Waist" },
+    { id = "Legs", label = "Legs" },
+    { id = "Feet", label = "Feet" },
+    { id = "Finger", label = "Finger" },
+    { id = "Trinket", label = "Trinket" },
+    { id = "Weapon", label = "Weapon" },
+}
+
+local CATEGORIES = {
+    { id = "raid", title = "Raid", match = "Raid" },
+    { id = "mplus", title = "Mythic+", match = "Activities" },
+    { id = "world", title = "World", match = "World" },
+}
+
+local LEFT_W = 188
+
+local frame
+local rail
+local scroll
+local child
+local headerTitle
+local headerReward
+local filterLabel
+local filterID = "ALL"
+local selectedKey
+local solo
+local pool = {}
+local linkPool = {}
+local linkRows = {}
+local itemCache = {}
+local templateCache = {}
+
+local function Pixel(parent, layer, r, g, b, a)
+    local texture = parent:CreateTexture(nil, layer or "BACKGROUND")
+    texture:SetTexture("Interface\\Buttons\\WHITE8X8")
+    texture:SetVertexColor(r, g, b, a or 1)
+    return texture
+end
+
+local function CategoryFor(slot)
+    if type(slot) ~= "table" then
+        return nil
+    end
+    for _, category in ipairs(CATEGORIES) do
+        if BGV.Utils.SameType(slot.type, BGV.Utils.ThresholdType(category.match)) then
+            return category
+        end
+    end
+end
+
+local function SlotKey(category, slot)
+    return category.id .. ":" .. tostring(slot.index)
+end
+
+local function SlotTitle(slot)
+    local title = "Slot " .. tostring(slot.index or "?")
+    if BGV.Utils.IsUsableNumber(slot.threshold) and type(slot.unit) == "string" then
+        title = string.format("%s · %d %s", title, slot.threshold, slot.unit)
+    end
+    if type(slot.qualifier) == "string" and slot.qualifier ~= "" then
+        title = title .. " · " .. slot.qualifier
+    end
+    if not slot.unlocked then
+        title = title .. " · Locked"
+    end
+    return title
+end
+
+local function RewardLine(slot)
+    if type(slot) ~= "table" then
+        return ""
+    end
+    if type(slot.upgradeTrack) == "string"
+        and BGV.Utils.IsUsableNumber(slot.upgradeLevel)
+        and BGV.Utils.IsUsableNumber(slot.upgradeMax)
+        and BGV.Utils.IsUsableNumber(slot.itemLevel) then
+        return string.format("%s %d/%d (%d ilvl)", slot.upgradeTrack, slot.upgradeLevel, slot.upgradeMax, slot.itemLevel)
+    end
+    if BGV.Utils.IsUsableNumber(slot.itemLevel) then
+        return string.format("%d ilvl", slot.itemLevel)
+    end
+    return ""
+end
+
+local function SlotItems(slot)
+    local key = tostring(slot.type) .. ":" .. tostring(slot.index) .. ":" .. tostring(slot.itemLevel) .. ":" .. tostring(slot.level) .. ":" .. filterID
+    if itemCache[key] then
+        return itemCache[key]
+    end
+    local list = {}
+    if slot.unlocked and BGV.Rewards and type(BGV.Rewards.ItemsForSlot) == "function" then
+        local found = BGV.Rewards.ItemsForSlot(slot)
+        if type(found) == "table" then
+            for _, entry in ipairs(found) do
+                if filterID == "ALL" or entry.equipLabel == filterID then
+                    list[#list + 1] = entry
+                end
+            end
+        end
+    end
+    itemCache[key] = list
+    return list
+end
+
+local function BuildModel()
+    local model = {}
+    local snapshot = BGV.GreatVault and BGV.GreatVault.GetSnapshot and BGV.GreatVault.GetSnapshot() or {}
+    for _, category in ipairs(CATEGORIES) do
+        local group = { id = category.id, title = category.title, slots = {} }
+        for _, slot in ipairs(snapshot) do
+            local found = CategoryFor(slot)
+            if found and found.id == category.id then
+                group.slots[#group.slots + 1] = {
+                    id = SlotKey(category, slot),
+                    title = "Slot " .. tostring(slot.index or "?"),
+                    slot = slot,
+                }
+            end
+        end
+        if #group.slots > 0 then
+            model[#model + 1] = group
+        end
+    end
+    return model
+end
+
+local function FindSection(model, key)
+    for _, group in ipairs(model) do
+        for _, section in ipairs(group.slots) do
+            if section.id == key then
+                return section
+            end
+        end
+    end
+end
+
+local function FirstSection(model, preferUnlocked)
+    local fallback
+    for _, group in ipairs(model) do
+        for _, section in ipairs(group.slots) do
+            if not fallback then
+                fallback = section
+            end
+            if not preferUnlocked or section.slot.unlocked then
+                return section
+            end
+        end
+    end
+    return fallback
+end
+
+local function SplitLink(link)
+    local body = type(link) == "string" and link:match("item:([%d:]*)") or nil
+    if not body or body == "" then
+        return nil
+    end
+    local parts = {}
+    for part in (body .. ":"):gmatch("([^:]*):") do
+        parts[#parts + 1] = part
+    end
+    if #parts < 13 then
+        return nil
+    end
+    return parts
+end
+
+local function Assemble(parts)
+    return "item:" .. table.concat(parts, ":")
+end
+
+local function Measure(link)
+    if not (C_Item and type(C_Item.GetDetailedItemLevelInfo) == "function") or type(link) ~= "string" then
+        return nil
+    end
+    local level = BGV.Utils.Call(C_Item.GetDetailedItemLevelInfo, link)
+    if BGV.Utils.IsUsableNumber(level) and level > 0 then
+        return level
+    end
+end
+
+local function WithoutBonus(parts, dropIndex)
+    local count = tonumber(parts[13]) or 0
+    local nextParts = {}
+    for index = 1, 12 do
+        nextParts[index] = parts[index]
+    end
+    local kept = {}
+    for index = 1, count do
+        if index ~= dropIndex then
+            kept[#kept + 1] = parts[13 + index]
+        end
+    end
+    nextParts[13] = tostring(#kept)
+    local pos = 13
+    for _, bonus in ipairs(kept) do
+        pos = pos + 1
+        nextParts[pos] = bonus
+    end
+    for index = 14 + count, #parts do
+        pos = pos + 1
+        nextParts[pos] = parts[index]
+    end
+    return nextParts
+end
+
+local function TemplateFor(rewardLink, target)
+    local key = tostring(rewardLink) .. "@" .. tostring(target)
+    if templateCache[key] then
+        return templateCache[key]
+    end
+    local parts = SplitLink(rewardLink)
+    local link = parts and Assemble(parts) or rewardLink
+    local level = Measure(link)
+    local guard = 0
+    while parts and level and target and level > target and guard < 6 do
+        guard = guard + 1
+        local count = tonumber(parts[13]) or 0
+        local matched
+        local bestParts
+        local bestLevel
+        for index = 1, count do
+            local trial = WithoutBonus(parts, index)
+            local trialLevel = Measure(Assemble(trial))
+            if trialLevel == target then
+                parts = trial
+                link = Assemble(trial)
+                level = trialLevel
+                matched = true
+                break
+            end
+            if trialLevel and trialLevel < level and trialLevel > target and (not bestLevel or trialLevel < bestLevel) then
+                bestLevel = trialLevel
+                bestParts = trial
+            end
+        end
+        if matched or not bestParts then
+            break
+        end
+        parts = bestParts
+        link = Assemble(parts)
+        level = bestLevel
+    end
+    templateCache[key] = link
+    return link
+end
+
+local function SwapItem(link, itemID)
+    local parts = SplitLink(link)
+    if parts then
+        parts[1] = tostring(itemID)
+        return Assemble(parts)
+    end
+    local rest = type(link) == "string" and (link:match("item:%d+(.-)|h") or link:match("item:%d+(.*)")) or ""
+    return "item:" .. tostring(itemID) .. (rest or "")
+end
+
+local function TipLink(entry)
+    if not BGV.Utils.IsUsableNumber(entry.itemID) then
+        return nil
+    end
+    if type(entry.rewardLink) == "string" and entry.rewardLink ~= "" and BGV.Utils.IsUsableNumber(entry.itemLevel) then
+        local template = TemplateFor(entry.rewardLink, entry.itemLevel)
+        local link = SwapItem(template, entry.itemID)
+        local level = Measure(link)
+        if level and level > entry.itemLevel then
+            return TemplateFor(link, entry.itemLevel)
+        end
+        return link
+    end
+    return "item:" .. tostring(entry.itemID)
+end
+
+local function ShowItemTooltip(owner, entry)
+    if not GameTooltip or not entry then
+        return
+    end
+    local link = entry.tipLink
+    if not link then
+        link = TipLink(entry)
+        entry.tipLink = link
+    end
+    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+    if type(link) == "string" then
+        GameTooltip:SetHyperlink(link)
+        if type(GameTooltip_ShowCompareItem) == "function" then
+            BGV.Utils.Call(GameTooltip_ShowCompareItem, GameTooltip)
+        end
+        if Item and type(Item.CreateFromItemLink) == "function" then
+            local item = BGV.Utils.Call(Item.CreateFromItemLink, Item, link)
+            if item and type(item.IsItemDataCached) == "function" and not item:IsItemDataCached() and type(item.ContinueOnLoad) == "function" then
+                item:ContinueOnLoad(function()
+                    if owner:IsShown() and owner:IsMouseOver() then
+                        GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+                        GameTooltip:SetHyperlink(link)
+                        if type(GameTooltip_ShowCompareItem) == "function" then
+                            BGV.Utils.Call(GameTooltip_ShowCompareItem, GameTooltip)
+                        end
+                    end
+                end)
+            end
+        end
+    elseif entry.itemID then
+        GameTooltip:SetItemByID(entry.itemID)
+    end
+end
+
+local function Acquire()
+    local row = table.remove(pool)
+    if not row then
+        row = CreateFrame("Button", nil, child)
+        row:SetHeight(32)
+        row:RegisterForClicks("AnyUp")
+        row.icon = row:CreateTexture(nil, "ARTWORK")
+        row.icon:SetSize(24, 24)
+        row.icon:SetPoint("LEFT", 8, 0)
+        row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        row.text:SetPoint("LEFT", row.icon, "RIGHT", 8, 0)
+        row.text:SetPoint("RIGHT", -8, 0)
+        row.text:SetJustifyH("LEFT")
+        row.text:SetWordWrap(false)
+        row:SetScript("OnEnter", function(self)
+            ShowItemTooltip(self, self.entry)
+        end)
+        row:SetScript("OnLeave", function()
+            if GameTooltip then
+                GameTooltip:Hide()
+            end
+        end)
+        row:SetScript("OnClick", function(self, button)
+            if button == "LeftButton" and IsModifiedClick() and self.entry and self.entry.tipLink and type(HandleModifiedItemClick) == "function" then
+                HandleModifiedItemClick(self.entry.tipLink)
+            end
+        end)
+    end
+    row:Show()
+    return row
+end
+
+local function ReleaseRows()
+    if not child then
+        return
+    end
+    for _, row in ipairs({ child:GetChildren() }) do
+        row:Hide()
+        row.entry = nil
+        pool[#pool + 1] = row
+    end
+end
+
+local function QualityColor(entry)
+    local colors = ITEM_QUALITY_COLORS
+    local quality = entry.quality
+    if colors and BGV.Utils.IsUsableNumber(quality) and colors[quality] then
+        return colors[quality].r, colors[quality].g, colors[quality].b
+    end
+    return 0.95, 0.95, 0.95
+end
+
+local Layout
+
+local function PaintLinks(model)
+    for _, link in ipairs(linkRows) do
+        link:Hide()
+    end
+    local shown = 0
+    local function Take()
+        shown = shown + 1
+        local link = linkRows[shown]
+        if not link then
+            link = table.remove(linkPool)
+        end
+        if not link then
+            link = CreateFrame("Button", nil, rail)
+            link:SetHeight(28)
+            local bar = Pixel(link, "ARTWORK", 0.85, 0.65, 0.2, 1)
+            bar:SetSize(2, 14)
+            bar:SetPoint("LEFT", link, "LEFT", 0, 0)
+            bar:Hide()
+            link.bar = bar
+            local label = link:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            label:SetPoint("LEFT", link, "LEFT", 12, 0)
+            label:SetPoint("RIGHT", link, "RIGHT", -8, 0)
+            label:SetJustifyH("LEFT")
+            label:SetWordWrap(false)
+            link.label = label
+            local underline = Pixel(link, "OVERLAY", 0.96, 0.96, 0.96, 0.7)
+            underline:SetHeight(1)
+            underline:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -1)
+            underline:SetPoint("TOPRIGHT", label, "BOTTOMRIGHT", 0, -1)
+            underline:Hide()
+            link.underline = underline
+            link:SetScript("OnEnter", function(self)
+                if self.kind == "slot" then
+                    self.label:SetTextColor(0.96, 0.96, 0.96)
+                    self.underline:Show()
+                end
+            end)
+            link:SetScript("OnLeave", function(self)
+                self.underline:Hide()
+                if self.kind == "slot" and not self.selected then
+                    self.label:SetTextColor(0.46, 0.46, 0.48)
+                end
+            end)
+            linkRows[shown] = link
+        end
+        link:Show()
+        return link
+    end
+
+    local y = 36
+    for _, group in ipairs(model) do
+        local header = Take()
+        header.kind = "header"
+        header.selected = false
+        header:SetScript("OnClick", nil)
+        header:ClearAllPoints()
+        header:SetPoint("TOPLEFT", rail, "TOPLEFT", 16, -y)
+        header:SetPoint("TOPRIGHT", rail, "TOPRIGHT", -8, -y)
+        header.bar:Hide()
+        header.underline:Hide()
+        header.label:SetText(group.title)
+        header.label:SetTextColor(0.85, 0.65, 0.2)
+        y = y + 28
+        for _, section in ipairs(group.slots) do
+            local link = Take()
+            local selected = section.id == selectedKey
+            link.kind = "slot"
+            link.selected = selected
+            link:ClearAllPoints()
+            link:SetPoint("TOPLEFT", rail, "TOPLEFT", 28, -y)
+            link:SetPoint("TOPRIGHT", rail, "TOPRIGHT", -8, -y)
+            link.bar:SetShown(selected)
+            link.underline:Hide()
+            link.label:SetText(section.title)
+            if selected then
+                link.label:SetTextColor(0.96, 0.96, 0.96)
+            else
+                link.label:SetTextColor(0.46, 0.46, 0.48)
+            end
+            local sectionID = section.id
+            link:SetScript("OnClick", function()
+                selectedKey = sectionID
+                Layout()
+            end)
+            y = y + 28
+        end
+        y = y + 8
+    end
+end
+
+function Layout()
+    if not child or not scroll then
+        return
+    end
+    ReleaseRows()
+    local model = BuildModel()
+    local section = FindSection(model, selectedKey) or FirstSection(model, true)
+    if section then
+        selectedKey = section.id
+    end
+    if scroll.bgvKey ~= selectedKey then
+        scroll:SetVerticalScroll(0)
+        scroll.bgvKey = selectedKey
+    end
+
+    if rail then
+        rail:SetShown(not solo)
+    end
+    if solo then
+        scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -100)
+        scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 16)
+    else
+        scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", LEFT_W + 16, -100)
+        scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 16)
+        PaintLinks(model)
+    end
+    if section then
+        section.items = SlotItems(section.slot)
+    end
+
+    if headerTitle then
+        local titleWidth = (frame:GetWidth() or 860) - (solo and 36 or (LEFT_W + 40))
+        if titleWidth < 180 then
+            titleWidth = 180
+        end
+        headerTitle:SetWidth(titleWidth)
+        headerReward:SetWidth(titleWidth)
+        if section then
+            headerTitle:SetText(SlotTitle(section.slot))
+            headerReward:SetText(RewardLine(section.slot))
+        else
+            headerTitle:SetText("Great Vault loot")
+            headerReward:SetText("")
+        end
+    end
+
+    local width = scroll:GetWidth()
+    if not width or width < 160 then
+        width = solo and 680 or 500
+    end
+    child:SetWidth(width)
+    if not section then
+        local empty = Acquire()
+        empty:ClearAllPoints()
+        empty:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -8)
+        empty:SetWidth(width - 8)
+        empty.icon:SetTexture(nil)
+        empty.entry = nil
+        empty.text:SetText("No Great Vault progress to list yet.")
+        empty.text:SetTextColor(0.55, 0.55, 0.58)
+        child:SetHeight(48)
+        return
+    end
+
+    local items = section.items or {}
+    if #items == 0 then
+        local empty = Acquire()
+        empty:ClearAllPoints()
+        empty:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -8)
+        empty:SetWidth(width - 8)
+        empty.icon:SetTexture(nil)
+        empty.entry = nil
+        empty.text:SetText(section.slot.unlocked and "No items for this filter." or "Locked.")
+        empty.text:SetTextColor(0.55, 0.55, 0.58)
+        child:SetHeight(48)
+        return
+    end
+
+    local grouped = CategoryFor(section.slot) and CategoryFor(section.slot).id == "mplus"
+    local y = 4
+    local function AddItem(entry, indent)
+        local row = Acquire()
+        row:SetHeight(32)
+        row:SetWidth(width - 8 - indent)
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", child, "TOPLEFT", 4 + indent, -y)
+        row.icon:SetSize(24, 24)
+        row.icon:SetTexture(entry.icon)
+        row.icon:SetVertexColor(1, 1, 1, 1)
+        row.entry = entry
+        if grouped then
+            row.text:SetText(string.format("%s    %s", entry.name or "Item", entry.equipLabel or ""))
+        else
+            row.text:SetText(string.format("%s    %s    %s", entry.name or "Item", entry.equipLabel or "", entry.source or ""))
+        end
+        local r, g, b = QualityColor(entry)
+        row.text:SetTextColor(r, g, b)
+        y = y + 34
+    end
+
+    if grouped then
+        local names = {}
+        local byDungeon = {}
+        for _, entry in ipairs(items) do
+            local dungeon = entry.source or "Mythic+"
+            if not byDungeon[dungeon] then
+                byDungeon[dungeon] = {}
+                names[#names + 1] = dungeon
+            end
+            byDungeon[dungeon][#byDungeon[dungeon] + 1] = entry
+        end
+        table.sort(names)
+        for _, dungeon in ipairs(names) do
+            local header = Acquire()
+            header:SetHeight(26)
+            header:SetWidth(width - 8)
+            header:ClearAllPoints()
+            header:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -y)
+            header.icon:SetSize(8, 8)
+            header.icon:SetTexture("Interface\\Buttons\\WHITE8X8")
+            header.icon:SetVertexColor(0.85, 0.65, 0.2, 1)
+            header.entry = nil
+            header.text:SetText(dungeon)
+            header.text:SetTextColor(0.85, 0.65, 0.2)
+            y = y + 28
+            for _, entry in ipairs(byDungeon[dungeon]) do
+                AddItem(entry, 22)
+            end
+        end
+    else
+        for _, entry in ipairs(items) do
+            AddItem(entry, 0)
+        end
+    end
+    child:SetHeight(math.max(y + 8, 40))
+end
+
+local function ApplyFilter(id, label)
+    filterID = id
+    itemCache = {}
+    if filterLabel then
+        filterLabel:SetText(label)
+    end
+    Layout()
+end
+
+local function Build()
+    if frame then
+        return frame
+    end
+    frame = CreateFrame("Frame", "BetterGreatVaultLootTable", UIParent)
+    frame:SetSize(860, 560)
+    frame:SetPoint("CENTER")
+    frame:SetFrameStrata("DIALOG")
+    frame:SetToplevel(true)
+    frame:SetClampedToScreen(true)
+    frame:SetMovable(true)
+    frame:EnableMouse(true)
+    frame:SetResizable(true)
+    if frame.SetResizeBounds then
+        frame:SetResizeBounds(640, 400, 1280, 900)
+    end
+    frame:Hide()
+    Pixel(frame, "BACKGROUND", 0.07, 0.07, 0.08, 0.98):SetAllPoints()
+
+    local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("TOPLEFT", 16, -14)
+    title:SetText("Great Vault loot")
+    title:SetTextColor(0.85, 0.65, 0.2)
+
+    local drag = CreateFrame("Button", nil, frame)
+    drag:SetPoint("TOPLEFT")
+    drag:SetPoint("TOPRIGHT", -180, 0)
+    drag:SetHeight(40)
+    drag:RegisterForDrag("LeftButton")
+    drag:SetScript("OnDragStart", function()
+        frame:StartMoving()
+    end)
+    drag:SetScript("OnDragStop", function()
+        frame:StopMovingOrSizing()
+    end)
+
+    local close = CreateFrame("Button", nil, frame)
+    close:SetSize(28, 28)
+    close:SetPoint("TOPRIGHT", -6, -6)
+    local closeText = close:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    closeText:SetPoint("CENTER")
+    closeText:SetText("x")
+    closeText:SetTextColor(0.7, 0.7, 0.7)
+    close:SetScript("OnClick", function()
+        frame:Hide()
+    end)
+    close:SetScript("OnEnter", function()
+        closeText:SetTextColor(1, 1, 1)
+    end)
+    close:SetScript("OnLeave", function()
+        closeText:SetTextColor(0.7, 0.7, 0.7)
+    end)
+
+    local filter = CreateFrame("Button", nil, frame)
+    filter:SetSize(140, 22)
+    filter:SetPoint("TOPRIGHT", -40, -12)
+    Pixel(filter, "BACKGROUND", 0.14, 0.14, 0.16, 1):SetAllPoints()
+    filterLabel = filter:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    filterLabel:SetPoint("CENTER")
+    filterLabel:SetText("All gear")
+    filter:SetScript("OnClick", function(self)
+        if MenuUtil and type(MenuUtil.CreateContextMenu) == "function" then
+            MenuUtil.CreateContextMenu(self, function(_, root)
+                for _, option in ipairs(FILTERS) do
+                    root:CreateRadio(option.label, function()
+                        return filterID == option.id
+                    end, function()
+                        ApplyFilter(option.id, option.label)
+                    end)
+                end
+            end)
+            return
+        end
+        local nextIndex = 1
+        for index, option in ipairs(FILTERS) do
+            if option.id == filterID then
+                nextIndex = index % #FILTERS + 1
+            end
+        end
+        ApplyFilter(FILTERS[nextIndex].id, FILTERS[nextIndex].label)
+    end)
+
+    rail = CreateFrame("Frame", nil, frame)
+    rail:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -40)
+    rail:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 0, 0)
+    rail:SetWidth(LEFT_W)
+    local contents = rail:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    contents:SetPoint("TOPLEFT", rail, "TOPLEFT", 16, -12)
+    contents:SetText("Contents")
+    contents:SetTextColor(0.85, 0.65, 0.2)
+    local divider = Pixel(frame, "BORDER", 0.22, 0.22, 0.24, 1)
+    divider:SetWidth(1)
+    divider:SetPoint("TOPLEFT", rail, "TOPRIGHT", 0, 0)
+    divider:SetPoint("BOTTOMLEFT", rail, "BOTTOMRIGHT", 0, 0)
+    rail.divider = divider
+
+    headerTitle = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    headerTitle:SetPoint("TOPLEFT", frame, "TOPLEFT", LEFT_W + 20, -46)
+    headerTitle:SetJustifyH("LEFT")
+    headerTitle:SetWordWrap(false)
+    headerTitle:SetTextColor(0.96, 0.96, 0.96)
+    headerReward = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    headerReward:SetPoint("TOPLEFT", headerTitle, "BOTTOMLEFT", 0, -4)
+    headerReward:SetJustifyH("LEFT")
+    headerReward:SetWordWrap(false)
+    headerReward:SetTextColor(1, 0.82, 0)
+    local rule = Pixel(frame, "ARTWORK", 0.85, 0.65, 0.2, 0.9)
+    rule:SetSize(36, 2)
+    rule:SetPoint("TOPLEFT", headerReward, "BOTTOMLEFT", 0, -6)
+
+    scroll = CreateFrame("ScrollFrame", nil, frame)
+    scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", LEFT_W + 16, -100)
+    scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 16)
+    scroll:EnableMouseWheel(true)
+    child = CreateFrame("Frame", nil, scroll)
+    child:SetSize(520, 40)
+    scroll:SetScrollChild(child)
+    scroll:SetScript("OnMouseWheel", function(self, delta)
+        local offset = self:GetVerticalScroll() - delta * 48
+        local maxScroll = self:GetVerticalScrollRange()
+        if offset < 0 then
+            offset = 0
+        end
+        if offset > maxScroll then
+            offset = maxScroll
+        end
+        self:SetVerticalScroll(offset)
+    end)
+
+    local sizer = CreateFrame("Button", nil, frame)
+    sizer:SetSize(18, 18)
+    sizer:SetPoint("BOTTOMRIGHT")
+    local grip = sizer:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    grip:SetPoint("CENTER")
+    grip:SetText("..")
+    grip:SetTextColor(0.45, 0.45, 0.48)
+    sizer:SetScript("OnMouseDown", function()
+        frame:StartSizing("BOTTOMRIGHT")
+    end)
+    sizer:SetScript("OnMouseUp", function()
+        frame:StopMovingOrSizing()
+        Layout()
+    end)
+
+    frame:SetScript("OnShow", function()
+        Layout()
+    end)
+    frame:RegisterEvent("CHALLENGE_MODE_MAPS_UPDATE")
+    frame:SetScript("OnEvent", function()
+        itemCache = {}
+        if frame:IsShown() then
+            Layout()
+        end
+    end)
+
+    if type(UISpecialFrames) == "table" then
+        local listed = false
+        for _, name in ipairs(UISpecialFrames) do
+            if name == "BetterGreatVaultLootTable" then
+                listed = true
+                break
+            end
+        end
+        if not listed then
+            table.insert(UISpecialFrames, "BetterGreatVaultLootTable")
+        end
+    end
+    return frame
+end
+
+local function PlaceHeaders()
+    if not headerTitle then
+        return
+    end
+    headerTitle:ClearAllPoints()
+    if solo then
+        headerTitle:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -46)
+        if rail and rail.divider then
+            rail.divider:Hide()
+        end
+    else
+        headerTitle:SetPoint("TOPLEFT", frame, "TOPLEFT", LEFT_W + 20, -46)
+        if rail and rail.divider then
+            rail.divider:Show()
+        end
+    end
+end
+
+function BGV.LootTable.Show(slot)
+    local window = Build()
+    itemCache = {}
+    templateCache = {}
+    local category = CategoryFor(slot)
+    solo = category ~= nil
+    if category then
+        selectedKey = SlotKey(category, slot)
+    else
+        selectedKey = nil
+    end
+    PlaceHeaders()
+    window:Show()
+    window:Raise()
+    if scroll then
+        scroll:SetVerticalScroll(0)
+    end
+    Layout()
+end
+
+function BGV.LootTable.ShowSlot(slot)
+    BGV.LootTable.Show(slot)
+end
+
+function BGV.LootTable.Toggle()
+    local window = Build()
+    if window:IsShown() and not solo then
+        window:Hide()
+        return
+    end
+    BGV.LootTable.Show(nil)
+end
