@@ -56,6 +56,8 @@ local CASE_ICON = 40
 local CASE_STRIDE = 56
 local CASE_SLOTS = 12
 local GATE_CORNER = 16
+local REEL_LEFT = 2
+local REEL_RIGHT = 4
 
 local function ColorTexture(texture, r, g, b, a)
     if texture.SetColorTexture then
@@ -79,14 +81,23 @@ local function EnsureFX(activityFrame)
         fx:SetClipsChildren(true)
     end
 
-    local shade = fx:CreateTexture(nil, "BACKGROUND")
+    local window = CreateFrame("Frame", nil, fx)
+    window:SetPoint("TOPLEFT", fx, "TOPLEFT", REEL_LEFT, -GATE_CORNER)
+    window:SetPoint("BOTTOMRIGHT", fx, "BOTTOMRIGHT", -REEL_RIGHT, GATE_CORNER)
+    window:EnableMouse(false)
+    if window.SetClipsChildren then
+        window:SetClipsChildren(true)
+    end
+    fx.window = window
+
+    local shade = window:CreateTexture(nil, "BACKGROUND")
     shade:SetAllPoints()
     ColorTexture(shade, 0.02, 0.015, 0.01, 1)
 
-    local reel = CreateFrame("Frame", nil, fx)
+    local reel = CreateFrame("Frame", nil, window)
     reel:SetWidth(CASE_STRIDE * CASE_SLOTS)
-    reel:SetPoint("TOPLEFT", fx, "TOPLEFT", 0, 0)
-    reel:SetPoint("BOTTOMLEFT", fx, "BOTTOMLEFT", 0, 0)
+    reel:SetPoint("TOPLEFT", window, "TOPLEFT", 0, 0)
+    reel:SetPoint("BOTTOMLEFT", window, "BOTTOMLEFT", 0, 0)
     fx.reel = reel
     fx.cells = {}
     for index = 1, CASE_SLOTS do
@@ -94,7 +105,7 @@ local function EnsureFX(activityFrame)
         holder:SetWidth(CASE_STRIDE)
         holder:SetPoint("TOPLEFT", reel, "TOPLEFT", (index - 1) * CASE_STRIDE, 0)
         holder:SetPoint("BOTTOMLEFT", reel, "BOTTOMLEFT", (index - 1) * CASE_STRIDE, 0)
-        local back = holder:CreateTexture(nil, "BACKGROUND")
+        local back = holder:CreateTexture(nil, "BORDER")
         back:SetAllPoints()
         back:Hide()
         holder.back = back
@@ -264,6 +275,9 @@ local function LayoutDoors(fx)
     end
     fx:SetAlpha(1)
     local level = fx:GetFrameLevel()
+    if fx.window then
+        fx.window:SetFrameLevel(level + 1)
+    end
     if fx.reel then
         fx.reel:SetFrameLevel(level + 1)
         for _, cell in ipairs(fx.cells or {}) do
@@ -284,14 +298,14 @@ local function LayoutDoors(fx)
     if fx.topSeam then
         fx.topSeam:SetFrameLevel(level + 9)
         fx.topSeam:ClearAllPoints()
-        fx.topSeam:SetPoint("LEFT", fx, "TOPLEFT", 0, -covered)
-        fx.topSeam:SetPoint("RIGHT", fx, "TOPRIGHT", 0, -covered)
+        fx.topSeam:SetPoint("LEFT", fx, "TOPLEFT", REEL_LEFT, -covered)
+        fx.topSeam:SetPoint("RIGHT", fx, "TOPRIGHT", -REEL_RIGHT, -covered)
     end
     if fx.bottomSeam then
         fx.bottomSeam:SetFrameLevel(level + 9)
         fx.bottomSeam:ClearAllPoints()
-        fx.bottomSeam:SetPoint("LEFT", fx, "BOTTOMLEFT", 0, covered)
-        fx.bottomSeam:SetPoint("RIGHT", fx, "BOTTOMRIGHT", 0, covered)
+        fx.bottomSeam:SetPoint("LEFT", fx, "BOTTOMLEFT", REEL_LEFT, covered)
+        fx.bottomSeam:SetPoint("RIGHT", fx, "BOTTOMRIGHT", -REEL_RIGHT, covered)
     end
 end
 
@@ -393,7 +407,6 @@ local function EnsureReel(fx)
         end
         if fx.revealTarget == 0 and fx.reveal <= 0 then
             StopReel(fx)
-            fx.reelReady = nil
             fx:Hide()
             if fx.marker then
                 fx.marker:Hide()
@@ -409,10 +422,11 @@ local function EnsureReel(fx)
 end
 
 function PlaceReel(fx)
+    local window = fx.window or fx
     fx.reel:SetWidth(CASE_STRIDE * CASE_SLOTS)
     fx.reel:ClearAllPoints()
-    fx.reel:SetPoint("TOPLEFT", fx, "TOPLEFT", fx.offset or 0, -GATE_CORNER)
-    fx.reel:SetPoint("BOTTOMLEFT", fx, "BOTTOMLEFT", fx.offset or 0, GATE_CORNER)
+    fx.reel:SetPoint("TOPLEFT", window, "TOPLEFT", fx.offset or 0, 0)
+    fx.reel:SetPoint("BOTTOMLEFT", window, "BOTTOMLEFT", fx.offset or 0, 0)
 end
 
 local function BuryShownRegion(region)
@@ -641,6 +655,9 @@ local function PlaceCase(activityFrame)
         level = math.max(level, activityFrame.ItemFrame:GetFrameLevel() + 1)
     end
     fx:SetFrameLevel(level)
+    if fx.window then
+        fx.window:SetFrameLevel(level + 1)
+    end
     if fx.reel then
         fx.reel:SetFrameLevel(level + 1)
     end
@@ -715,7 +732,6 @@ function ShutGates(activityFrame)
     fx.reveal = 0
     fx.revealTarget = 0
     fx.revealAim = 0
-    fx.reelReady = nil
     if fx.marker then
         fx.marker:Hide()
     end
