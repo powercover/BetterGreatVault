@@ -176,8 +176,14 @@ function BGV.Minimap.RegisterSettings()
     Settings.CreateCheckbox(category, animations, "Keep the vault slots closed. Mouseover shows the short caption only, with no reel.")
 
     local function RefreshAccent()
-        if BGV.UI and type(BGV.UI.RefreshOpenFrame) == "function" then
-            BGV.UI.RefreshOpenFrame()
+        local function Go()
+            if BGV.UI and type(BGV.UI.RefreshOpenFrame) == "function" then
+                BGV.UI.RefreshOpenFrame()
+            end
+        end
+        Go()
+        if C_Timer and type(C_Timer.After) == "function" then
+            C_Timer.After(0, Go)
         end
     end
 
@@ -290,6 +296,17 @@ function BGV.Minimap.RegisterSettings()
         end
 
         local function HexToColor(value)
+            if type(value) == "table" and type(value.GetRGB) == "function" then
+                return value:GetRGB()
+            end
+            if type(value) == "table" then
+                local r = value.r or value[1]
+                local g = value.g or value[2]
+                local b = value.b or value[3]
+                if type(r) == "number" and type(g) == "number" and type(b) == "number" then
+                    return r, g, b
+                end
+            end
             if type(value) ~= "string" then
                 return 0.85, 0.65, 0.2
             end

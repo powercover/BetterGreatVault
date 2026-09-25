@@ -3,7 +3,7 @@
 ## Notes: Shows Great Vault progress and reward item level on each slot.
 ## Author: powercover
 ## Version: 1.0.0
-## SavedVariables: BetterGreatVaultDB
+## SavedVariablesPerCharacter: BetterGreatVaultCharDB
 ## AllowLoadGameType: mainline
 ## Category: Character Advancement
 ## IconTexture: Interface\AddOns\BetterGreatVault\Icon

@@ -7,7 +7,10 @@ local Utils = BGV.Utils
 local frame = CreateFrame("Frame")
 
 local function SavedDefaults()
-    BetterGreatVaultDB = Utils.CopyDefaults(BetterGreatVaultDB, {
+    if type(BetterGreatVaultCharDB) ~= "table" then
+        BetterGreatVaultCharDB = {}
+    end
+    BetterGreatVaultDB = Utils.CopyDefaults(BetterGreatVaultCharDB, {
         debug = false,
         showMinimap = true,
         minimapAngle = 220,
@@ -15,6 +18,7 @@ local function SavedDefaults()
         useSpecAccent = true,
         accentColor = { r = 0.85, g = 0.65, b = 0.2 },
     })
+    BetterGreatVaultCharDB = BetterGreatVaultDB
 end
 
 local function AddonIsLoaded(name)
@@ -111,6 +115,7 @@ local function HandleSlash(message)
         end
     elseif command == "reset" then
         BetterGreatVaultDB = nil
+        BetterGreatVaultCharDB = nil
         SavedDefaults()
         BGV.Minimap.Apply()
         Utils.Print("Settings reset.")
