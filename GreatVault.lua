@@ -275,7 +275,7 @@ local function CompletedRuns()
     return runCache
 end
 
-function DungeonCounts()
+DungeonCounts = function()
     if not (C_WeeklyRewards and type(C_WeeklyRewards.GetNumCompletedDungeonRuns) == "function") then
         return 0, 0, 0
     end
