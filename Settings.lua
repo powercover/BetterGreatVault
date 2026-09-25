@@ -512,15 +512,22 @@ function BGV.Settings.Toggle()
     if not (bridgeCategory and Settings and type(Settings.OpenToCategory) == "function") then
         return
     end
-    if panel and panel:IsShown() then
-        if type(HideUIPanel) == "function" and SettingsPanel then
+    local optionsOpen = SettingsPanel and type(SettingsPanel.IsShown) == "function" and SettingsPanel:IsShown()
+    local pageVisible = panel and type(panel.IsVisible) == "function" and panel:IsVisible()
+    if optionsOpen and pageVisible then
+        if type(HideUIPanel) == "function" then
             HideUIPanel(SettingsPanel)
-        elseif SettingsPanel then
-            SettingsPanel:Hide()
         else
-            panel:Hide()
+            SettingsPanel:Hide()
         end
         return
+    end
+    if not optionsOpen and SettingsPanel then
+        if type(ShowUIPanel) == "function" then
+            ShowUIPanel(SettingsPanel)
+        elseif type(SettingsPanel.Show) == "function" then
+            SettingsPanel:Show()
+        end
     end
     Settings.OpenToCategory(bridgeCategory:GetID())
 end
