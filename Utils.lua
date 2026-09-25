@@ -124,6 +124,14 @@ function Utils.Print(message)
     DEFAULT_CHAT_FRAME:AddMessage(prefix .. ": " .. tostring(message))
 end
 
+function Utils.CurrentSpecID()
+    local specIndex = type(GetSpecialization) == "function" and GetSpecialization() or nil
+    if not specIndex or type(GetSpecializationInfo) ~= "function" then
+        return nil
+    end
+    return GetSpecializationInfo(specIndex)
+end
+
 function Utils.Trim(value)
     if type(value) ~= "string" then
         return ""

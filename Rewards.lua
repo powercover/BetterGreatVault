@@ -462,14 +462,6 @@ local function MythicPlusInstances()
     return ids
 end
 
-local function CurrentSpecID()
-    local specIndex = type(GetSpecialization) == "function" and GetSpecialization() or nil
-    if not specIndex or type(GetSpecializationInfo) ~= "function" then
-        return nil
-    end
-    return GetSpecializationInfo(specIndex)
-end
-
 local function SpecCanUse(itemID, specID)
     if type(GetItemSpecInfo) ~= "function" or not specID then
         return true
@@ -494,7 +486,7 @@ local function WorldIcons()
     if type(rows) ~= "table" then
         return {}, false
     end
-    local specID = CurrentSpecID()
+    local specID = Utils.CurrentSpecID()
     local icons = {}
     local pending = false
     for _, itemID in ipairs(rows) do
@@ -577,7 +569,7 @@ function Rewards.PossibleIcons(slot)
         instanceIDs = MythicPlusInstances()
         key = "mplus:" .. tostring(specIndex)
     elseif Utils.SameType(slot.type, Utils.ThresholdType("World")) then
-        local specID = CurrentSpecID()
+        local specID = Utils.CurrentSpecID()
         key = "world:" .. tostring(specID)
     else
         return {}
