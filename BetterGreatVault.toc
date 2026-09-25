@@ -15,5 +15,6 @@ Bis.lua
 GreatVault.lua
 Tooltip.lua
 UI.lua
+Settings.lua
 Minimap.lua
 Core.lua
