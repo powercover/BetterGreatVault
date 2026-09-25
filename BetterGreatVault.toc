@@ -6,7 +6,7 @@
 ## SavedVariables: BetterGreatVaultDB
 ## AllowLoadGameType: mainline
 ## Category: Character Advancement
-## IconTexture: Interface\Icons\INV_Misc_Bag_10_Green
+## IconTexture: Interface\AddOns\BetterGreatVault\Icon
 
 Utils.lua
 WorldLoot.lua
@@ -15,4 +15,5 @@ Bis.lua
 GreatVault.lua
 Tooltip.lua
 UI.lua
+Minimap.lua
 Core.lua
