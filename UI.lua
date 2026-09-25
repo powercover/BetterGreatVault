@@ -137,7 +137,7 @@ local function EnsureFX(activityFrame)
 
         local backing = gate:CreateTexture(nil, "BACKGROUND")
         backing:SetAllPoints(gate)
-        ColorTexture(backing, 0.086, 0.075, 0.075, 1)
+        ColorTexture(backing, 0.104, 0.083, 0.075, 1)
         gate.backing = backing
 
         local face = gate:CreateTexture(nil, "ARTWORK")
@@ -273,12 +273,11 @@ local function PaintReward(activityFrame)
     if not reward then
         return
     end
-    local color = AccentColor()
-    reward:SetTextColor(color[1], color[2], color[3])
+    reward:SetTextColor(1, 0.82, 0)
     local text = reward.GetText and reward:GetText() or nil
     if type(text) == "string" and text ~= "" then
         reward:SetText(text)
-        reward:SetTextColor(color[1], color[2], color[3])
+        reward:SetTextColor(1, 0.82, 0)
     end
 end
 
@@ -651,7 +650,7 @@ local function PaintGateBacking(gate)
     end
     backing:ClearAllPoints()
     backing:SetAllPoints(gate)
-    ColorTexture(backing, 0.086, 0.075, 0.075, 1)
+    ColorTexture(backing, 0.104, 0.083, 0.075, 1)
 end
 
 local function FitCase(activityFrame)
@@ -850,7 +849,7 @@ local function EnsureClosedGates(activityFrame)
         end
         local backing = door:CreateTexture(nil, "BACKGROUND")
         backing:SetAllPoints(door)
-        ColorTexture(backing, 0.086, 0.075, 0.075, 1)
+        ColorTexture(backing, 0.104, 0.083, 0.075, 1)
         door.backing = backing
 
         local face = door:CreateTexture(nil, "ARTWORK")
