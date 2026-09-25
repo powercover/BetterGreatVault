@@ -157,6 +157,23 @@ function BGV.Minimap.RegisterSettings()
         end
     )
     Settings.CreateCheckbox(category, setting, "Show a minimap button. Left-click toggles the Great Vault. Right-click toggles these settings.")
+    local animations = Settings.RegisterProxySetting(
+        category,
+        "BGV_DISABLE_ANIMATIONS",
+        Settings.VarType.Boolean,
+        "Disable animations",
+        false,
+        function()
+            return BetterGreatVaultDB and BetterGreatVaultDB.disableAnimations == true
+        end,
+        function(value)
+            BetterGreatVaultDB.disableAnimations = value and true or false
+            if BGV.UI and type(BGV.UI.RefreshOpenFrame) == "function" then
+                BGV.UI.RefreshOpenFrame()
+            end
+        end
+    )
+    Settings.CreateCheckbox(category, animations, "Keep the vault slots closed. Mouseover shows the short caption only, with no reel.")
     Settings.RegisterAddOnCategory(category)
     BGV.Minimap.Apply()
 end

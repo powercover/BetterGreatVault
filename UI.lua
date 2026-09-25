@@ -5,6 +5,10 @@ BGV.UI = {}
 local UI = BGV.UI
 local Utils = BGV.Utils
 
+local function AnimationsDisabled()
+    return BetterGreatVaultDB and BetterGreatVaultDB.disableAnimations == true
+end
+
 local function ApplyFont(fontString)
     local font = GameFontHighlightSmall:GetFont()
     if font then
@@ -677,6 +681,9 @@ local function PlaceCase(activityFrame)
 end
 
 local function StartCase(activityFrame)
+    if AnimationsDisabled() then
+        return
+    end
     if not activityFrame or not activityFrame.IsShown or not activityFrame:IsShown() then
         return
     end
@@ -710,6 +717,9 @@ local function StartCase(activityFrame)
 end
 
 local function CloseCase(activityFrame)
+    if AnimationsDisabled() then
+        return
+    end
     local fx = activityFrame and activityFrame.bgvFX
     if not fx or not fx:IsShown() then
         return
@@ -763,6 +773,73 @@ function ShutGates(activityFrame)
     end
 end
 
+local function HideClosedGates(activityFrame)
+    local closed = activityFrame and activityFrame.bgvClosed
+    if closed then
+        closed:Hide()
+    end
+end
+
+local function EnsureClosedGates(activityFrame)
+    if activityFrame.bgvClosed then
+        return
+    end
+
+    local closed = CreateFrame("Frame", nil, activityFrame)
+    closed:SetAllPoints(activityFrame)
+    closed:EnableMouse(false)
+    closed:SetFrameLevel(activityFrame:GetFrameLevel() + 2)
+
+    local function MakeDoor(anchor)
+        local door = CreateFrame("Frame", nil, closed)
+        door:EnableMouse(false)
+        if door.SetClipsChildren then
+            door:SetClipsChildren(true)
+        end
+        if anchor == "TOP" then
+            door:SetPoint("TOPLEFT", closed, "TOPLEFT", 0, 0)
+            door:SetPoint("TOPRIGHT", closed, "TOPRIGHT", 0, 0)
+        else
+            door:SetPoint("BOTTOMLEFT", closed, "BOTTOMLEFT", 0, 0)
+            door:SetPoint("BOTTOMRIGHT", closed, "BOTTOMRIGHT", 0, 0)
+        end
+        local face = door:CreateTexture(nil, "ARTWORK")
+        face:SetPoint("TOPLEFT", closed, "TOPLEFT", 0, 0)
+        face:SetPoint("BOTTOMRIGHT", closed, "BOTTOMRIGHT", 0, 0)
+        if face.SetAtlas then
+            face:SetAtlas("evergreen-weeklyrewards-reward-unlocked")
+        end
+        door.face = face
+        return door
+    end
+
+    closed.topDoor = MakeDoor("TOP")
+    closed.bottomDoor = MakeDoor("BOTTOM")
+    closed:Hide()
+    activityFrame.bgvClosed = closed
+end
+
+local function ShowClosedGates(activityFrame)
+    if activityFrame.bgvFX then
+        StopFX(activityFrame)
+    end
+    EnsureClosedGates(activityFrame)
+    local closed = activityFrame.bgvClosed
+    local height = activityFrame:GetHeight()
+    if not height or height < 4 then
+        height = 126
+    end
+    local half = height * 0.5
+    closed.topDoor:SetHeight(half)
+    closed.bottomDoor:SetHeight(half)
+    closed:SetFrameLevel(activityFrame:GetFrameLevel() + 2)
+    if activityFrame.bgvText then
+        activityFrame.bgvText:SetFrameLevel(activityFrame:GetFrameLevel() + 3)
+        activityFrame.bgvText:SetAlpha(1)
+    end
+    closed:Show()
+end
+
 function RestClosed(activityFrame)
     local fx = activityFrame and activityFrame.bgvFX
     if not fx then
@@ -786,6 +863,18 @@ function RestClosed(activityFrame)
 end
 
 local function UpdateFX(activityFrame, slot, fromEnter)
+    if AnimationsDisabled() then
+        if slot and slot.unlocked then
+            ShowClosedGates(activityFrame)
+        else
+            HideClosedGates(activityFrame)
+            if activityFrame.bgvFX then
+                StopFX(activityFrame)
+            end
+        end
+        return
+    end
+    HideClosedGates(activityFrame)
     EnsureFX(activityFrame)
     local fx = activityFrame.bgvFX
     local hovering = fromEnter or (activityFrame.bgvHit and activityFrame.bgvHit:IsMouseOver())
@@ -974,6 +1063,7 @@ function UI.Clear(activityFrame)
         activityFrame.bgvReward:Hide()
     end
     StopFX(activityFrame)
+    HideClosedGates(activityFrame)
     ShowDefaultCaption(activityFrame)
 end
 
@@ -1132,7 +1222,7 @@ function UI.ScheduleContent(weeklyRewardsFrame)
             return
         end
         for _, slot in ipairs(snapshot) do
-            if slot.unlocked then
+            if slot.unlocked and not AnimationsDisabled() then
                 BGV.Rewards.PossibleIcons(slot)
             end
         end

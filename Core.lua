@@ -11,6 +11,7 @@ local function SavedDefaults()
         debug = false,
         showMinimap = true,
         minimapAngle = 220,
+        disableAnimations = false,
     })
 end
 
