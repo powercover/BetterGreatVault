@@ -138,6 +138,92 @@ local function ExampleRewardLink(activity)
     return Utils.Call(C_WeeklyRewards.GetExampleRewardItemHyperlinks, activity.id)
 end
 
+local MYTHIC_VAULT_ILVL = 334
+local MYTHIC_VAULT_STEP = 6
+
+local function RaidMythicID()
+    local ids = DifficultyUtil and DifficultyUtil.ID
+    if ids and Utils.IsUsableNumber(ids.PrimaryRaidMythic) then
+        return ids.PrimaryRaidMythic
+    end
+    if Enum and Enum.Difficulty and Utils.IsUsableNumber(Enum.Difficulty.Mythic) then
+        return Enum.Difficulty.Mythic
+    end
+    return 16
+end
+
+local function IsEndBossBand(info)
+    if Utils.IsUsableNumber(info.upgradeLevel) and info.upgradeLevel > MYTHIC_VAULT_STEP then
+        return true
+    end
+    return Utils.IsUsableNumber(info.itemLevel) and info.itemLevel > MYTHIC_VAULT_ILVL
+end
+
+-- Last two bosses of the multi-boss raid. A one-boss lair does not unlock 9/6.
+local function MythicEndBossKilled(activity)
+    if not (C_WeeklyRewards and type(C_WeeklyRewards.GetActivityEncounterInfo) == "function") then
+        return false
+    end
+    local encounters = Utils.Call(C_WeeklyRewards.GetActivityEncounterInfo, activity.type, activity.index)
+    if type(encounters) ~= "table" then
+        return false
+    end
+
+    local byInstance = {}
+    for _, encounter in ipairs(encounters) do
+        if type(encounter) == "table" and Utils.IsUsableNumber(encounter.instanceID) then
+            local list = byInstance[encounter.instanceID]
+            if not list then
+                list = {}
+                byInstance[encounter.instanceID] = list
+            end
+            list[#list + 1] = encounter
+        end
+    end
+
+    local raid
+    for _, list in pairs(byInstance) do
+        if not raid or #list > #raid then
+            raid = list
+        end
+    end
+    if not raid or #raid < 3 then
+        return false
+    end
+
+    table.sort(raid, function(left, right)
+        return (left.uiOrder or 0) > (right.uiOrder or 0)
+    end)
+
+    local mythicID = RaidMythicID()
+    for index = 1, 2 do
+        local encounter = raid[index]
+        if encounter and Utils.IsUsableNumber(encounter.bestDifficulty) and encounter.bestDifficulty >= mythicID then
+            return true
+        end
+    end
+    return false
+end
+
+local function CapRaidReward(activity, info)
+    if type(activity) ~= "table" or type(info) ~= "table" or not IsEndBossBand(info) then
+        return info
+    end
+    if not Utils.SameType(activity.type, Utils.ThresholdType("Raid")) then
+        return info
+    end
+    if activity.level ~= RaidMythicID() or MythicEndBossKilled(activity) then
+        return info
+    end
+
+    info.itemLevel = MYTHIC_VAULT_ILVL
+    info.upgradeLevel = MYTHIC_VAULT_STEP
+    if not Utils.IsUsableNumber(info.upgradeMax) or info.upgradeMax < MYTHIC_VAULT_STEP then
+        info.upgradeMax = MYTHIC_VAULT_STEP
+    end
+    return info
+end
+
 function Rewards.ResolveReward(activity, onReady)
     local link = BestRewardLink(activity) or ExampleRewardLink(activity)
     if not link then
@@ -145,11 +231,16 @@ function Rewards.ResolveReward(activity, onReady)
     end
 
     local info = ItemInfoFromLink(link)
+    info = CapRaidReward(activity, info)
     if info.itemLevel or info.qualityName or info.upgradeTrack then
         return info
     end
 
-    WatchItem(link, onReady)
+    WatchItem(link, function(ready)
+        if onReady then
+            onReady(CapRaidReward(activity, ready))
+        end
+    end)
     return nil
 end
 
