@@ -9,6 +9,8 @@ local frame = CreateFrame("Frame")
 local function SavedDefaults()
     BetterGreatVaultDB = Utils.CopyDefaults(BetterGreatVaultDB, {
         debug = false,
+        showMinimap = true,
+        minimapAngle = 220,
     })
 end
 
@@ -105,7 +107,9 @@ local function HandleSlash(message)
             Utils.Print("Great Vault data refreshed. Open the Great Vault to see it.")
         end
     elseif command == "reset" then
-        BetterGreatVaultDB = { debug = false }
+        BetterGreatVaultDB = nil
+        SavedDefaults()
+        BGV.Minimap.Apply()
         Utils.Print("Settings reset.")
     else
         Utils.Print("Unknown command.")
@@ -117,6 +121,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" then
         if arg1 == addonName then
             SavedDefaults()
+            BGV.Minimap.RegisterSettings()
         elseif arg1 == "Blizzard_WeeklyRewards" then
             AttachToVault()
         end
