@@ -118,6 +118,9 @@ local function HandleSlash(message)
         BetterGreatVaultCharDB = nil
         SavedDefaults()
         BGV.Minimap.Apply()
+        if BGV.Settings and type(BGV.Settings.Refresh) == "function" then
+            BGV.Settings.Refresh()
+        end
         Utils.Print("Settings reset.")
     else
         Utils.Print("Unknown command.")
