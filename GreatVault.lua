@@ -369,7 +369,7 @@ local function EncounterName(encounterID)
         return nil, nil
     end
 
-    local name, _, journalEncounterID, _, _, journalInstanceID = Utils.Call(EJ_GetEncounterInfo, encounterID)
+    local name, _, journalEncounterID, _, _, journalInstanceID, dungeonEncounterID = Utils.Call(EJ_GetEncounterInfo, encounterID)
     local instanceName
     if Utils.IsUsableNumber(journalInstanceID) and type(EJ_GetInstanceInfo) == "function" then
         instanceName = Utils.Call(EJ_GetInstanceInfo, journalInstanceID)
@@ -381,7 +381,7 @@ local function EncounterName(encounterID)
     if not Utils.IsUsableString(instanceName) then
         instanceName = nil
     end
-    return name, instanceName, journalInstanceID, journalEncounterID
+    return name, instanceName, journalInstanceID, journalEncounterID, dungeonEncounterID
 end
 
 function GreatVault.RaidRows(activityType, index, threshold)
@@ -437,7 +437,7 @@ function GreatVault.RaidRows(activityType, index, threshold)
     end)
 
     for _, encounter in ipairs(ordered) do
-        local name, instanceName, journalInstanceID, journalEncounterID = EncounterName(encounter.encounterID)
+        local name, instanceName, journalInstanceID, journalEncounterID, dungeonEncounterID = EncounterName(encounter.encounterID)
         local difficultyName = Utils.DifficultyName(encounter.bestDifficulty)
         local killIndex = countedUntil[encounter]
         rows[#rows + 1] = {
@@ -445,7 +445,9 @@ function GreatVault.RaidRows(activityType, index, threshold)
             instanceName = instanceName,
             journalInstanceID = Utils.IsUsableNumber(journalInstanceID) and journalInstanceID or nil,
             journalEncounterID = Utils.IsUsableNumber(journalEncounterID) and journalEncounterID or nil,
+            dungeonEncounterID = Utils.IsUsableNumber(dungeonEncounterID) and dungeonEncounterID or nil,
             activityEncounterID = Utils.IsUsableNumber(encounter.encounterID) and encounter.encounterID or nil,
+            instanceID = Utils.IsUsableNumber(encounter.instanceID) and encounter.instanceID or nil,
             difficultyID = Utils.IsUsableNumber(encounter.bestDifficulty) and encounter.bestDifficulty or nil,
             uiOrder = Utils.IsUsableNumber(encounter.uiOrder) and encounter.uiOrder or nil,
             difficultyName = difficultyName,
@@ -552,6 +554,16 @@ local function BuildSlot(activity, activities)
         source = activity,
     }
 
+    if Utils.SameType(activity.type, Utils.ThresholdType("Activities")) then
+        slot.runs = GreatVault.DungeonRows(activity.threshold)
+    elseif Utils.SameType(activity.type, Utils.ThresholdType("Raid")) then
+        slot.encounters = GreatVault.RaidRows(activity.type, activity.index, activity.threshold)
+        slot.killSummary = GreatVault.KillSummary(slot.encounters)
+        activity.bgvEncounters = slot.encounters
+    elseif Utils.SameType(activity.type, Utils.ThresholdType("World")) then
+        slot.worldTiers = GreatVault.WorldRows(activity.threshold)
+    end
+
     local reward = BGV.Rewards.ResolveReward(activity)
     if type(reward) == "table" then
         slot.itemLevel = reward.itemLevel
@@ -560,15 +572,6 @@ local function BuildSlot(activity, activities)
         slot.upgradeLevel = reward.upgradeLevel
         slot.upgradeMax = reward.upgradeMax
         slot.rewardIcon = reward.icon
-    end
-
-    if Utils.SameType(activity.type, Utils.ThresholdType("Activities")) then
-        slot.runs = GreatVault.DungeonRows(activity.threshold)
-    elseif Utils.SameType(activity.type, Utils.ThresholdType("Raid")) then
-        slot.encounters = GreatVault.RaidRows(activity.type, activity.index, activity.threshold)
-        slot.killSummary = GreatVault.KillSummary(slot.encounters)
-    elseif Utils.SameType(activity.type, Utils.ThresholdType("World")) then
-        slot.worldTiers = GreatVault.WorldRows(activity.threshold)
     end
 
     return slot

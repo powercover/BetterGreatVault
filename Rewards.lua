@@ -160,22 +160,19 @@ local function IsEndBossBand(info)
 end
 
 -- Last two bosses of the multi-boss raid. A one-boss lair does not unlock 9/6.
-local function MythicEndBossKilled(activity)
-    if not (C_WeeklyRewards and type(C_WeeklyRewards.GetActivityEncounterInfo) == "function") then
-        return false
-    end
-    local encounters = Utils.Call(C_WeeklyRewards.GetActivityEncounterInfo, activity.type, activity.index)
+local function MythicEndBossKilled(encounters)
     if type(encounters) ~= "table" then
         return false
     end
 
     local byInstance = {}
     for _, encounter in ipairs(encounters) do
-        if type(encounter) == "table" and Utils.IsUsableNumber(encounter.instanceID) then
-            local list = byInstance[encounter.instanceID]
+        if type(encounter) == "table" then
+            local key = encounter.journalInstanceID or encounter.instanceID or 0
+            local list = byInstance[key]
             if not list then
                 list = {}
-                byInstance[encounter.instanceID] = list
+                byInstance[key] = list
             end
             list[#list + 1] = encounter
         end
@@ -198,7 +195,8 @@ local function MythicEndBossKilled(activity)
     local mythicID = RaidMythicID()
     for index = 1, 2 do
         local encounter = raid[index]
-        if encounter and Utils.IsUsableNumber(encounter.bestDifficulty) and encounter.bestDifficulty >= mythicID then
+        local difficulty = encounter and encounter.difficultyID
+        if Utils.IsUsableNumber(difficulty) and difficulty >= mythicID then
             return true
         end
     end
@@ -212,7 +210,7 @@ local function CapRaidReward(activity, info)
     if not Utils.SameType(activity.type, Utils.ThresholdType("Raid")) then
         return info
     end
-    if activity.level ~= RaidMythicID() or MythicEndBossKilled(activity) then
+    if activity.level ~= RaidMythicID() or MythicEndBossKilled(activity.bgvEncounters) then
         return info
     end
 
@@ -445,18 +443,24 @@ local function RaidScope(slot)
         return ids, encounters
     end
 
-    local function AddEncounter(encounter)
-        if Utils.IsUsableNumber(encounter.journalEncounterID) then
-            encounters[encounter.journalEncounterID] = true
+    local function AddID(encounterID)
+        if Utils.IsUsableNumber(encounterID) then
+            encounters[encounterID] = true
         end
-        if Utils.IsUsableNumber(encounter.activityEncounterID) then
-            encounters[encounter.activityEncounterID] = true
-        end
-        local instanceID = encounter.journalInstanceID
+    end
+
+    local function AddInstance(instanceID)
         if Utils.IsUsableNumber(instanceID) and not seen[instanceID] then
             seen[instanceID] = true
             ids[#ids + 1] = instanceID
         end
+    end
+
+    local function AddEncounter(encounter)
+        AddID(encounter.journalEncounterID)
+        AddID(encounter.dungeonEncounterID)
+        AddID(encounter.activityEncounterID)
+        AddInstance(encounter.journalInstanceID)
     end
 
     local function CountsForSlot(encounter)
@@ -465,21 +469,20 @@ local function RaidScope(slot)
     end
 
     local byInstance = {}
+    local groupOrder = {}
     for _, encounter in ipairs(slot.encounters) do
-        local instanceID = encounter.journalInstanceID
-        if Utils.IsUsableNumber(instanceID) then
-            local list = byInstance[instanceID]
-            if not list then
-                list = {}
-                byInstance[instanceID] = list
-            end
-            list[#list + 1] = encounter
-        elseif CountsForSlot(encounter) then
-            AddEncounter(encounter)
+        local key = encounter.journalInstanceID or encounter.instanceID or 0
+        local list = byInstance[key]
+        if not list then
+            list = {}
+            byInstance[key] = list
+            groupOrder[#groupOrder + 1] = key
         end
+        list[#list + 1] = encounter
     end
 
-    for _, list in pairs(byInstance) do
+    for _, key in ipairs(groupOrder) do
+        local list = byInstance[key]
         local furthest
         for _, encounter in ipairs(list) do
             if CountsForSlot(encounter) and Utils.IsUsableNumber(encounter.uiOrder) then
@@ -689,14 +692,8 @@ function Rewards.PossibleIcons(slot)
             icons = built
         else
             icons = CollectIcons(difficultyID, instanceIDs, encounterSet)
-            if #icons == 0 and encounterSet then
-                icons = CollectIcons(difficultyID, instanceIDs, nil)
-            end
             if #icons == 0 and fallbackDifficulty and fallbackDifficulty ~= difficultyID then
                 icons = CollectIcons(fallbackDifficulty, instanceIDs, encounterSet)
-                if #icons == 0 and encounterSet then
-                    icons = CollectIcons(fallbackDifficulty, instanceIDs, nil)
-                end
             end
             if #icons == 0 then
                 return icons
