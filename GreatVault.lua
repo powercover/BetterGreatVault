@@ -322,6 +322,7 @@ function GreatVault.DungeonRows(threshold)
         end
         rows[#rows + 1] = {
             name = run.name,
+            mapID = run.mapID,
             level = run.level,
             counts = counts,
             setsReward = run == rewardRun,
@@ -568,6 +569,8 @@ local function BuildSlot(activity, activities)
     if type(reward) == "table" then
         slot.itemLevel = reward.itemLevel
         slot.itemQuality = reward.qualityName
+        slot.quality = reward.quality
+        slot.rewardLink = reward.link
         slot.upgradeTrack = reward.upgradeTrack
         slot.upgradeLevel = reward.upgradeLevel
         slot.upgradeMax = reward.upgradeMax

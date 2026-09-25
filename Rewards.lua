@@ -350,7 +350,14 @@ local function IsVaultGear(itemID)
     return type(equipLoc) == "string" and VAULT_EQUIP[equipLoc] == true
 end
 
-local function AddInstanceIcons(instanceID, icons, seen, encounterSet)
+local function InEncounterPool(encounterSet, encounterID)
+    if not encounterSet then
+        return true
+    end
+    return Utils.IsUsableNumber(encounterID) and encounterID ~= 0 and encounterSet[encounterID] == true
+end
+
+local function AddInstanceIcons(instanceID, icons, seen, encounterSet, difficultyID)
     if not Utils.IsUsableNumber(instanceID) or type(EJ_SelectInstance) ~= "function" or type(EJ_GetNumLoot) ~= "function" then
         return
     end
@@ -359,14 +366,14 @@ local function AddInstanceIcons(instanceID, icons, seen, encounterSet)
     end
 
     EJ_SelectInstance(instanceID)
+    if difficultyID and type(EJ_SetDifficulty) == "function" then
+        EJ_SetDifficulty(difficultyID)
+    end
     local count = EJ_GetNumLoot() or 0
     for index = 1, count do
         local info = Utils.Call(C_EncounterJournal.GetLootInfoByIndex, index)
         local encounterID = type(info) == "table" and info.encounterID or nil
-        local fromSlot = not encounterSet
-            or not Utils.IsUsableNumber(encounterID)
-            or encounterID == 0
-            or encounterSet[encounterID]
+        local fromSlot = InEncounterPool(encounterSet, encounterID)
         if type(info) == "table" and info.icon and fromSlot and not info.handError and not info.weaponTypeError and IsVaultGear(info.itemID) then
             local itemID = info.itemID
             if not itemID or not seen[itemID] then
@@ -412,7 +419,7 @@ local function CollectIcons(difficultyID, instanceIDs, encounterSet)
     local icons = {}
     local seen = {}
     for _, instanceID in ipairs(instanceIDs) do
-        AddInstanceIcons(instanceID, icons, seen, encounterSet)
+        AddInstanceIcons(instanceID, icons, seen, encounterSet, difficultyID)
     end
 
     if oldClass and type(EJ_SetLootFilter) == "function" then
@@ -438,9 +445,10 @@ local function RaidScope(slot)
     local ids = {}
     local seen = {}
     local encounters = {}
+    local names = {}
     local rewardRank = RAID_RANK[slot.level] or 0
     if type(slot.encounters) ~= "table" then
-        return ids, encounters
+        return ids, encounters, names
     end
 
     local function AddID(encounterID)
@@ -461,6 +469,16 @@ local function RaidScope(slot)
         AddID(encounter.dungeonEncounterID)
         AddID(encounter.activityEncounterID)
         AddInstance(encounter.journalInstanceID)
+        if type(encounter.name) == "string" then
+            local function Remember(encounterID)
+                if Utils.IsUsableNumber(encounterID) then
+                    names[encounterID] = encounter.name
+                end
+            end
+            Remember(encounter.journalEncounterID)
+            Remember(encounter.dungeonEncounterID)
+            Remember(encounter.activityEncounterID)
+        end
     end
 
     local function CountsForSlot(encounter)
@@ -499,7 +517,7 @@ local function RaidScope(slot)
         end
     end
 
-    return ids, encounters
+    return ids, encounters, names
 end
 
 local function MythicPlusInstances()
@@ -632,84 +650,8 @@ local function SampleIcons(icons, limit)
     return sample
 end
 
-function Rewards.PossibleIcons(slot)
-    if type(slot) ~= "table" or not slot.unlocked or not Rewards.ShowingWeeklyProgress() then
-        return {}
-    end
-
-    Rewards.EnsureJournal()
-
-    local specIndex = type(GetSpecialization) == "function" and GetSpecialization() or 0
-    local key
-    local difficultyID
-    local instanceIDs
-    local encounterSet
-    local fallbackDifficulty
-
-    if Utils.SameType(slot.type, Utils.ThresholdType("Raid")) then
-        difficultyID = slot.level
-        instanceIDs, encounterSet = RaidScope(slot)
-        local encounterKey = {}
-        if type(encounterSet) == "table" then
-            for encounterID in pairs(encounterSet) do
-                encounterKey[#encounterKey + 1] = encounterID
-            end
-            table.sort(encounterKey)
-        end
-        key = "raid:" .. tostring(difficultyID) .. ":" .. table.concat(instanceIDs, ",") .. ":" .. table.concat(encounterKey, ",") .. ":" .. tostring(specIndex)
-    elseif Utils.SameType(slot.type, Utils.ThresholdType("Activities")) then
-        difficultyID = DifficultyUtil and DifficultyUtil.ID and DifficultyUtil.ID.DungeonMythic or 23
-        fallbackDifficulty = 8
-        instanceIDs = MythicPlusInstances()
-        key = "mplus:" .. tostring(specIndex)
-    elseif Utils.SameType(slot.type, Utils.ThresholdType("World")) then
-        local specID = Utils.CurrentSpecID()
-        key = "world:" .. tostring(specID)
-    else
-        return {}
-    end
-
-    local slotKey = key .. ":slot:" .. tostring(slot.index or 0)
-    if iconLists[slotKey] then
-        return iconLists[slotKey]
-    end
-
-    local icons = iconLists[key]
-    local worldSlot = Utils.SameType(slot.type, Utils.ThresholdType("World"))
-    if not icons then
-        if worldSlot then
-            local built, pending = WorldIcons()
-            if #built == 0 then
-                return built
-            end
-            if pending then
-                local loadingKey = slotKey .. ":loading"
-                if not iconLists[loadingKey] then
-                    iconLists[loadingKey] = SampleIcons(built, WORLD_REEL_LIMIT)
-                end
-                return iconLists[loadingKey]
-            end
-            icons = built
-        else
-            icons = CollectIcons(difficultyID, instanceIDs, encounterSet)
-            if #icons == 0 and fallbackDifficulty and fallbackDifficulty ~= difficultyID then
-                icons = CollectIcons(fallbackDifficulty, instanceIDs, encounterSet)
-            end
-            if #icons == 0 then
-                return icons
-            end
-        end
-        iconLists[key] = icons
-    end
-
-    if worldSlot then
-        local sample = SampleIcons(icons, WORLD_REEL_LIMIT)
-        iconLists[slotKey] = sample
-        return sample
-    end
-
+local function ShuffleIcons(icons)
     if #icons < 2 then
-        iconLists[slotKey] = icons
         return icons
     end
     local order = {}
@@ -720,6 +662,383 @@ function Rewards.PossibleIcons(slot)
         local swap = math.random(index)
         order[index], order[swap] = order[swap], order[index]
     end
+    return order
+end
+
+function Rewards.PossibleIcons(slot)
+    if type(slot) ~= "table" or not slot.unlocked or not Rewards.ShowingWeeklyProgress() then
+        return {}
+    end
+
+    local specIndex = type(GetSpecialization) == "function" and GetSpecialization() or 0
+    if Utils.SameType(slot.type, Utils.ThresholdType("Raid")) then
+        local instanceIDs, encounterSet = RaidScope(slot)
+        local encounterKey = {}
+        if type(encounterSet) == "table" then
+            for encounterID in pairs(encounterSet) do
+                encounterKey[#encounterKey + 1] = encounterID
+            end
+            table.sort(encounterKey)
+        end
+        local slotKey = "raid:" .. tostring(slot.level) .. ":" .. table.concat(instanceIDs, ",") .. ":" .. table.concat(encounterKey, ",") .. ":" .. tostring(specIndex) .. ":slot:" .. tostring(slot.index or 0)
+        if iconLists[slotKey] then
+            return iconLists[slotKey]
+        end
+        local icons = CollectIcons(slot.level, instanceIDs, encounterSet)
+        if #icons == 0 then
+            return icons
+        end
+        local order = ShuffleIcons(icons)
+        iconLists[slotKey] = order
+        return order
+    end
+
+    local worldSlot = Utils.SameType(slot.type, Utils.ThresholdType("World"))
+    local key
+    if Utils.SameType(slot.type, Utils.ThresholdType("Activities")) then
+        key = "loot:mplus:" .. tostring(specIndex) .. ":" .. tostring(slot.index) .. ":" .. tostring(slot.itemLevel)
+    elseif worldSlot then
+        key = "loot:world:" .. tostring(Utils.CurrentSpecID()) .. ":" .. tostring(slot.index) .. ":" .. tostring(slot.itemLevel)
+    else
+        return {}
+    end
+
+    local slotKey = key .. ":slot"
+    if not worldSlot and iconLists[slotKey] then
+        return iconLists[slotKey]
+    end
+    if worldSlot and iconLists[slotKey] then
+        return iconLists[slotKey]
+    end
+
+    local entries, pending = Rewards.ItemsForSlot(slot)
+    local icons = {}
+    local seen = {}
+    if type(entries) == "table" then
+        for _, entry in ipairs(entries) do
+            local itemID = type(entry) == "table" and entry.itemID or nil
+            local icon = type(entry) == "table" and entry.icon or nil
+            if (not icon or icon == 0) and Utils.IsUsableNumber(itemID) and C_Item and type(C_Item.GetItemIconByID) == "function" then
+                icon = Utils.Call(C_Item.GetItemIconByID, itemID)
+            end
+            local dedupe = itemID or icon
+            if icon and icon ~= 0 and not Utils.IsSecret(icon) and dedupe and not seen[dedupe] then
+                seen[dedupe] = true
+                icons[#icons + 1] = {
+                    itemID = Utils.IsUsableNumber(itemID) and itemID or nil,
+                    icon = icon,
+                }
+            end
+        end
+    end
+
+    if worldSlot then
+        if #icons == 0 then
+            return icons
+        end
+        if pending then
+            local loadingKey = slotKey .. ":loading"
+            local cached = iconLists[loadingKey]
+            if not cached or (cached.bgvCount or 0) < #icons then
+                local sample = SampleIcons(icons, WORLD_REEL_LIMIT)
+                sample.bgvCount = #icons
+                iconLists[loadingKey] = sample
+            end
+            return iconLists[loadingKey]
+        end
+        local sample = SampleIcons(icons, WORLD_REEL_LIMIT)
+        sample.bgvCount = #icons
+        iconLists[slotKey] = sample
+        return sample
+    end
+
+    if #icons == 0 then
+        return icons
+    end
+    local order = ShuffleIcons(icons)
     iconLists[slotKey] = order
     return order
+end
+
+local EQUIP_LABEL = {
+    INVTYPE_HEAD = "Head",
+    INVTYPE_NECK = "Neck",
+    INVTYPE_SHOULDER = "Shoulder",
+    INVTYPE_CLOAK = "Cloak",
+    INVTYPE_CHEST = "Chest",
+    INVTYPE_ROBE = "Chest",
+    INVTYPE_WRIST = "Wrist",
+    INVTYPE_HAND = "Hands",
+    INVTYPE_WAIST = "Waist",
+    INVTYPE_LEGS = "Legs",
+    INVTYPE_FEET = "Feet",
+    INVTYPE_FINGER = "Finger",
+    INVTYPE_TRINKET = "Trinket",
+    INVTYPE_WEAPON = "Weapon",
+    INVTYPE_SHIELD = "Weapon",
+    INVTYPE_RANGED = "Weapon",
+    INVTYPE_2HWEAPON = "Weapon",
+    INVTYPE_WEAPONMAINHAND = "Weapon",
+    INVTYPE_WEAPONOFFHAND = "Weapon",
+    INVTYPE_HOLDABLE = "Weapon",
+    INVTYPE_RANGEDRIGHT = "Weapon",
+    INVTYPE_THROWN = "Weapon",
+}
+
+local function ItemFields(itemID)
+    local equipLoc, icon, name, quality
+    if Utils.IsUsableNumber(itemID) and type(GetItemInfoInstant) == "function" then
+        local instantName, _, _, loc, instantIcon = GetItemInfoInstant(itemID)
+        equipLoc = type(loc) == "string" and loc or nil
+        icon = instantIcon
+        name = type(instantName) == "string" and instantName or nil
+    end
+    if Utils.IsUsableNumber(itemID) and C_Item and type(C_Item.GetItemInfo) == "function" then
+        local infoName, _, infoQuality = Utils.Call(C_Item.GetItemInfo, itemID)
+        if type(infoName) == "string" and infoName ~= "" then
+            name = infoName
+        end
+        if Utils.IsUsableNumber(infoQuality) then
+            quality = infoQuality
+        end
+    end
+    if (not name or name == "") and Utils.IsUsableNumber(itemID) and C_Item and type(C_Item.RequestLoadItemDataByID) == "function" then
+        C_Item.RequestLoadItemDataByID(itemID)
+    end
+    if (not icon or icon == 0) and Utils.IsUsableNumber(itemID) and C_Item and type(C_Item.GetItemIconByID) == "function" then
+        local fileID = Utils.Call(C_Item.GetItemIconByID, itemID)
+        if fileID and fileID ~= 0 and not Utils.IsSecret(fileID) then
+            icon = fileID
+        end
+    end
+    return equipLoc, icon, name, quality
+end
+
+local function CollectEntries(difficultyID, instanceIDs, encounterSet, names)
+    if not Rewards.EnsureJournal() or type(EJ_SetLootFilter) ~= "function" or type(instanceIDs) ~= "table" or #instanceIDs == 0 then
+        return {}
+    end
+
+    local _, _, classID = UnitClass("player")
+    local specIndex = type(GetSpecialization) == "function" and GetSpecialization() or nil
+    local specID = specIndex and type(GetSpecializationInfo) == "function" and GetSpecializationInfo(specIndex) or nil
+    local oldClass, oldSpec
+    if type(EJ_GetLootFilter) == "function" then
+        oldClass, oldSpec = EJ_GetLootFilter()
+    end
+    local oldDifficulty = type(EJ_GetDifficulty) == "function" and EJ_GetDifficulty() or nil
+
+    if type(EJ_ResetLootFilter) == "function" then
+        EJ_ResetLootFilter()
+    end
+    if C_EncounterJournal and type(C_EncounterJournal.ResetSlotFilter) == "function" then
+        C_EncounterJournal.ResetSlotFilter()
+    end
+    if classID and specID then
+        EJ_SetLootFilter(classID, specID)
+    end
+    if difficultyID and type(EJ_SetDifficulty) == "function" then
+        EJ_SetDifficulty(difficultyID)
+    end
+
+    local entries = {}
+    local seen = {}
+    for _, instanceID in ipairs(instanceIDs) do
+        if Utils.IsUsableNumber(instanceID) and type(EJ_SelectInstance) == "function" and type(EJ_GetNumLoot) == "function" and C_EncounterJournal and type(C_EncounterJournal.GetLootInfoByIndex) == "function" then
+            EJ_SelectInstance(instanceID)
+            if encounterSet and difficultyID and type(EJ_SetDifficulty) == "function" then
+                EJ_SetDifficulty(difficultyID)
+            end
+            local count = EJ_GetNumLoot() or 0
+            for index = 1, count do
+                local info = Utils.Call(C_EncounterJournal.GetLootInfoByIndex, index)
+                local encounterID = type(info) == "table" and info.encounterID or nil
+                local fromSlot = InEncounterPool(encounterSet, encounterID)
+                local itemID = type(info) == "table" and info.itemID or nil
+                if type(info) == "table" and fromSlot and not info.handError and not info.weaponTypeError and IsVaultGear(itemID) and Utils.IsUsableNumber(itemID) and not seen[itemID] then
+                    seen[itemID] = true
+                    local equipLoc, icon, name, quality = ItemFields(itemID)
+                    local source = type(names) == "table" and names[encounterID] or nil
+                    entries[#entries + 1] = {
+                        itemID = itemID,
+                        name = name or info.name or "Item",
+                        icon = icon or info.icon,
+                        equipLoc = equipLoc,
+                        equipLabel = EQUIP_LABEL[equipLoc] or "Gear",
+                        quality = quality,
+                        source = source or "Raid",
+                    }
+                end
+            end
+        end
+    end
+
+    if oldClass and type(EJ_SetLootFilter) == "function" then
+        EJ_SetLootFilter(oldClass, oldSpec or 0)
+    elseif type(EJ_ResetLootFilter) == "function" then
+        EJ_ResetLootFilter()
+    end
+    if oldDifficulty and type(EJ_SetDifficulty) == "function" then
+        EJ_SetDifficulty(oldDifficulty)
+    end
+
+    table.sort(entries, function(left, right)
+        if left.equipLabel ~= right.equipLabel then
+            return left.equipLabel < right.equipLabel
+        end
+        return (left.name or "") < (right.name or "")
+    end)
+    return entries
+end
+
+local function InstanceForMap(mapID)
+    if not Utils.IsUsableNumber(mapID) or type(C_ChallengeMode.GetMapUIInfo) ~= "function" or type(EJ_GetInstanceForMap) ~= "function" then
+        return nil
+    end
+    local ok, _, infoID, _, _, _, uiMapID = pcall(C_ChallengeMode.GetMapUIInfo, mapID)
+    if not ok then
+        return nil
+    end
+    if Utils.IsUsableNumber(uiMapID) then
+        local found, instanceID = pcall(EJ_GetInstanceForMap, uiMapID)
+        if found and Utils.IsUsableNumber(instanceID) and instanceID > 0 then
+            return instanceID
+        end
+    end
+    if Utils.IsUsableNumber(infoID) then
+        local found, instanceID = pcall(EJ_GetInstanceForMap, infoID)
+        if found and Utils.IsUsableNumber(instanceID) and instanceID > 0 then
+            return instanceID
+        end
+    end
+end
+
+local function ChallengeNameByInstance()
+    local names = {}
+    local maps = Utils.Call(C_ChallengeMode.GetMapTable)
+    if type(maps) ~= "table" then
+        return names
+    end
+    for _, mapID in ipairs(maps) do
+        if Utils.IsUsableNumber(mapID) then
+            local instanceID = InstanceForMap(mapID)
+            local name = Utils.Call(C_ChallengeMode.GetMapUIInfo, mapID)
+            if instanceID and Utils.IsUsableString(name) then
+                names[instanceID] = name
+            end
+        end
+    end
+    return names
+end
+
+local function JournalInstanceName(instanceID)
+    if type(EJ_GetInstanceInfo) ~= "function" then
+        return nil
+    end
+    local name = Utils.Call(EJ_GetInstanceInfo, instanceID)
+    if Utils.IsUsableString(name) then
+        return name
+    end
+end
+
+local KEYSTONE_DIFFICULTY = 8
+
+local function StampReward(entries, slot)
+    for _, entry in ipairs(entries) do
+        entry.itemLevel = slot.itemLevel
+        entry.upgradeTrack = slot.upgradeTrack
+        entry.upgradeLevel = slot.upgradeLevel
+        entry.upgradeMax = slot.upgradeMax
+        entry.qualityName = slot.itemQuality
+        entry.rewardLink = slot.rewardLink
+        if slot.quality then
+            entry.quality = slot.quality
+        end
+    end
+    return entries
+end
+
+function Rewards.ItemsForSlot(slot)
+    if type(slot) ~= "table" or not slot.unlocked then
+        return {}
+    end
+    Rewards.EnsureJournal()
+
+    if Utils.SameType(slot.type, Utils.ThresholdType("Raid")) then
+        local instanceIDs, encounterSet, names = RaidScope(slot)
+        return StampReward(CollectEntries(slot.level, instanceIDs, encounterSet, names), slot)
+    end
+
+    if Utils.SameType(slot.type, Utils.ThresholdType("Activities")) then
+        local difficultyID = KEYSTONE_DIFFICULTY
+        if Utils.IsHeroicDungeonTier(slot.activityTierID) then
+            difficultyID = DifficultyUtil and DifficultyUtil.ID and DifficultyUtil.ID.DungeonHeroic or 2
+        end
+        local instanceIDs = MythicPlusInstances()
+        if #instanceIDs == 0 then
+            return {}
+        end
+        local challengeNames = ChallengeNameByInstance()
+        local groups = {}
+        for _, instanceID in ipairs(instanceIDs) do
+            local batch = CollectEntries(difficultyID, { instanceID }, nil, nil)
+            if #batch > 0 then
+                local name = challengeNames[instanceID] or JournalInstanceName(instanceID) or "Mythic+"
+                groups[#groups + 1] = { name = name, entries = batch }
+            end
+        end
+        table.sort(groups, function(left, right)
+            return left.name < right.name
+        end)
+        local entries = {}
+        for _, group in ipairs(groups) do
+            for _, entry in ipairs(group.entries) do
+                entry.source = group.name
+                entries[#entries + 1] = entry
+            end
+        end
+        return StampReward(entries, slot)
+    end
+
+    if Utils.SameType(slot.type, Utils.ThresholdType("World")) then
+        local specID = Utils.CurrentSpecID()
+        local entries = {}
+        local pending = false
+        local rows = BGV.WorldLoot
+        if type(rows) ~= "table" then
+            return entries, pending
+        end
+        for _, itemID in ipairs(rows) do
+            if Utils.IsUsableNumber(itemID) and IsVaultGear(itemID) then
+                local allowed = SpecCanUse(itemID, specID)
+                if allowed == nil then
+                    pending = true
+                elseif allowed then
+                    local equipLoc, icon, name, quality = ItemFields(itemID)
+                    if icon and icon ~= 0 then
+                        entries[#entries + 1] = {
+                            itemID = itemID,
+                            name = name or "Item",
+                            icon = icon,
+                            equipLoc = equipLoc,
+                            equipLabel = EQUIP_LABEL[equipLoc] or "Gear",
+                            quality = quality,
+                            source = slot.qualifier or "World",
+                        }
+                    else
+                        pending = true
+                    end
+                end
+            end
+        end
+        table.sort(entries, function(left, right)
+            if left.equipLabel ~= right.equipLabel then
+                return left.equipLabel < right.equipLabel
+            end
+            return (left.name or "") < (right.name or "")
+        end)
+        return StampReward(entries, slot), pending
+    end
+
+    return {}
 end
