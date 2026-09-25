@@ -268,6 +268,34 @@ local function ColorMarker(fx)
     end
 end
 
+local function PaintReward(activityFrame)
+    local reward = activityFrame and activityFrame.bgvReward
+    if not reward then
+        return
+    end
+    local color = AccentColor()
+    reward:SetTextColor(color[1], color[2], color[3])
+    local text = reward.GetText and reward:GetText() or nil
+    if type(text) == "string" and text ~= "" then
+        reward:SetText(text)
+        reward:SetTextColor(color[1], color[2], color[3])
+    end
+end
+
+function UI.RepaintAccent()
+    local frame = WeeklyRewardsFrame
+    local activities = frame and frame.Activities
+    if type(activities) ~= "table" then
+        return
+    end
+    for _, activityFrame in ipairs(activities) do
+        PaintReward(activityFrame)
+        if activityFrame.bgvFX then
+            ColorMarker(activityFrame.bgvFX)
+        end
+    end
+end
+
 local TIER_BACK = {
     D = { 0.45, 0.45, 0.45 },
     C = { 0.12, 0.55, 0.18 },
@@ -1002,7 +1030,7 @@ local function EnsureLines(activityFrame)
 
         local reward = activityFrame:CreateFontString(nil, "OVERLAY")
         ApplyFont(reward)
-        reward:SetTextColor(1, 0.82, 0)
+        PaintReward({ bgvReward = reward })
 
         activityFrame.bgvProgress = progress
         activityFrame.bgvReward = reward
@@ -1133,6 +1161,7 @@ local function ShowReward(activityFrame, slot, info)
     local rewardText = BGV.GreatVault.DetailText(slot)
     if rewardText then
         activityFrame.bgvReward:SetText(rewardText)
+        PaintReward(activityFrame)
         activityFrame.bgvReward:Show()
     else
         activityFrame.bgvReward:Hide()
@@ -1165,6 +1194,7 @@ function UI.Apply(activityFrame, slot)
     local rewardText = BGV.GreatVault.DetailText(slot)
     if rewardText then
         activityFrame.bgvReward:SetText(rewardText)
+        PaintReward(activityFrame)
         activityFrame.bgvReward:Show()
     else
         activityFrame.bgvReward:Hide()
@@ -1371,11 +1401,23 @@ function UI.Hook()
         end)
     end
 
+    if WeeklyRewardsFrame and WeeklyRewardsFrame.HookScript and not WeeklyRewardsFrame.bgvAccentShow then
+        WeeklyRewardsFrame.bgvAccentShow = true
+        WeeklyRewardsFrame:HookScript("OnShow", function()
+            if UI.RepaintAccent then
+                UI.RepaintAccent()
+            end
+        end)
+    end
+
     UI.hooked = true
     return true
 end
 
 function UI.RefreshOpenFrame()
+    if UI.RepaintAccent then
+        UI.RepaintAccent()
+    end
     if WeeklyRewardsFrame and type(WeeklyRewardsFrame.IsShown) == "function" and WeeklyRewardsFrame:IsShown() then
         UI.SafeUpdate(WeeklyRewardsFrame)
     end
