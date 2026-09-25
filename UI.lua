@@ -237,17 +237,29 @@ local SPEC_LINE = {
     [73] = { 0.70, 0.58, 0.42 },
 }
 
+local function AccentColor()
+    if not BetterGreatVaultDB or BetterGreatVaultDB.useSpecAccent ~= false then
+        local specID = Utils.CurrentSpecID()
+        return specID and SPEC_LINE[specID] or { 0.85, 0.65, 0.2 }
+    end
+    local saved = BetterGreatVaultDB.accentColor
+    if type(saved) == "table" then
+        local r = saved.r or saved[1]
+        local g = saved.g or saved[2]
+        local b = saved.b or saved[3]
+        if type(r) == "number" and type(g) == "number" and type(b) == "number" then
+            return { r, g, b }
+        end
+    end
+    return { 0.85, 0.65, 0.2 }
+end
+
 local function ColorMarker(fx)
     local line = fx and fx.markerLine
     if not line then
         return
     end
-    local specID
-    if type(GetSpecialization) == "function" and type(GetSpecializationInfo) == "function" then
-        local specIndex = GetSpecialization()
-        specID = specIndex and GetSpecializationInfo(specIndex)
-    end
-    local color = specID and SPEC_LINE[specID] or { 0.85, 0.65, 0.2 }
+    local color = AccentColor()
     ColorTexture(line, color[1], color[2], color[3], 0.95)
     for _, seam in ipairs({ fx.topSeam, fx.bottomSeam }) do
         if seam and seam.line then
