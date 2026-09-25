@@ -12,6 +12,8 @@ local function SavedDefaults()
         showMinimap = true,
         minimapAngle = 220,
         disableAnimations = false,
+        useSpecAccent = true,
+        accentColor = { r = 0.85, g = 0.65, b = 0.2 },
     })
 end
 
