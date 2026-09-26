@@ -22,25 +22,8 @@ local function SavedDefaults()
     BetterGreatVaultCharDB = BetterGreatVaultDB
 end
 
-local function AddonIsLoaded(name)
-    if C_AddOns and type(C_AddOns.IsAddOnLoaded) == "function" then
-        return C_AddOns.IsAddOnLoaded(name)
-    end
-    if type(IsAddOnLoaded) == "function" then
-        return IsAddOnLoaded(name)
-    end
-    return false
-end
-
 local function LoadVaultUI()
-    if AddonIsLoaded("Blizzard_WeeklyRewards") then
-        return
-    end
-    if C_AddOns and type(C_AddOns.LoadAddOn) == "function" then
-        C_AddOns.LoadAddOn("Blizzard_WeeklyRewards")
-    elseif type(LoadAddOn) == "function" then
-        LoadAddOn("Blizzard_WeeklyRewards")
-    end
+    Utils.LoadAddon("Blizzard_WeeklyRewards")
 end
 
 local function RefreshLootLists()
@@ -151,7 +134,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 
     if event == "PLAYER_LOGIN" then
         LoadVaultUI()
-        if AddonIsLoaded("Blizzard_WeeklyRewards") then
+        if Utils.IsAddonLoaded("Blizzard_WeeklyRewards") then
             AttachToVault()
         end
         return

@@ -119,6 +119,27 @@ function Utils.IsHeroicDungeonTier(activityTierID)
     return heroicID ~= nil and difficultyID == heroicID
 end
 
+function Utils.IsAddonLoaded(name)
+    if C_AddOns and type(C_AddOns.IsAddOnLoaded) == "function" then
+        return C_AddOns.IsAddOnLoaded(name)
+    end
+    if type(IsAddOnLoaded) == "function" then
+        return IsAddOnLoaded(name)
+    end
+    return false
+end
+
+function Utils.LoadAddon(name)
+    if Utils.IsAddonLoaded(name) then
+        return
+    end
+    if C_AddOns and type(C_AddOns.LoadAddOn) == "function" then
+        C_AddOns.LoadAddOn(name)
+    elseif type(LoadAddOn) == "function" then
+        LoadAddOn(name)
+    end
+end
+
 function Utils.Print(message)
     local prefix = "|cff33ddff" .. ADDON_NAME .. "|r"
     DEFAULT_CHAT_FRAME:AddMessage(prefix .. ": " .. tostring(message))
@@ -230,6 +251,14 @@ function Utils.OpenLootSpecMenu(anchor)
         end
     end)
     return true
+end
+
+-- A flat-colored texture, used throughout the addon's custom frames (settings panel, loot table).
+function Utils.Pixel(parent, layer, r, g, b, a)
+    local texture = parent:CreateTexture(nil, layer or "BACKGROUND")
+    texture:SetTexture("Interface\\Buttons\\WHITE8X8")
+    texture:SetVertexColor(r, g, b, a or 1)
+    return texture
 end
 
 function Utils.Trim(value)

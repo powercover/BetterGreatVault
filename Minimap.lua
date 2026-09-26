@@ -10,17 +10,7 @@ local function ShowMinimap()
 end
 
 local function LoadVaultUI()
-    if C_AddOns and type(C_AddOns.IsAddOnLoaded) == "function" and C_AddOns.IsAddOnLoaded("Blizzard_WeeklyRewards") then
-        return
-    end
-    if type(IsAddOnLoaded) == "function" and IsAddOnLoaded("Blizzard_WeeklyRewards") then
-        return
-    end
-    if C_AddOns and type(C_AddOns.LoadAddOn) == "function" then
-        C_AddOns.LoadAddOn("Blizzard_WeeklyRewards")
-    elseif type(LoadAddOn) == "function" then
-        LoadAddOn("Blizzard_WeeklyRewards")
-    end
+    BGV.Utils.LoadAddon("Blizzard_WeeklyRewards")
 end
 
 function BGV.Minimap.ToggleVault()

@@ -411,37 +411,40 @@ end
 
 local PaintReel, PlaceReel, RestClosed, ShutGates, VaultIsOpen, CloseCase
 
+-- No upvalues over hit/activityFrame so this can be a module-level function instead of a
+-- closure re-allocated on every PointerOnSlot call (which runs every reel tick, up to 60/sec).
+local function FrameOwnsTarget(target, hit, activityFrame)
+    if target == GameTooltip then
+        local owner = GameTooltip.GetOwner and GameTooltip:GetOwner()
+        return owner == hit or owner == activityFrame
+    end
+    while target do
+        if target == hit or target == activityFrame then
+            return true
+        end
+        if not target.GetParent then
+            return false
+        end
+        target = target:GetParent()
+    end
+    return false
+end
+
 local function PointerOnSlot(activityFrame)
     local hit = activityFrame and activityFrame.bgvHit
     if not hit then
-        return false
-    end
-    local function Owned(frame)
-        if frame == GameTooltip then
-            local owner = GameTooltip.GetOwner and GameTooltip:GetOwner()
-            return owner == hit or owner == activityFrame
-        end
-        while frame do
-            if frame == hit or frame == activityFrame then
-                return true
-            end
-            if not frame.GetParent then
-                return false
-            end
-            frame = frame:GetParent()
-        end
         return false
     end
     if type(GetMouseFoci) == "function" then
         local foci = GetMouseFoci()
         local top = type(foci) == "table" and foci[1] or nil
         if top then
-            return Owned(top)
+            return FrameOwnsTarget(top, hit, activityFrame)
         end
     elseif type(GetMouseFocus) == "function" then
         local focus = GetMouseFocus()
         if focus then
-            return Owned(focus)
+            return FrameOwnsTarget(focus, hit, activityFrame)
         end
     end
     return hit:IsMouseOver()
@@ -618,13 +621,14 @@ function PaintReel(fx)
     if type(icons) ~= "table" or #icons == 0 then
         return
     end
+    local specID = BGV.Bis and Utils.LootSpecID()
     for index, cell in ipairs(fx.cells) do
         local entry = icons[((fx.cursor + index - 2) % #icons) + 1]
         local itemID = type(entry) == "table" and entry.itemID or nil
         local icon = type(entry) == "table" and entry.icon or entry
         cell.icon:SetTexture(icon)
         cell.icon:SetSize(CASE_ICON, CASE_ICON)
-        local tier = itemID and BGV.Bis and BGV.Bis.Tier(itemID) or nil
+        local tier = itemID and BGV.Bis and BGV.Bis.Tier(itemID, specID) or nil
         local color = tier and TIER_BACK[tier] or nil
         if color then
             ColorTexture(cell.back, color[1], color[2], color[3], 1)
@@ -658,34 +662,6 @@ local function StopFX(activityFrame)
         fx.bottomDoor:Hide()
     end
     FadeCaption(activityFrame, 1)
-end
-
-local cachedVaultBackground
-
-local function VaultBackground()
-    if cachedVaultBackground then
-        return cachedVaultBackground
-    end
-    local vault = WeeklyRewardsFrame
-    if not vault then
-        return nil
-    end
-    if vault.Background then
-        cachedVaultBackground = vault.Background
-        return vault.Background
-    end
-    if type(vault.GetRegions) ~= "function" then
-        return nil
-    end
-    for _, region in ipairs({ vault:GetRegions() }) do
-        if region and region.GetObjectType and region:GetObjectType() == "Texture" and region.GetAtlas then
-            local atlas = region:GetAtlas()
-            if type(atlas) == "string" and atlas:find("weeklyrewards", 1, true) and not atlas:find("reward", 1, true) then
-                cachedVaultBackground = region
-                return region
-            end
-        end
-    end
 end
 
 local function PaintGateBacking(gate)
@@ -1247,7 +1223,6 @@ local function RestoreVanilla(activityFrame)
     end
     StopFX(activityFrame)
     HideClosedGates(activityFrame)
-    PlaceLock(activityFrame, nil)
     ShowDefaultCaption(activityFrame)
     if activityFrame.Threshold then
         activityFrame.Threshold:SetAlpha(1)
