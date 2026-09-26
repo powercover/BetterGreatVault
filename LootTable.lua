@@ -34,6 +34,8 @@ local child
 local headerTitle
 local headerReward
 local filterLabel
+local specButton
+local specLabel
 local filterID = "ALL"
 local selectedKey
 local solo
@@ -100,7 +102,7 @@ end
 
 local function CacheKey(slot)
     local guid = type(UnitGUID) == "function" and UnitGUID("player") or ""
-    local spec = BGV.Utils.CurrentSpecID()
+    local spec = BGV.Utils.LootSpecID()
     return table.concat({
         tostring(guid),
         tostring(spec),
@@ -400,14 +402,23 @@ local function Acquire()
         row = CreateFrame("Button", nil, child)
         row:SetHeight(32)
         row:RegisterForClicks("AnyUp")
+        row.stripe = Pixel(row, "BACKGROUND", 1, 1, 1, 0.03)
+        row.stripe:SetDrawLayer("BACKGROUND", -1)
+        row.stripe:SetAllPoints()
+        row.stripe:Hide()
+        row.iconBG = Pixel(row, "BACKGROUND", 1, 1, 1, 1)
+        row.iconBG:SetSize(28, 28)
+        row.iconBG:Hide()
         row.icon = row:CreateTexture(nil, "ARTWORK")
         row.icon:SetSize(24, 24)
         row.icon:SetPoint("LEFT", 8, 0)
+        row.iconBG:SetPoint("CENTER", row.icon, "CENTER", 0, 0)
         row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         row.text:SetPoint("LEFT", row.icon, "RIGHT", 8, 0)
         row.text:SetPoint("RIGHT", -8, 0)
         row.text:SetJustifyH("LEFT")
         row.text:SetWordWrap(false)
+        row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestLogTitleHighlight", "ADD")
         row:SetScript("OnEnter", function(self)
             ShowItemTooltip(self, self.entry)
         end)
@@ -422,6 +433,8 @@ local function Acquire()
             end
         end)
     end
+    row.stripe:Hide()
+    row.iconBG:Hide()
     row:Show()
     return row
 end
@@ -460,6 +473,7 @@ local function PaintLinks(model)
         if not link then
             link = CreateFrame("Button", nil, rail)
             link:SetHeight(28)
+            link:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestLogTitleHighlight", "ADD")
             local bar = Pixel(link, "ARTWORK", 0.85, 0.65, 0.2, 1)
             bar:SetSize(2, 14)
             bar:SetPoint("LEFT", link, "LEFT", 0, 0)
@@ -501,6 +515,9 @@ local function PaintLinks(model)
         header.kind = "header"
         header.selected = false
         header:SetScript("OnClick", nil)
+        if header:GetHighlightTexture() then
+            header:GetHighlightTexture():SetAlpha(0)
+        end
         header:ClearAllPoints()
         header:SetPoint("TOPLEFT", rail, "TOPLEFT", 16, -y)
         header:SetPoint("TOPRIGHT", rail, "TOPRIGHT", -8, -y)
@@ -514,6 +531,9 @@ local function PaintLinks(model)
             local selected = section.id == selectedKey
             link.kind = "slot"
             link.selected = selected
+            if link:GetHighlightTexture() then
+                link:GetHighlightTexture():SetAlpha(1)
+            end
             link:ClearAllPoints()
             link:SetPoint("TOPLEFT", rail, "TOPLEFT", 28, -y)
             link:SetPoint("TOPRIGHT", rail, "TOPRIGHT", -8, -y)
@@ -539,6 +559,9 @@ end
 function Layout()
     if not child or not scroll then
         return
+    end
+    if specLabel then
+        specLabel:SetText("Loot Spec: " .. BGV.Utils.LootSpecLabel())
     end
     ReleaseRows()
     local model = BuildModel()
@@ -638,6 +661,7 @@ function Layout()
 
     local grouped = CategoryFor(section.slot) and CategoryFor(section.slot).id == "mplus"
     local y = 4
+    local rowIndex = 0
     local function AddItem(entry, indent)
         local row = Acquire()
         row:SetHeight(32)
@@ -655,6 +679,10 @@ function Layout()
         end
         local r, g, b = QualityColor(entry)
         row.text:SetTextColor(r, g, b)
+        row.iconBG:SetVertexColor(r, g, b, 0.55)
+        row.iconBG:Show()
+        rowIndex = rowIndex + 1
+        row.stripe:SetShown(rowIndex % 2 == 0)
         y = y + 34
     end
 
@@ -709,7 +737,7 @@ local function Build()
     if frame then
         return frame
     end
-    frame = CreateFrame("Frame", "BetterGreatVaultLootTable", UIParent)
+    frame = CreateFrame("Frame", "BetterGreatVaultLootTable", UIParent, "BackdropTemplate")
     frame:SetSize(860, 560)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("DIALOG")
@@ -722,7 +750,29 @@ local function Build()
         frame:SetResizeBounds(640, 400, 1280, 900)
     end
     frame:Hide()
-    Pixel(frame, "BACKGROUND", 0.07, 0.07, 0.08, 0.98):SetAllPoints()
+    if frame.SetBackdrop then
+        frame:SetBackdrop({
+            bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+            edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+            tile = true,
+            tileSize = 32,
+            edgeSize = 24,
+            insets = { left = 8, right = 8, top = 8, bottom = 8 },
+        })
+        frame:SetBackdropColor(0.05, 0.05, 0.06, 0.98)
+        frame:SetBackdropBorderColor(0.85, 0.65, 0.2, 1)
+    else
+        Pixel(frame, "BACKGROUND", 0.07, 0.07, 0.08, 0.98):SetAllPoints()
+    end
+
+    local titleBar = Pixel(frame, "BORDER", 0, 0, 0, 0.22)
+    titleBar:SetPoint("TOPLEFT", 8, -8)
+    titleBar:SetPoint("TOPRIGHT", -8, -8)
+    titleBar:SetHeight(34)
+    local titleRule = Pixel(frame, "ARTWORK", 0.85, 0.65, 0.2, 0.8)
+    titleRule:SetHeight(1)
+    titleRule:SetPoint("TOPLEFT", titleBar, "BOTTOMLEFT", 0, 0)
+    titleRule:SetPoint("TOPRIGHT", titleBar, "BOTTOMRIGHT", 0, 0)
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOPLEFT", 16, -14)
@@ -741,30 +791,19 @@ local function Build()
         frame:StopMovingOrSizing()
     end)
 
-    local close = CreateFrame("Button", nil, frame)
-    close:SetSize(28, 28)
-    close:SetPoint("TOPRIGHT", -6, -6)
-    local closeText = close:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    closeText:SetPoint("CENTER")
-    closeText:SetText("x")
-    closeText:SetTextColor(0.7, 0.7, 0.7)
+    local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", -2, -2)
     close:SetScript("OnClick", function()
         frame:Hide()
     end)
-    close:SetScript("OnEnter", function()
-        closeText:SetTextColor(1, 1, 1)
-    end)
-    close:SetScript("OnLeave", function()
-        closeText:SetTextColor(0.7, 0.7, 0.7)
-    end)
 
-    local filter = CreateFrame("Button", nil, frame)
-    filter:SetSize(140, 22)
-    filter:SetPoint("TOPRIGHT", -40, -12)
-    Pixel(filter, "BACKGROUND", 0.14, 0.14, 0.16, 1):SetAllPoints()
-    filterLabel = filter:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    filterLabel:SetPoint("CENTER")
-    filterLabel:SetText("All gear")
+    local filter = CreateFrame("Button", "BetterGreatVaultLootTableFilter", frame, "UIPanelButtonTemplate")
+    filter:SetSize(150, 22)
+    filter:SetPoint("TOPRIGHT", -46, -12)
+    filterLabel = filter.Text or _G[filter:GetName() .. "Text"]
+    if filterLabel then
+        filterLabel:SetText("All gear")
+    end
     filter:SetScript("OnClick", function(self)
         if MenuUtil and type(MenuUtil.CreateContextMenu) == "function" then
             MenuUtil.CreateContextMenu(self, function(_, root)
@@ -787,10 +826,21 @@ local function Build()
         ApplyFilter(FILTERS[nextIndex].id, FILTERS[nextIndex].label)
     end)
 
+    specButton = CreateFrame("Button", "BetterGreatVaultLootTableSpec", frame, "UIPanelButtonTemplate")
+    specButton:SetSize(180, 22)
+    specButton:SetPoint("RIGHT", filter, "LEFT", -8, 0)
+    specLabel = specButton.Text or _G[specButton:GetName() .. "Text"]
+    specButton:SetScript("OnClick", function(self)
+        if not BGV.Utils.OpenLootSpecMenu(self) then
+            BGV.Utils.CycleLootSpec()
+        end
+    end)
+
     rail = CreateFrame("Frame", nil, frame)
     rail:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -40)
     rail:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 0, 0)
     rail:SetWidth(LEFT_W)
+    Pixel(rail, "BACKGROUND", 0, 0, 0, 0.18):SetAllPoints()
     local contents = rail:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     contents:SetPoint("TOPLEFT", rail, "TOPLEFT", 16, -12)
     contents:SetText("Contents")
@@ -856,6 +906,7 @@ local function Build()
     frame:RegisterEvent("EJ_LOOT_DATA_RECIEVED")
     frame:RegisterEvent("PLAYER_ENTERING_WORLD")
     frame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+    frame:RegisterEvent("PLAYER_LOOT_SPEC_UPDATED")
     frame:SetScript("OnEvent", function(_, event)
         if event == "PLAYER_ENTERING_WORLD" then
             BGV.LootTable.OnCharacterChanged()

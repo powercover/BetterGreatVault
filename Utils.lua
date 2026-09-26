@@ -132,6 +132,106 @@ function Utils.CurrentSpecID()
     return GetSpecializationInfo(specIndex)
 end
 
+-- The spec whose gear should be shown: Blizzard's Loot Specialization setting when the
+-- player has one chosen, otherwise the active specialization (Loot Specialization returns
+-- 0 for "Current Specialization").
+function Utils.LootSpecID()
+    local lootSpec = type(GetLootSpecialization) == "function" and GetLootSpecialization() or nil
+    if Utils.IsUsableNumber(lootSpec) and lootSpec ~= 0 then
+        return lootSpec
+    end
+    return Utils.CurrentSpecID()
+end
+
+-- Whether the player has an explicit Loot Specialization chosen (as opposed to "Current Specialization").
+function Utils.HasExplicitLootSpec()
+    local lootSpec = type(GetLootSpecialization) == "function" and GetLootSpecialization() or nil
+    return Utils.IsUsableNumber(lootSpec) and lootSpec ~= 0
+end
+
+function Utils.LootSpecName(specID)
+    if not Utils.IsUsableNumber(specID) or type(GetSpecializationInfoByID) ~= "function" then
+        return nil
+    end
+    local _, name = Utils.Call(GetSpecializationInfoByID, specID)
+    if Utils.IsUsableString(name) then
+        return name
+    end
+end
+
+-- Every specialization the player's own class can be, regardless of which is active.
+function Utils.AvailableSpecs()
+    local list = {}
+    if type(GetNumSpecializations) ~= "function" or type(GetSpecializationInfo) ~= "function" then
+        return list
+    end
+    local count = Utils.Call(GetNumSpecializations) or 0
+    for index = 1, count do
+        local id, name, _, icon = Utils.Call(GetSpecializationInfo, index)
+        if Utils.IsUsableNumber(id) and Utils.IsUsableString(name) then
+            list[#list + 1] = { id = id, name = name, icon = icon }
+        end
+    end
+    return list
+end
+
+-- specID = nil/0 restores "Current Specialization".
+function Utils.SetLootSpec(specID)
+    if type(SetLootSpecialization) ~= "function" then
+        return
+    end
+    Utils.Call(SetLootSpecialization, specID or 0)
+end
+
+function Utils.LootSpecLabel()
+    local specID = Utils.LootSpecID()
+    local name = Utils.LootSpecName(specID) or "Unknown"
+    if Utils.HasExplicitLootSpec() then
+        return name
+    end
+    return name .. " (current)"
+end
+
+-- Fallback for clients without MenuUtil: steps to the next class specialization.
+function Utils.CycleLootSpec()
+    local specs = Utils.AvailableSpecs()
+    if #specs == 0 then
+        return
+    end
+    local current = Utils.LootSpecID()
+    local nextIndex = 1
+    for index, spec in ipairs(specs) do
+        if spec.id == current then
+            nextIndex = index % #specs + 1
+            break
+        end
+    end
+    Utils.SetLootSpec(specs[nextIndex].id)
+end
+
+-- Returns true if a dropdown menu was opened at `anchor`, false if the client has no MenuUtil
+-- and the caller should fall back to something like Utils.CycleLootSpec().
+function Utils.OpenLootSpecMenu(anchor)
+    if not (MenuUtil and type(MenuUtil.CreateContextMenu) == "function") then
+        return false
+    end
+    MenuUtil.CreateContextMenu(anchor, function(_, root)
+        root:CreateRadio("Current Specialization", function()
+            return not Utils.HasExplicitLootSpec()
+        end, function()
+            Utils.SetLootSpec(0)
+        end)
+        for _, spec in ipairs(Utils.AvailableSpecs()) do
+            root:CreateRadio(spec.name, function()
+                return Utils.HasExplicitLootSpec() and Utils.LootSpecID() == spec.id
+            end, function()
+                Utils.SetLootSpec(spec.id)
+            end)
+        end
+    end)
+    return true
+end
+
 function Utils.Trim(value)
     if type(value) ~= "string" then
         return ""

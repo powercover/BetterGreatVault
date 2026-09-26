@@ -179,8 +179,9 @@ frame:SetScript("OnEvent", function(_, event, arg1)
         return
     end
 
-    if event == "PLAYER_SPECIALIZATION_CHANGED" then
+    if event == "PLAYER_SPECIALIZATION_CHANGED" or event == "PLAYER_LOOT_SPEC_UPDATED" then
         RefreshLootLists()
+        BGV.UI.RefreshOpenFrame()
         return
     end
 
@@ -220,6 +221,7 @@ frame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 frame:RegisterEvent("CHALLENGE_MODE_MAPS_UPDATE")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+frame:RegisterEvent("PLAYER_LOOT_SPEC_UPDATED")
 
 SLASH_BETTERGREATVAULT1 = "/bgv"
 SlashCmdList.BETTERGREATVAULT = HandleSlash
