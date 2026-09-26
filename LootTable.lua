@@ -357,37 +357,72 @@ local function TipLink(entry)
     return "item:" .. tostring(entry.itemID)
 end
 
+local function EntryLink(entry)
+    if not entry.tipLink then
+        entry.tipLink = TipLink(entry)
+    end
+    return entry.tipLink
+end
+
+-- The vault preview link can't be reliably re-scaled to an arbitrary rank (e.g. its ceiling
+-- bonus doesn't map to the normal cap by removing or shifting bonus IDs), so render the item
+-- by ID at the exact level the slot will award, the same way the Auction House does.
+local function FillTooltip(entry)
+    if BGV.Utils.IsUsableNumber(entry.itemLevel) and type(GameTooltip.SetItemKey) == "function" then
+        GameTooltip:SetItemKey(entry.itemID, entry.itemLevel, 0)
+    else
+        local link = EntryLink(entry)
+        if type(link) == "string" then
+            GameTooltip:SetHyperlink(link)
+        else
+            GameTooltip:SetItemByID(entry.itemID)
+        end
+    end
+    if type(GameTooltip_ShowCompareItem) == "function" then
+        BGV.Utils.Call(GameTooltip_ShowCompareItem, GameTooltip)
+    end
+end
+
+-- SetItemKey draws the item's base quality, but the vault can award it higher (Mythic+
+-- dungeon loot is blue at base and epic from the vault), so match the title to the reward.
+local function PaintTitle(tooltip, entry)
+    local colors = ITEM_QUALITY_COLORS and BGV.Utils.IsUsableNumber(entry.quality) and ITEM_QUALITY_COLORS[entry.quality]
+    local title = colors and tooltip.GetName and _G[tooltip:GetName() .. "TextLeft1"]
+    if title then
+        title:SetTextColor(colors.r, colors.g, colors.b)
+    end
+end
+
+if TooltipDataProcessor and type(TooltipDataProcessor.AddTooltipPostCall) == "function" and Enum and Enum.TooltipDataType then
+    TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tooltip)
+        if tooltip ~= GameTooltip then
+            return
+        end
+        local owner = tooltip:GetOwner()
+        if owner and owner.bgvLootRow and owner.entry then
+            PaintTitle(tooltip, owner.entry)
+        end
+    end)
+end
+
 local function ShowItemTooltip(owner, entry)
-    if not GameTooltip or not entry then
+    if not GameTooltip or not entry or not BGV.Utils.IsUsableNumber(entry.itemID) then
         return
     end
-    local link = entry.tipLink
-    if not link then
-        link = TipLink(entry)
-        entry.tipLink = link
-    end
     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
-    if type(link) == "string" then
-        GameTooltip:SetHyperlink(link)
-        if type(GameTooltip_ShowCompareItem) == "function" then
-            BGV.Utils.Call(GameTooltip_ShowCompareItem, GameTooltip)
+    FillTooltip(entry)
+    PaintTitle(GameTooltip, entry)
+    if Item and type(Item.CreateFromItemID) == "function" then
+        local item = BGV.Utils.Call(Item.CreateFromItemID, Item, entry.itemID)
+        if item and type(item.IsItemDataCached) == "function" and not item:IsItemDataCached() and type(item.ContinueOnLoad) == "function" then
+            item:ContinueOnLoad(function()
+                if owner:IsShown() and owner:IsMouseOver() and owner.entry == entry then
+                    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+                    FillTooltip(entry)
+                    PaintTitle(GameTooltip, entry)
+                end
+            end)
         end
-        if Item and type(Item.CreateFromItemLink) == "function" then
-            local item = BGV.Utils.Call(Item.CreateFromItemLink, Item, link)
-            if item and type(item.IsItemDataCached) == "function" and not item:IsItemDataCached() and type(item.ContinueOnLoad) == "function" then
-                item:ContinueOnLoad(function()
-                    if owner:IsShown() and owner:IsMouseOver() then
-                        GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
-                        GameTooltip:SetHyperlink(link)
-                        if type(GameTooltip_ShowCompareItem) == "function" then
-                            BGV.Utils.Call(GameTooltip_ShowCompareItem, GameTooltip)
-                        end
-                    end
-                end)
-            end
-        end
-    elseif entry.itemID then
-        GameTooltip:SetItemByID(entry.itemID)
     end
 end
 
@@ -395,6 +430,7 @@ local function Acquire()
     local row = table.remove(pool)
     if not row then
         row = CreateFrame("Button", nil, child)
+        row.bgvLootRow = true
         row:SetHeight(32)
         row:RegisterForClicks("AnyUp")
         row.stripe = Pixel(row, "BACKGROUND", 1, 1, 1, 0.03)
@@ -423,8 +459,11 @@ local function Acquire()
             end
         end)
         row:SetScript("OnClick", function(self, button)
-            if button == "LeftButton" and IsModifiedClick() and self.entry and self.entry.tipLink and type(HandleModifiedItemClick) == "function" then
-                HandleModifiedItemClick(self.entry.tipLink)
+            if button == "LeftButton" and IsModifiedClick() and self.entry and type(HandleModifiedItemClick) == "function" then
+                local link = EntryLink(self.entry)
+                if link then
+                    HandleModifiedItemClick(link)
+                end
             end
         end)
     end

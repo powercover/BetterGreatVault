@@ -521,9 +521,10 @@ local function RaidScope(slot)
     local seen = {}
     local encounters = {}
     local names = {}
+    local ceiling = {}
     local rewardRank = RAID_RANK[slot.level] or 0
     if type(slot.encounters) ~= "table" then
-        return ids, encounters, names
+        return ids, encounters, names, ceiling
     end
 
     local function AddID(encounterID)
@@ -554,6 +555,26 @@ local function RaidScope(slot)
             Remember(encounter.dungeonEncounterID)
             Remember(encounter.activityEncounterID)
         end
+    end
+
+    -- The vault's ceiling reward (above the season's normal Mythic cap) can only ever come
+    -- from the raid's last two bosses in Journal order, and only if that specific boss was
+    -- itself killed at Mythic or higher. Earlier bosses stay at the normal cap even once the
+    -- slot overall is eligible for the ceiling. Mark those specific bosses here so
+    -- StampReward can cap every other entry back down regardless of the slot's own reward.
+    local function MarkCeilingEncounter(encounter)
+        local mythicID = RaidMythicID()
+        if not (Utils.IsUsableNumber(encounter.difficultyID) and encounter.difficultyID >= mythicID) then
+            return
+        end
+        local function Mark(encounterID)
+            if Utils.IsUsableNumber(encounterID) then
+                ceiling[encounterID] = true
+            end
+        end
+        Mark(encounter.journalEncounterID)
+        Mark(encounter.dungeonEncounterID)
+        Mark(encounter.activityEncounterID)
     end
 
     local function CountsForSlot(encounter)
@@ -590,9 +611,24 @@ local function RaidScope(slot)
                 AddEncounter(encounter)
             end
         end
+
+        if #list >= 3 then
+            local lastTwo = {}
+            for _, encounter in ipairs(list) do
+                lastTwo[#lastTwo + 1] = encounter
+            end
+            table.sort(lastTwo, function(left, right)
+                return (left.uiOrder or 0) > (right.uiOrder or 0)
+            end)
+            for index = 1, 2 do
+                if lastTwo[index] then
+                    MarkCeilingEncounter(lastTwo[index])
+                end
+            end
+        end
     end
 
-    return ids, encounters, names
+    return ids, encounters, names, ceiling
 end
 
 -- Single pass over the season's challenge maps: returns both the deduped instance ID
@@ -983,6 +1019,7 @@ local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, bu
                                     equipLabel = EQUIP_LABEL[equipLoc] or "Gear",
                                     quality = quality,
                                     source = source or "Raid",
+                                    encounterID = encounterID,
                                 }
                             else
                                 instancePending = true
@@ -1033,19 +1070,41 @@ end
 
 local KEYSTONE_DIFFICULTY = 8
 
-local function StampReward(entries, slot)
-    for _, entry in ipairs(entries) do
-        entry.itemLevel = slot.itemLevel
+-- Returns fresh copies: the input entries are cached journal batches shared by every slot
+-- that draws on the same dungeon or boss, so stamping them in place would let one slot's
+-- item level leak into another slot's list.
+--
+-- Raid only (ceilingEncounters ~= nil): the slot's reward can sit above the season's normal
+-- Mythic cap once one of the raid's last two bosses is killed on Mythic (see CapRaidReward),
+-- but only loot from those specific bosses can actually reach it. Every other boss's loot in
+-- that slot stays at the normal cap.
+local function StampReward(entries, slot, ceilingEncounters)
+    local slotAtCeiling = ceilingEncounters ~= nil and IsEndBossBand(slot)
+    local stamped = {}
+    for index, source in ipairs(entries) do
+        local entry = {}
+        for key, value in pairs(source) do
+            entry[key] = value
+        end
+        local capped = slotAtCeiling and not (entry.encounterID and ceilingEncounters[entry.encounterID])
         entry.upgradeTrack = slot.upgradeTrack
-        entry.upgradeLevel = slot.upgradeLevel
-        entry.upgradeMax = slot.upgradeMax
-        entry.qualityName = slot.itemQuality
+        if capped then
+            entry.itemLevel = MYTHIC_VAULT_ILVL
+            entry.upgradeLevel = MYTHIC_VAULT_STEP
+            entry.upgradeMax = Utils.IsUsableNumber(slot.upgradeMax) and math.max(slot.upgradeMax, MYTHIC_VAULT_STEP) or MYTHIC_VAULT_STEP
+        else
+            entry.itemLevel = slot.itemLevel
+            entry.upgradeLevel = slot.upgradeLevel
+            entry.upgradeMax = slot.upgradeMax
+        end
         entry.rewardLink = slot.rewardLink
+        entry.qualityName = slot.itemQuality
         if slot.quality then
             entry.quality = slot.quality
         end
+        stamped[index] = entry
     end
-    return entries
+    return stamped
 end
 
 function Rewards.ItemsForSlot(slot)
@@ -1055,9 +1114,9 @@ function Rewards.ItemsForSlot(slot)
     Rewards.EnsureJournal()
 
     if Utils.SameType(slot.type, Utils.ThresholdType("Raid")) then
-        local instanceIDs, encounterSet, names = RaidScope(slot)
+        local instanceIDs, encounterSet, names, ceilingEncounters = RaidScope(slot)
         local entries, pending = CollectEntries(slot.level, instanceIDs, encounterSet, names)
-        return StampReward(entries, slot), pending
+        return StampReward(entries, slot, ceilingEncounters), pending
     end
 
     if Utils.SameType(slot.type, Utils.ThresholdType("Activities")) then
