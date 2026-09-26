@@ -19,6 +19,15 @@ local FILTERS = {
     { id = "Weapon", label = "Weapon" },
 }
 
+-- The four secondary stats, in menu order. `global` is the game's localized name, which is also
+-- how the tooltip writes the stat; `short` labels the filter button.
+local SECONDARY_STATS = {
+    { id = "CRIT", global = "ITEM_MOD_CRIT_RATING_SHORT", name = "Critical Strike", short = "Crit" },
+    { id = "HASTE", global = "ITEM_MOD_HASTE_RATING_SHORT", name = "Haste", short = "Haste" },
+    { id = "MASTERY", global = "ITEM_MOD_MASTERY_RATING_SHORT", name = "Mastery", short = "Mastery" },
+    { id = "VERSATILITY", global = "ITEM_MOD_VERSATILITY", name = "Versatility", short = "Vers" },
+}
+
 local CATEGORIES = {
     { id = "raid", title = "Raid", match = "Raid" },
     { id = "mplus", title = "Mythic+", match = "Activities" },
@@ -30,14 +39,17 @@ local LIST_TOP = 132
 local ROW_H = 30
 local NAME_X = 40
 local LEVEL_W = 80
+local STATS_W = 150
 local SLOT_W = 120
 local GROUP_H = 26
+local STAT_LINE_H = 12
 
 -- Column x offsets within a row of the given width; the header uses the same geometry.
 local function Columns(width)
     local slotX = width - SLOT_W - 8
-    local levelX = slotX - LEVEL_W
-    return levelX, slotX
+    local statsX = slotX - STATS_W
+    local levelX = statsX - LEVEL_W
+    return levelX, statsX, slotX
 end
 
 local frame
@@ -48,8 +60,14 @@ local child
 local headerTitle
 local headerReward
 local filterLabel
+local statLabel
 local specButton
 local filterID = "ALL"
+-- Selected secondary stats (id -> true). None: no filter; one: items with it; two: items with
+-- both; three or more: items with at least one of them.
+local statFilter = {}
+-- Secondary stats per itemID:itemLevel (see EntryStats).
+local statCache = {}
 local selectedKey
 local solo
 local pool = {}
@@ -108,6 +126,136 @@ local function RewardLine(slot)
     return ""
 end
 
+local function StatName(stat)
+    local text = _G[stat.global]
+    if type(text) == "string" and text ~= "" then
+        return text
+    end
+    return stat.name
+end
+
+-- The amount if tooltip line `text` is exactly this stat ("+123 Haste"); nil for anything else,
+-- such as an "Equip:" line that mentions the stat.
+local function StatAmount(text, name)
+    local start, finish = text:find(name, 1, true)
+    if not start then
+        return nil
+    end
+    local rest = text:sub(1, start - 1) .. text:sub(finish + 1)
+    local number = rest:match("^%s*%+%s*(%d[%d%.,%s\194\160]*)%s*$")
+    local amount = number and tonumber((number:gsub("%D", "")))
+    if amount and amount > 0 then
+        return amount
+    end
+end
+
+local NO_STATS = {}
+
+-- The item's secondary stats at the level the vault awards, read from the same tooltip the row
+-- shows (C_TooltipInfo.GetItemKey, the data behind GameTooltip:SetItemKey), highest amount
+-- first. Returns nil while the item's tooltip data hasn't loaded.
+local function EntryStats(entry)
+    local info = C_TooltipInfo
+    if not (info and type(info.GetItemKey) == "function") or not BGV.Utils.IsUsableNumber(entry.itemID) then
+        return NO_STATS
+    end
+    local key = tostring(entry.itemID) .. ":" .. tostring(entry.itemLevel)
+    if statCache[key] then
+        return statCache[key]
+    end
+    local data
+    if BGV.Utils.IsUsableNumber(entry.itemLevel) then
+        data = BGV.Utils.Call(info.GetItemKey, entry.itemID, entry.itemLevel, 0)
+    elseif type(info.GetItemByID) == "function" then
+        data = BGV.Utils.Call(info.GetItemByID, entry.itemID)
+    end
+    local lines = type(data) == "table" and data.lines
+    if type(lines) ~= "table" or #lines < 3 then
+        return nil
+    end
+    local stats = {}
+    for _, line in ipairs(lines) do
+        local text = type(line) == "table" and line.leftText
+        if not BGV.Utils.IsSecret(text) and type(text) == "string" and text ~= "" then
+            text = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+            for _, stat in ipairs(SECONDARY_STATS) do
+                local name = StatName(stat)
+                local amount = StatAmount(text, name)
+                if amount then
+                    stats[#stats + 1] = { id = stat.id, name = name, amount = amount }
+                    break
+                end
+            end
+        end
+    end
+    table.sort(stats, function(left, right)
+        if left.amount ~= right.amount then
+            return left.amount > right.amount
+        end
+        return left.name < right.name
+    end)
+    statCache[key] = stats
+    return stats
+end
+
+local function SelectedStats()
+    local selected = {}
+    for _, stat in ipairs(SECONDARY_STATS) do
+        if statFilter[stat.id] then
+            selected[#selected + 1] = stat
+        end
+    end
+    return selected
+end
+
+local function PassesStatFilter(stats, selected)
+    if #selected == 0 then
+        return true
+    end
+    local has = {}
+    for _, stat in ipairs(stats) do
+        has[stat.id] = true
+    end
+    if #selected <= 2 then
+        for _, stat in ipairs(selected) do
+            if not has[stat.id] then
+                return false
+            end
+        end
+        return true
+    end
+    for _, stat in ipairs(selected) do
+        if has[stat.id] then
+            return true
+        end
+    end
+    return false
+end
+
+local function StatFilterKey()
+    local ids = {}
+    for _, stat in ipairs(SelectedStats()) do
+        ids[#ids + 1] = stat.id
+    end
+    return table.concat(ids, "+")
+end
+
+local function StatFilterLabel()
+    local selected = SelectedStats()
+    if #selected == 0 then
+        return "All stats"
+    elseif #selected == 1 then
+        return StatName(selected[1])
+    elseif #selected == #SECONDARY_STATS then
+        return "Any secondary"
+    end
+    local names = {}
+    for _, stat in ipairs(selected) do
+        names[#names + 1] = stat.short
+    end
+    return table.concat(names, #selected == 2 and " + " or " / ")
+end
+
 local function CacheKey(slot)
     local guid = type(UnitGUID) == "function" and UnitGUID("player") or ""
     local spec = BGV.Utils.LootSpecID()
@@ -119,6 +267,7 @@ local function CacheKey(slot)
         tostring(slot.itemLevel),
         tostring(slot.level),
         tostring(filterID),
+        StatFilterKey(),
     }, ":")
 end
 
@@ -130,13 +279,24 @@ local function SlotItems(slot)
     end
     local list = {}
     local pending = false
+    local selected = SelectedStats()
     if slot.unlocked and BGV.Rewards and type(BGV.Rewards.ItemsForSlot) == "function" then
         local found, stillLoading = BGV.Rewards.ItemsForSlot(slot)
         pending = stillLoading == true
         if type(found) == "table" then
             for _, entry in ipairs(found) do
                 if filterID == "ALL" or entry.equipLabel == filterID then
-                    list[#list + 1] = entry
+                    -- Stats still loading: list the item (without stats) unless filtering by
+                    -- stat, and keep the list pending so it's redrawn once they arrive.
+                    local stats = EntryStats(entry)
+                    if not stats then
+                        pending = true
+                        if #selected == 0 then
+                            list[#list + 1] = entry
+                        end
+                    elseif PassesStatFilter(stats, selected) then
+                        list[#list + 1] = entry
+                    end
                 end
             end
         end
@@ -498,6 +658,8 @@ local function Acquire()
         row.slot = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         row.slot:SetJustifyH("LEFT")
         row.slot:SetWordWrap(false)
+        -- One font string per secondary stat, stacked (see PaintStats).
+        row.statLines = {}
 
         row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestLogTitleHighlight", "ADD")
         row:SetScript("OnEnter", function(self)
@@ -528,6 +690,10 @@ local function Acquire()
     row.level:SetText("")
     row.slot:SetText("")
     row.slot:SetTextColor(0.7, 0.7, 0.72)
+    for _, line in ipairs(row.statLines) do
+        line:SetText("")
+        line:Hide()
+    end
     if row:GetHighlightTexture() then
         row:GetHighlightTexture():SetAlpha(1)
     end
@@ -665,26 +831,48 @@ local function SlotName(entry)
 end
 
 local function PlaceColumns(row, rowWidth)
-    local levelX, slotX = Columns(rowWidth)
+    local levelX, statsX, slotX = Columns(rowWidth)
     row.name:ClearAllPoints()
     row.name:SetPoint("LEFT", row, "LEFT", NAME_X, 0)
     row.name:SetWidth(math.max(40, levelX - NAME_X - 10))
     row.level:ClearAllPoints()
     row.level:SetPoint("LEFT", row, "LEFT", levelX, 0)
     row.level:SetWidth(LEVEL_W - 8)
+    row.statsX = statsX
     row.slot:ClearAllPoints()
     row.slot:SetPoint("LEFT", row, "LEFT", slotX, 0)
     row.slot:SetWidth(SLOT_W - 8)
+end
+
+-- Draws `texts` in the stats column, one line each, centred vertically in the row.
+local function PaintStats(row, texts, r, g, b)
+    local count = #texts
+    for index, text in ipairs(texts) do
+        local line = row.statLines[index]
+        if not line then
+            line = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            line:SetJustifyH("LEFT")
+            line:SetWordWrap(false)
+            row.statLines[index] = line
+        end
+        line:ClearAllPoints()
+        line:SetPoint("LEFT", row, "LEFT", row.statsX or 0, ((count + 1) / 2 - index) * STAT_LINE_H)
+        line:SetWidth(STATS_W - 8)
+        line:SetText(text)
+        line:SetTextColor(r, g, b)
+        line:Show()
+    end
 end
 
 local function PlaceHeader(rowWidth)
     if not columnHeader then
         return
     end
-    local levelX, slotX = Columns(rowWidth)
+    local levelX, statsX, slotX = Columns(rowWidth)
     local labels = columnHeader.labels
     labels.item:SetPoint("LEFT", columnHeader, "LEFT", 4 + 9, 0)
     labels.level:SetPoint("LEFT", columnHeader, "LEFT", 4 + levelX, 0)
+    labels.stats:SetPoint("LEFT", columnHeader, "LEFT", 4 + statsX, 0)
     labels.slot:SetPoint("LEFT", columnHeader, "LEFT", 4 + slotX, 0)
 end
 
@@ -808,7 +996,7 @@ function Layout()
     end
 
     if headerTitle then
-        local titleWidth = (frame:GetWidth() or 860) - (solo and 36 or (LEFT_W + 40))
+        local titleWidth = (frame:GetWidth() or 960) - (solo and 36 or (LEFT_W + 40))
         if titleWidth < 180 then
             titleWidth = 180
         end
@@ -902,8 +1090,23 @@ function Layout()
             row.level:SetText(BGV.Utils.IsUsableNumber(entry.itemLevel) and tostring(entry.itemLevel) or "-")
             row.level:SetTextColor(0.96, 0.96, 0.96)
             row.slot:SetText(SlotName(entry))
+            -- One stat per line, highest amount first; the row grows if there are more lines
+            -- than fit.
+            local stats = EntryStats(entry)
+            local lines = {}
+            for _, stat in ipairs(stats or NO_STATS) do
+                local amount = type(BreakUpLargeNumbers) == "function" and BreakUpLargeNumbers(stat.amount) or tostring(stat.amount)
+                lines[#lines + 1] = string.format("+%s %s", amount, stat.name)
+            end
+            if #lines > 0 then
+                PaintStats(row, lines, 0.9, 0.9, 0.92)
+            else
+                PaintStats(row, { stats and "-" or "..." }, 0.55, 0.55, 0.58)
+            end
+            local height = math.max(ROW_H, #lines * STAT_LINE_H + 8)
+            row:SetHeight(height)
             row.stripe:SetShown(index % 2 == 0)
-            y = y + ROW_H
+            y = y + height
         end
     end
     child:SetHeight(math.max(y + 8, 40))
@@ -921,12 +1124,31 @@ local function ApplyFilter(id, label)
     Layout()
 end
 
+local function ApplyStatFilter()
+    if statLabel then
+        statLabel:SetText(StatFilterLabel())
+    end
+    if scroll then
+        scroll:SetVerticalScroll(0)
+    end
+    Layout()
+end
+
+-- ids: list of "CRIT", "HASTE", "MASTERY", "VERSATILITY" (empty clears the filter).
+function BGV.LootTable.SetStatFilter(ids)
+    statFilter = {}
+    for _, id in ipairs(ids or {}) do
+        statFilter[id] = true
+    end
+    ApplyStatFilter()
+end
+
 local function Build()
     if frame then
         return frame
     end
     frame = CreateFrame("Frame", "BetterGreatVaultLootTable", UIParent, "BackdropTemplate")
-    frame:SetSize(860, 560)
+    frame:SetSize(960, 560)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("DIALOG")
     frame:SetToplevel(true)
@@ -935,7 +1157,7 @@ local function Build()
     frame:EnableMouse(true)
     frame:SetResizable(true)
     if frame.SetResizeBounds then
-        frame:SetResizeBounds(640, 400, 1280, 900)
+        frame:SetResizeBounds(760, 400, 1400, 900)
     end
     frame:Hide()
     if frame.SetBackdrop then
@@ -1014,12 +1236,62 @@ local function Build()
         ApplyFilter(FILTERS[nextIndex].id, FILTERS[nextIndex].label)
     end)
 
+    -- Secondary stat filter: pick any number of stats. One shows items with it, two shows items
+    -- with both, three or more shows items with at least one of them.
+    local statButton = CreateFrame("Button", "BetterGreatVaultLootTableStats", frame, "UIPanelButtonTemplate")
+    statButton:SetSize(150, 22)
+    statButton:SetPoint("RIGHT", filter, "LEFT", -8, 0)
+    statLabel = statButton.Text or _G[statButton:GetName() .. "Text"]
+    if statLabel then
+        statLabel:SetText(StatFilterLabel())
+    end
+    statButton:SetScript("OnClick", function(self)
+        if MenuUtil and type(MenuUtil.CreateContextMenu) == "function" then
+            MenuUtil.CreateContextMenu(self, function(_, root)
+                root:CreateTitle("Secondary stats")
+                for _, stat in ipairs(SECONDARY_STATS) do
+                    local id = stat.id
+                    root:CreateCheckbox(StatName(stat), function()
+                        return statFilter[id] == true
+                    end, function()
+                        statFilter[id] = not statFilter[id] or nil
+                        ApplyStatFilter()
+                        -- Keep the menu open so several stats can be picked in one go.
+                        return MenuResponse and MenuResponse.Refresh or nil
+                    end)
+                end
+                root:CreateDivider()
+                root:CreateButton("Clear", function()
+                    statFilter = {}
+                    ApplyStatFilter()
+                end)
+            end)
+            return
+        end
+        -- No menu API: cycle through no filter and each single stat.
+        local selected = SelectedStats()
+        local nextIndex = 1
+        if #selected == 1 then
+            for index, stat in ipairs(SECONDARY_STATS) do
+                if stat == selected[1] then
+                    nextIndex = index + 1
+                end
+            end
+        end
+        statFilter = {}
+        if SECONDARY_STATS[nextIndex] then
+            statFilter[SECONDARY_STATS[nextIndex].id] = true
+        end
+        ApplyStatFilter()
+    end)
+
     specButton = BGV.Utils.CreateLootSpecButton(frame)
-    specButton:SetPoint("RIGHT", filter, "LEFT", -8, 0)
+    specButton:SetPoint("RIGHT", statButton, "LEFT", -8, 0)
 
     -- The drag strip spans most of the title bar; keep the header buttons above it so
     -- clicks reach them instead of starting a window drag.
     filter:SetFrameLevel(drag:GetFrameLevel() + 2)
+    statButton:SetFrameLevel(drag:GetFrameLevel() + 2)
     specButton:SetFrameLevel(drag:GetFrameLevel() + 2)
 
     rail = CreateFrame("Frame", nil, frame)
@@ -1066,7 +1338,7 @@ local function Build()
     headerRule:SetPoint("BOTTOMLEFT")
     headerRule:SetPoint("BOTTOMRIGHT")
     columnHeader.labels = {}
-    for _, column in ipairs({ { "item", "Item" }, { "level", "Item Level" }, { "slot", "Slot" } }) do
+    for _, column in ipairs({ { "item", "Item" }, { "level", "Item Level" }, { "stats", "Secondary stats" }, { "slot", "Slot" } }) do
         local label = columnHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         label:SetText(column[2]:upper())
         label:SetTextColor(0.85, 0.65, 0.2)
