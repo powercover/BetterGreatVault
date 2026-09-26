@@ -777,6 +777,19 @@ local function Build()
     return frame
 end
 
+if type(CloseWindows) == "function" and not BGV.LootTable.closeHooked then
+    local originalCloseWindows = CloseWindows
+    function CloseWindows(ignoreCenter, frameToIgnore)
+        local loot = _G.BetterGreatVaultLootTable
+        if loot and loot:IsShown() then
+            loot:Hide()
+            return 1
+        end
+        return originalCloseWindows(ignoreCenter, frameToIgnore)
+    end
+    BGV.LootTable.closeHooked = true
+end
+
 local function PlaceHeaders()
     if not headerTitle then
         return
