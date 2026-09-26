@@ -95,14 +95,31 @@ local function RewardLine(slot)
     return ""
 end
 
+local function CacheKey(slot)
+    local guid = type(UnitGUID) == "function" and UnitGUID("player") or ""
+    local spec = BGV.Utils.CurrentSpecID()
+    return table.concat({
+        tostring(guid),
+        tostring(spec),
+        tostring(slot.type),
+        tostring(slot.index),
+        tostring(slot.itemLevel),
+        tostring(slot.level),
+        tostring(filterID),
+    }, ":")
+end
+
 local function SlotItems(slot)
-    local key = tostring(slot.type) .. ":" .. tostring(slot.index) .. ":" .. tostring(slot.itemLevel) .. ":" .. tostring(slot.level) .. ":" .. filterID
-    if itemCache[key] then
-        return itemCache[key]
+    local key = CacheKey(slot)
+    local cached = itemCache[key]
+    if cached then
+        return cached, false
     end
     local list = {}
+    local pending = false
     if slot.unlocked and BGV.Rewards and type(BGV.Rewards.ItemsForSlot) == "function" then
-        local found = BGV.Rewards.ItemsForSlot(slot)
+        local found, stillLoading = BGV.Rewards.ItemsForSlot(slot)
+        pending = stillLoading == true
         if type(found) == "table" then
             for _, entry in ipairs(found) do
                 if filterID == "ALL" or entry.equipLabel == filterID then
@@ -111,8 +128,37 @@ local function SlotItems(slot)
             end
         end
     end
+    if pending then
+        return list, true
+    end
     itemCache[key] = list
-    return list
+    return list, false
+end
+
+function BGV.LootTable.ItemsFor(slot)
+    return SlotItems(slot)
+end
+
+function BGV.LootTable.Invalidate()
+    itemCache = {}
+    templateCache = {}
+    if frame and type(frame.IsShown) == "function" and frame:IsShown() then
+        Layout()
+    end
+end
+
+local seenCharacter
+
+function BGV.LootTable.OnCharacterChanged()
+    local guid = type(UnitGUID) == "function" and UnitGUID("player") or nil
+    if guid == seenCharacter then
+        return
+    end
+    seenCharacter = guid
+    BGV.LootTable.Invalidate()
+    if BGV.Rewards and type(BGV.Rewards.InvalidateIcons) == "function" then
+        BGV.Rewards.InvalidateIcons()
+    end
 end
 
 local function BuildModel()
@@ -488,7 +534,9 @@ function Layout()
         PaintLinks(model)
     end
     if section then
-        section.items = SlotItems(section.slot)
+        local items, pending = SlotItems(section.slot)
+        section.items = items
+        section.pending = pending
     end
 
     if headerTitle then
@@ -533,7 +581,13 @@ function Layout()
         empty:SetWidth(width - 8)
         empty.icon:SetTexture(nil)
         empty.entry = nil
-        empty.text:SetText(section.slot.unlocked and "No items for this filter." or "Locked.")
+        if not section.slot.unlocked then
+            empty.text:SetText("Locked.")
+        elseif section.pending then
+            empty.text:SetText("Loading loot...")
+        else
+            empty.text:SetText("No items for this filter.")
+        end
         empty.text:SetTextColor(0.55, 0.55, 0.58)
         child:SetHeight(48)
         return
@@ -755,11 +809,15 @@ local function Build()
         Layout()
     end)
     frame:RegisterEvent("CHALLENGE_MODE_MAPS_UPDATE")
-    frame:SetScript("OnEvent", function()
-        itemCache = {}
-        if frame:IsShown() then
-            Layout()
+    frame:RegisterEvent("EJ_LOOT_DATA_RECIEVED")
+    frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    frame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+    frame:SetScript("OnEvent", function(_, event)
+        if event == "PLAYER_ENTERING_WORLD" then
+            BGV.LootTable.OnCharacterChanged()
+            return
         end
+        BGV.LootTable.Invalidate()
     end)
 
     if type(UISpecialFrames) == "table" then

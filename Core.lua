@@ -42,6 +42,15 @@ local function LoadVaultUI()
     end
 end
 
+local function RefreshLootLists()
+    if BGV.Rewards and type(BGV.Rewards.InvalidateIcons) == "function" then
+        BGV.Rewards.InvalidateIcons()
+    end
+    if BGV.LootTable and type(BGV.LootTable.Invalidate) == "function" then
+        BGV.LootTable.Invalidate()
+    end
+end
+
 local function AttachToVault()
     BGV.UI.Hook()
     BGV.Tooltip.Hook()
@@ -157,12 +166,25 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     if event == "CHALLENGE_MODE_MAPS_UPDATE" then
         BGV.GreatVault.NoteMapsUpdated()
         BGV.GreatVault.Invalidate()
+        RefreshLootLists()
         BGV.UI.RefreshOpenFrame()
         return
     end
 
+    if event == "PLAYER_ENTERING_WORLD" then
+        if BGV.LootTable and type(BGV.LootTable.OnCharacterChanged) == "function" then
+            BGV.LootTable.OnCharacterChanged()
+        end
+        return
+    end
+
+    if event == "PLAYER_SPECIALIZATION_CHANGED" then
+        RefreshLootLists()
+        return
+    end
+
     if event == "WEEKLY_REWARDS_UPDATE" then
-        BGV.Rewards.InvalidateIcons()
+        RefreshLootLists()
         BGV.GreatVault.Invalidate()
         if WeeklyRewardsFrame and type(WeeklyRewardsFrame.IsShown) == "function" and WeeklyRewardsFrame:IsShown() then
             BGV.UI.RefreshOpenFrame()
@@ -174,6 +196,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     end
 
     if event == "EJ_LOOT_DATA_RECIEVED" then
+        RefreshLootLists()
         BGV.UI.RefreshOpenFrame()
     end
 end)
@@ -184,6 +207,8 @@ frame:RegisterEvent("WEEKLY_REWARDS_UPDATE")
 frame:RegisterEvent("EJ_LOOT_DATA_RECIEVED")
 frame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 frame:RegisterEvent("CHALLENGE_MODE_MAPS_UPDATE")
+frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+frame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 
 SLASH_BETTERGREATVAULT1 = "/bgv"
 SlashCmdList.BETTERGREATVAULT = HandleSlash
