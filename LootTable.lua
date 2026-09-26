@@ -42,6 +42,7 @@ local linkPool = {}
 local linkRows = {}
 local itemCache = {}
 local templateCache = {}
+local Layout
 
 local function Pixel(parent, layer, r, g, b, a)
     local texture = parent:CreateTexture(nil, layer or "BACKGROUND")
@@ -414,8 +415,6 @@ local function QualityColor(entry)
     end
     return 0.95, 0.95, 0.95
 end
-
-local Layout
 
 local function PaintLinks(model)
     for _, link in ipairs(linkRows) do
@@ -887,6 +886,9 @@ function BGV.LootTable.Show(slot)
 end
 
 function BGV.LootTable.ShowSlot(slot)
+    if type(slot) ~= "table" or not slot.unlocked then
+        return
+    end
     BGV.LootTable.Show(slot)
 end
 

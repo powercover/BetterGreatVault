@@ -353,6 +353,13 @@ local function Build()
     scroll:SetScrollChild(child)
 
     MakeHeader(child, "General", 1)
+    MakeCheckbox(child, "Open loot table", nil, function()
+        local saved = DB()
+        return not saved or saved.openLootTable ~= false
+    end, function(value)
+        DB().openLootTable = value and true or false
+    end)
+    MakeNote(child, "Left-click a completed slot to open the loot table with every reward that slot can give.")
     MakeCheckbox(child, "Show minimap button", nil, function()
         local saved = DB()
         return not saved or saved.showMinimap ~= false

@@ -9,6 +9,10 @@ local function AnimationsDisabled()
     return BetterGreatVaultDB and BetterGreatVaultDB.disableAnimations == true
 end
 
+local function OpenLootTableOnClick()
+    return not BetterGreatVaultDB or BetterGreatVaultDB.openLootTable ~= false
+end
+
 local function ApplyFont(fontString)
     local font = GameFontHighlightSmall:GetFont()
     if font then
@@ -1060,7 +1064,7 @@ local function EnsureHit(activityFrame)
                 end
             end
         end
-        if button == "LeftButton" and not IsModifiedClick() and activityFrame.bgvSlot and BGV.LootTable and type(BGV.LootTable.ShowSlot) == "function" then
+        if button == "LeftButton" and not IsModifiedClick() and OpenLootTableOnClick() and activityFrame.bgvSlot and activityFrame.bgvSlot.unlocked and BGV.LootTable and type(BGV.LootTable.ShowSlot) == "function" then
             BGV.LootTable.ShowSlot(activityFrame.bgvSlot)
         end
         if not hit.SetPropagateMouseClicks and button == "LeftButton" then
