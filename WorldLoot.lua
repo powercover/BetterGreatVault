@@ -2,9 +2,7 @@ local _, BGV = ...
 
 -- Midnight Season 2 delve, prey, and world-boss gear.
 -- The reel keeps the pieces the current spec can equip.
-BGV.WorldLoot = {
-
-    -- Delves
+local DELVES = {
     272227, -- Galerider's Veil
     272226, -- Miststalker's Shroud
     272230, -- Pledgebearer's Pall
@@ -87,8 +85,9 @@ BGV.WorldLoot = {
     272246, -- Miststalker's Wristbands
     272262, -- Pledgebearer's Splints
     272238, -- Pyrewalker's Wraps
+}
 
-    -- Prey
+local PREY = {
     275525, -- Preyhunter's Polished Cloak
     275522, -- Preyhunter's Refined Shawl
     275524, -- Preyhunter's Rugged Stole
@@ -148,8 +147,9 @@ BGV.WorldLoot = {
     275498, -- Preyhunter's Refined Cuffs
     275504, -- Preyhunter's Rugged Bindings
     275512, -- Preyhunter's Sleek Armlets
+}
 
-    -- World bosses
+local WORLD_BOSSES = {
     250456, -- Wretched Scholar's Gilded Robe
     250459, -- Bramblestalker's Feathered Cowl
     250458, -- Host Commander's Casque
@@ -169,3 +169,17 @@ BGV.WorldLoot = {
     250448, -- Voidbender's Spire
 }
 
+-- Flat list plus where each piece comes from, so the loot table can group by source.
+BGV.WorldLoot = {}
+BGV.WorldLootSource = {}
+
+local function Add(list, label)
+    for _, itemID in ipairs(list) do
+        BGV.WorldLoot[#BGV.WorldLoot + 1] = itemID
+        BGV.WorldLootSource[itemID] = label
+    end
+end
+
+Add(DELVES, "Delves")
+Add(PREY, "Prey")
+Add(WORLD_BOSSES, "World Boss")

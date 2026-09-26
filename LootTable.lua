@@ -26,9 +26,23 @@ local CATEGORIES = {
 }
 
 local LEFT_W = 188
+local LIST_TOP = 132
+local ROW_H = 30
+local NAME_X = 40
+local LEVEL_W = 80
+local SLOT_W = 120
+local GROUP_H = 26
+
+-- Column x offsets within a row of the given width; the header uses the same geometry.
+local function Columns(width)
+    local slotX = width - SLOT_W - 8
+    local levelX = slotX - LEVEL_W
+    return levelX, slotX
+end
 
 local frame
 local rail
+local columnHeader
 local scroll
 local child
 local headerTitle
@@ -138,10 +152,22 @@ function BGV.LootTable.ItemsFor(slot)
     return SlotItems(slot)
 end
 
+-- While a list is still loading we retry on our own, not only on journal events: item data
+-- (after a spec change, for example) arrives through other events, and a pass can come back
+-- still loading without anything new to trigger the next one.
+local POLL_DELAY = 0.25
+local MAX_STALLS = 40
+local stalls = 0
+
+local function ResetWatch()
+    pendingWatch = nil
+    stalls = 0
+end
+
 function BGV.LootTable.Invalidate()
     itemCache = {}
     templateCache = {}
-    pendingWatch = nil
+    ResetWatch()
     if BGV.Rewards and type(BGV.Rewards.InvalidateIcons) == "function" then
         BGV.Rewards.InvalidateIcons()
     end
@@ -150,7 +176,7 @@ function BGV.LootTable.Invalidate()
     end
 end
 
-function BGV.LootTable.RefreshPending()
+function BGV.LootTable.RefreshPending(delay)
     if chunkQueued or not frame or type(frame.IsShown) ~= "function" or not frame:IsShown() then
         return
     end
@@ -158,7 +184,7 @@ function BGV.LootTable.RefreshPending()
         return
     end
     chunkQueued = true
-    C_Timer.After(0, function()
+    C_Timer.After(delay or 0, function()
         chunkQueued = false
         if frame and frame:IsShown() then
             Layout()
@@ -170,7 +196,7 @@ function BGV.LootTable.Nudge()
     if not frame or type(frame.IsShown) ~= "function" or not frame:IsShown() then
         return
     end
-    pendingWatch = nil
+    ResetWatch()
     BGV.LootTable.RefreshPending()
 end
 
@@ -430,24 +456,38 @@ local function Acquire()
     if not row then
         row = CreateFrame("Button", nil, child)
         row.bgvLootRow = true
-        row:SetHeight(32)
         row:RegisterForClicks("AnyUp")
         row.stripe = Pixel(row, "BACKGROUND", 1, 1, 1, 0.03)
         row.stripe:SetDrawLayer("BACKGROUND", -1)
         row.stripe:SetAllPoints()
         row.stripe:Hide()
+        row.band = Pixel(row, "BACKGROUND", 0.85, 0.65, 0.2, 0.12)
+        row.band:SetDrawLayer("BACKGROUND", -1)
+        row.band:SetAllPoints()
+        row.band:Hide()
+        row.bandEdge = Pixel(row, "ARTWORK", 0.85, 0.65, 0.2, 0.9)
+        row.bandEdge:SetWidth(2)
+        row.bandEdge:SetPoint("TOPLEFT")
+        row.bandEdge:SetPoint("BOTTOMLEFT")
+        row.bandEdge:Hide()
         row.iconBG = Pixel(row, "BACKGROUND", 1, 1, 1, 1)
-        row.iconBG:SetSize(28, 28)
+        row.iconBG:SetSize(26, 26)
         row.iconBG:Hide()
         row.icon = row:CreateTexture(nil, "ARTWORK")
-        row.icon:SetSize(24, 24)
-        row.icon:SetPoint("LEFT", 8, 0)
+        row.icon:SetSize(22, 22)
+        row.icon:SetPoint("LEFT", 9, 0)
         row.iconBG:SetPoint("CENTER", row.icon, "CENTER", 0, 0)
-        row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        row.text:SetPoint("LEFT", row.icon, "RIGHT", 8, 0)
-        row.text:SetPoint("RIGHT", -8, 0)
-        row.text:SetJustifyH("LEFT")
-        row.text:SetWordWrap(false)
+
+        row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        row.name:SetJustifyH("LEFT")
+        row.name:SetWordWrap(false)
+        row.level = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        row.level:SetJustifyH("LEFT")
+        row.level:SetWordWrap(false)
+        row.slot = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row.slot:SetJustifyH("LEFT")
+        row.slot:SetWordWrap(false)
+
         row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestLogTitleHighlight", "ADD")
         row:SetScript("OnEnter", function(self)
             ShowItemTooltip(self, self.entry)
@@ -466,8 +506,20 @@ local function Acquire()
             end
         end)
     end
+    row:SetHeight(ROW_H)
     row.stripe:Hide()
+    row.band:Hide()
+    row.bandEdge:Hide()
     row.iconBG:Hide()
+    row.icon:SetTexture(nil)
+    row.name:SetFontObject(GameFontHighlight)
+    row.name:SetText("")
+    row.level:SetText("")
+    row.slot:SetText("")
+    row.slot:SetTextColor(0.7, 0.7, 0.72)
+    if row:GetHighlightTexture() then
+        row:GetHighlightTexture():SetAlpha(1)
+    end
     row:Show()
     return row
 end
@@ -593,6 +645,126 @@ local function PaintLinks(model)
     end
 end
 
+local function SlotName(entry)
+    local label = type(entry.equipLoc) == "string" and _G[entry.equipLoc]
+    if type(label) == "string" and label ~= "" then
+        return label
+    end
+    return entry.equipLabel or ""
+end
+
+local function PlaceColumns(row, rowWidth)
+    local levelX, slotX = Columns(rowWidth)
+    row.name:ClearAllPoints()
+    row.name:SetPoint("LEFT", row, "LEFT", NAME_X, 0)
+    row.name:SetWidth(math.max(40, levelX - NAME_X - 10))
+    row.level:ClearAllPoints()
+    row.level:SetPoint("LEFT", row, "LEFT", levelX, 0)
+    row.level:SetWidth(LEVEL_W - 8)
+    row.slot:ClearAllPoints()
+    row.slot:SetPoint("LEFT", row, "LEFT", slotX, 0)
+    row.slot:SetWidth(SLOT_W - 8)
+end
+
+local function PlaceHeader(rowWidth)
+    if not columnHeader then
+        return
+    end
+    local levelX, slotX = Columns(rowWidth)
+    local labels = columnHeader.labels
+    labels.item:SetPoint("LEFT", columnHeader, "LEFT", 4 + 9, 0)
+    labels.level:SetPoint("LEFT", columnHeader, "LEFT", 4 + levelX, 0)
+    labels.slot:SetPoint("LEFT", columnHeader, "LEFT", 4 + slotX, 0)
+end
+
+-- Groups by the entry's source (raid boss, dungeon, or world source). Raid bosses follow the
+-- Adventure Guide's boss order; everything else is alphabetical. Items inside a group are
+-- ordered by slot, then name.
+local function GroupItems(items, slot)
+    local bossOrder = {}
+    if type(slot) == "table" and type(slot.encounters) == "table" then
+        for _, encounter in ipairs(slot.encounters) do
+            if BGV.Utils.IsUsableNumber(encounter.uiOrder) then
+                for _, id in ipairs({ encounter.journalEncounterID, encounter.dungeonEncounterID, encounter.activityEncounterID }) do
+                    if BGV.Utils.IsUsableNumber(id) then
+                        bossOrder[id] = encounter.uiOrder
+                    end
+                end
+            end
+        end
+    end
+
+    local groups = {}
+    local byName = {}
+    for _, entry in ipairs(items) do
+        local name = entry.source or "Other"
+        local group = byName[name]
+        if not group then
+            group = { name = name, entries = {} }
+            byName[name] = group
+            groups[#groups + 1] = group
+        end
+        local order = entry.encounterID and bossOrder[entry.encounterID]
+        if order and (not group.order or order < group.order) then
+            group.order = order
+        end
+        group.entries[#group.entries + 1] = entry
+    end
+
+    table.sort(groups, function(left, right)
+        if left.order and right.order and left.order ~= right.order then
+            return left.order < right.order
+        end
+        if (left.order ~= nil) ~= (right.order ~= nil) then
+            return left.order ~= nil
+        end
+        return left.name < right.name
+    end)
+    for _, group in ipairs(groups) do
+        table.sort(group.entries, function(left, right)
+            local leftSlot, rightSlot = SlotName(left), SlotName(right)
+            if leftSlot ~= rightSlot then
+                return leftSlot < rightSlot
+            end
+            return (left.name or "") < (right.name or "")
+        end)
+    end
+    return groups
+end
+
+local function AddGroupHeader(group, rowWidth, y)
+    local row = Acquire()
+    row:SetHeight(GROUP_H)
+    row:SetWidth(rowWidth)
+    row:ClearAllPoints()
+    row:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -y)
+    row.entry = nil
+    row.band:Show()
+    row.bandEdge:Show()
+    if row:GetHighlightTexture() then
+        row:GetHighlightTexture():SetAlpha(0)
+    end
+    row.name:ClearAllPoints()
+    row.name:SetPoint("LEFT", row, "LEFT", 12, 0)
+    row.name:SetWidth(rowWidth - 24)
+    row.name:SetFontObject(GameFontNormal)
+    row.name:SetText(string.format("%s  |cff8a8a8e%d|r", group.name, #group.entries))
+    row.name:SetTextColor(0.95, 0.8, 0.45)
+end
+
+local function ShowMessage(text, rowWidth)
+    local row = Acquire()
+    row:ClearAllPoints()
+    row:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -8)
+    row:SetWidth(rowWidth)
+    row.entry = nil
+    row.name:ClearAllPoints()
+    row.name:SetPoint("LEFT", row, "LEFT", 12, 0)
+    row.name:SetWidth(rowWidth - 24)
+    row.name:SetText(text)
+    row.name:SetTextColor(0.55, 0.55, 0.58)
+end
+
 function Layout()
     if not child or not scroll then
         return
@@ -612,12 +784,10 @@ function Layout()
     if rail then
         rail:SetShown(not solo)
     end
-    if solo then
-        scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -100)
-        scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 16)
-    else
-        scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", LEFT_W + 16, -100)
-        scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 16)
+    scroll:ClearAllPoints()
+    scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", solo and 16 or (LEFT_W + 16), -LIST_TOP)
+    scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 16)
+    if not solo then
         PaintLinks(model)
     end
     if section then
@@ -647,27 +817,36 @@ function Layout()
         width = solo and 680 or 500
     end
     child:SetWidth(width)
+    local rowWidth = width - 8
+    PlaceHeader(rowWidth)
     local function Continue()
         if not section or not section.pending then
-            pendingWatch = nil
+            ResetWatch()
             return
         end
         local mark = tostring(selectedKey) .. ":" .. tostring(#(section.items or {}))
-        if mark == pendingWatch then
+        if mark ~= pendingWatch then
+            pendingWatch = mark
+            stalls = 0
+            BGV.LootTable.RefreshPending()
             return
         end
-        pendingWatch = mark
-        BGV.LootTable.RefreshPending()
+        -- No progress this pass; poll a little later, and stop after ~10s of nothing new.
+        -- A journal event (Nudge) or reopening the window starts it again.
+        stalls = stalls + 1
+        if stalls <= MAX_STALLS then
+            BGV.LootTable.RefreshPending(POLL_DELAY)
+        elseif stalls == MAX_STALLS + 1 and BetterGreatVaultDB and BetterGreatVaultDB.debug then
+            BGV.Utils.Print(string.format("Loot table stopped waiting on %s (%d items so far): no new items for 10s.",
+                SlotTitle(section.slot), #(section.items or {})))
+            local trace = BGV.Rewards and type(BGV.Rewards.LastLoadTrace) == "function" and BGV.Rewards.LastLoadTrace()
+            if trace then
+                BGV.Utils.Print("Last load state: " .. trace)
+            end
+        end
     end
     if not section then
-        local empty = Acquire()
-        empty:ClearAllPoints()
-        empty:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -8)
-        empty:SetWidth(width - 8)
-        empty.icon:SetTexture(nil)
-        empty.entry = nil
-        empty.text:SetText("No Great Vault progress to list yet.")
-        empty.text:SetTextColor(0.55, 0.55, 0.58)
+        ShowMessage("No Great Vault progress to list yet.", rowWidth)
         child:SetHeight(48)
         Continue()
         return
@@ -675,84 +854,45 @@ function Layout()
 
     local items = section.items or {}
     if #items == 0 then
-        local empty = Acquire()
-        empty:ClearAllPoints()
-        empty:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -8)
-        empty:SetWidth(width - 8)
-        empty.icon:SetTexture(nil)
-        empty.entry = nil
         if not section.slot.unlocked then
-            empty.text:SetText("Locked.")
+            ShowMessage("Locked.", rowWidth)
+        elseif section.pending and stalls >= MAX_STALLS then
+            ShowMessage("Loot didn't finish loading. Close and reopen this window to try again.", rowWidth)
         elseif section.pending then
-            empty.text:SetText("Loading loot...")
+            ShowMessage("Loading loot...", rowWidth)
         else
-            empty.text:SetText("No items for this filter.")
+            ShowMessage("No items for this filter.", rowWidth)
         end
-        empty.text:SetTextColor(0.55, 0.55, 0.58)
         child:SetHeight(48)
         Continue()
         return
     end
 
-    local grouped = CategoryFor(section.slot) and CategoryFor(section.slot).id == "mplus"
-    local y = 4
-    local rowIndex = 0
-    local function AddItem(entry, indent)
-        local row = Acquire()
-        row:SetHeight(32)
-        row:SetWidth(width - 8 - indent)
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", child, "TOPLEFT", 4 + indent, -y)
-        row.icon:SetSize(24, 24)
-        row.icon:SetTexture(entry.icon)
-        row.icon:SetVertexColor(1, 1, 1, 1)
-        row.entry = entry
-        if grouped then
-            row.text:SetText(string.format("%s    %s", entry.name or "Item", entry.equipLabel or ""))
-        else
-            row.text:SetText(string.format("%s    %s    %s", entry.name or "Item", entry.equipLabel or "", entry.source or ""))
+    local y = 2
+    for groupIndex, group in ipairs(GroupItems(items, section.slot)) do
+        if groupIndex > 1 then
+            y = y + 6
         end
-        local r, g, b = QualityColor(entry)
-        row.text:SetTextColor(r, g, b)
-        row.iconBG:SetVertexColor(r, g, b, 0.55)
-        row.iconBG:Show()
-        rowIndex = rowIndex + 1
-        row.stripe:SetShown(rowIndex % 2 == 0)
-        y = y + 34
-    end
-
-    if grouped then
-        local names = {}
-        local byDungeon = {}
-        for _, entry in ipairs(items) do
-            local dungeon = entry.source or "Mythic+"
-            if not byDungeon[dungeon] then
-                byDungeon[dungeon] = {}
-                names[#names + 1] = dungeon
-            end
-            byDungeon[dungeon][#byDungeon[dungeon] + 1] = entry
-        end
-        table.sort(names)
-        for _, dungeon in ipairs(names) do
-            local header = Acquire()
-            header:SetHeight(26)
-            header:SetWidth(width - 8)
-            header:ClearAllPoints()
-            header:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -y)
-            header.icon:SetSize(8, 8)
-            header.icon:SetTexture("Interface\\Buttons\\WHITE8X8")
-            header.icon:SetVertexColor(0.85, 0.65, 0.2, 1)
-            header.entry = nil
-            header.text:SetText(dungeon)
-            header.text:SetTextColor(0.85, 0.65, 0.2)
-            y = y + 28
-            for _, entry in ipairs(byDungeon[dungeon]) do
-                AddItem(entry, 22)
-            end
-        end
-    else
-        for _, entry in ipairs(items) do
-            AddItem(entry, 0)
+        AddGroupHeader(group, rowWidth, y)
+        y = y + GROUP_H
+        for index, entry in ipairs(group.entries) do
+            local row = Acquire()
+            row:SetWidth(rowWidth)
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -y)
+            PlaceColumns(row, rowWidth)
+            row.entry = entry
+            row.icon:SetTexture(entry.icon)
+            local r, g, b = QualityColor(entry)
+            row.iconBG:SetVertexColor(r, g, b, 0.55)
+            row.iconBG:Show()
+            row.name:SetText(entry.name or "Item")
+            row.name:SetTextColor(r, g, b)
+            row.level:SetText(BGV.Utils.IsUsableNumber(entry.itemLevel) and tostring(entry.itemLevel) or "-")
+            row.level:SetTextColor(0.96, 0.96, 0.96)
+            row.slot:SetText(SlotName(entry))
+            row.stripe:SetShown(index % 2 == 0)
+            y = y + ROW_H
         end
     end
     child:SetHeight(math.max(y + 8, 40))
@@ -898,9 +1038,27 @@ local function Build()
     rule:SetPoint("TOPLEFT", headerReward, "BOTTOMLEFT", 0, -6)
 
     scroll = CreateFrame("ScrollFrame", nil, frame)
-    scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", LEFT_W + 16, -100)
+    scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", LEFT_W + 16, -LIST_TOP)
     scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 16)
     scroll:EnableMouseWheel(true)
+
+    columnHeader = CreateFrame("Frame", nil, frame)
+    columnHeader:SetHeight(24)
+    columnHeader:SetPoint("BOTTOMLEFT", scroll, "TOPLEFT", 0, 4)
+    columnHeader:SetPoint("BOTTOMRIGHT", scroll, "TOPRIGHT", 0, 4)
+    Pixel(columnHeader, "BACKGROUND", 0, 0, 0, 0.35):SetAllPoints()
+    local headerRule = Pixel(columnHeader, "ARTWORK", 0.85, 0.65, 0.2, 0.6)
+    headerRule:SetHeight(1)
+    headerRule:SetPoint("BOTTOMLEFT")
+    headerRule:SetPoint("BOTTOMRIGHT")
+    columnHeader.labels = {}
+    for _, column in ipairs({ { "item", "Item" }, { "level", "Item Level" }, { "slot", "Slot" } }) do
+        local label = columnHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        label:SetText(column[2]:upper())
+        label:SetTextColor(0.85, 0.65, 0.2)
+        label:SetJustifyH("LEFT")
+        columnHeader.labels[column[1]] = label
+    end
     child = CreateFrame("Frame", nil, scroll)
     child:SetSize(520, 40)
     scroll:SetScrollChild(child)
@@ -1001,6 +1159,7 @@ function BGV.LootTable.Show(slot)
     local window = Build()
     itemCache = {}
     templateCache = {}
+    ResetWatch()
     local category = CategoryFor(slot)
     solo = category ~= nil
     if category then
