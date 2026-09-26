@@ -369,29 +369,36 @@ local function AddInstanceIcons(instanceID, icons, seen, encounterSet, difficult
     if difficultyID and type(EJ_SetDifficulty) == "function" then
         EJ_SetDifficulty(difficultyID)
     end
+    if type(EJ_IsLootListOutOfDate) == "function" and EJ_IsLootListOutOfDate() then
+        return true
+    end
+    local unresolved = false
     local count = EJ_GetNumLoot() or 0
     for index = 1, count do
         local info = Utils.Call(C_EncounterJournal.GetLootInfoByIndex, index)
         local encounterID = type(info) == "table" and info.encounterID or nil
         local fromSlot = InEncounterPool(encounterSet, encounterID)
-        if type(info) == "table" and info.icon and fromSlot and not info.handError and not info.weaponTypeError and IsVaultGear(info.itemID) then
+        if type(info) == "table" and fromSlot and not info.handError and not info.weaponTypeError then
             local itemID = info.itemID
-            if not itemID or not seen[itemID] then
-                if itemID then
+            if info.icon and info.icon ~= 0 and IsVaultGear(itemID) and Utils.IsUsableNumber(itemID) then
+                if not seen[itemID] then
                     seen[itemID] = true
+                    icons[#icons + 1] = {
+                        itemID = itemID,
+                        icon = info.icon,
+                    }
                 end
-                icons[#icons + 1] = {
-                    itemID = Utils.IsUsableNumber(itemID) and itemID or nil,
-                    icon = info.icon,
-                }
+            elseif info.name or info.icon or info.encounterID or itemID then
+                unresolved = true
             end
         end
     end
+    return unresolved
 end
 
 local function CollectIcons(difficultyID, instanceIDs, encounterSet)
     if not Rewards.EnsureJournal() or type(EJ_SetLootFilter) ~= "function" or type(instanceIDs) ~= "table" or #instanceIDs == 0 then
-        return {}
+        return {}, not Rewards.EnsureJournal()
     end
 
     local _, _, classID = UnitClass("player")
@@ -418,8 +425,11 @@ local function CollectIcons(difficultyID, instanceIDs, encounterSet)
 
     local icons = {}
     local seen = {}
+    local pending = false
     for _, instanceID in ipairs(instanceIDs) do
-        AddInstanceIcons(instanceID, icons, seen, encounterSet, difficultyID)
+        if AddInstanceIcons(instanceID, icons, seen, encounterSet, difficultyID) then
+            pending = true
+        end
     end
 
     if oldClass and type(EJ_SetLootFilter) == "function" then
@@ -431,7 +441,7 @@ local function CollectIcons(difficultyID, instanceIDs, encounterSet)
         EJ_SetDifficulty(oldDifficulty)
     end
 
-    return icons
+    return icons, pending
 end
 
 local RAID_RANK = {
@@ -684,8 +694,8 @@ function Rewards.PossibleIcons(slot)
         if iconLists[slotKey] then
             return iconLists[slotKey]
         end
-        local icons = CollectIcons(slot.level, instanceIDs, encounterSet)
-        if #icons == 0 then
+        local icons, pending = CollectIcons(slot.level, instanceIDs, encounterSet)
+        if pending or #icons == 0 then
             return icons
         end
         local order = ShuffleIcons(icons)
@@ -752,7 +762,7 @@ function Rewards.PossibleIcons(slot)
         return sample
     end
 
-    if #icons == 0 then
+    if pending or #icons == 0 then
         return icons
     end
     local order = ShuffleIcons(icons)
@@ -816,7 +826,7 @@ end
 
 local function CollectEntries(difficultyID, instanceIDs, encounterSet, names)
     if not Rewards.EnsureJournal() or type(EJ_SetLootFilter) ~= "function" or type(instanceIDs) ~= "table" or #instanceIDs == 0 then
-        return {}
+        return {}, not Rewards.EnsureJournal()
     end
 
     local _, _, classID = UnitClass("player")
@@ -843,31 +853,42 @@ local function CollectEntries(difficultyID, instanceIDs, encounterSet, names)
 
     local entries = {}
     local seen = {}
+    local pending = false
     for _, instanceID in ipairs(instanceIDs) do
         if Utils.IsUsableNumber(instanceID) and type(EJ_SelectInstance) == "function" and type(EJ_GetNumLoot) == "function" and C_EncounterJournal and type(C_EncounterJournal.GetLootInfoByIndex) == "function" then
             EJ_SelectInstance(instanceID)
             if encounterSet and difficultyID and type(EJ_SetDifficulty) == "function" then
                 EJ_SetDifficulty(difficultyID)
             end
-            local count = EJ_GetNumLoot() or 0
-            for index = 1, count do
-                local info = Utils.Call(C_EncounterJournal.GetLootInfoByIndex, index)
-                local encounterID = type(info) == "table" and info.encounterID or nil
-                local fromSlot = InEncounterPool(encounterSet, encounterID)
-                local itemID = type(info) == "table" and info.itemID or nil
-                if type(info) == "table" and fromSlot and not info.handError and not info.weaponTypeError and IsVaultGear(itemID) and Utils.IsUsableNumber(itemID) and not seen[itemID] then
-                    seen[itemID] = true
-                    local equipLoc, icon, name, quality = ItemFields(itemID)
-                    local source = type(names) == "table" and names[encounterID] or nil
-                    entries[#entries + 1] = {
-                        itemID = itemID,
-                        name = name or info.name or "Item",
-                        icon = icon or info.icon,
-                        equipLoc = equipLoc,
-                        equipLabel = EQUIP_LABEL[equipLoc] or "Gear",
-                        quality = quality,
-                        source = source or "Raid",
-                    }
+            if type(EJ_IsLootListOutOfDate) == "function" and EJ_IsLootListOutOfDate() then
+                pending = true
+            else
+                local count = EJ_GetNumLoot() or 0
+                for index = 1, count do
+                    local info = Utils.Call(C_EncounterJournal.GetLootInfoByIndex, index)
+                    local encounterID = type(info) == "table" and info.encounterID or nil
+                    local fromSlot = InEncounterPool(encounterSet, encounterID)
+                    local itemID = type(info) == "table" and info.itemID or nil
+                    if type(info) == "table" and fromSlot and not info.handError and not info.weaponTypeError and IsVaultGear(itemID) and Utils.IsUsableNumber(itemID) and not seen[itemID] then
+                        local equipLoc, icon, name, quality = ItemFields(itemID)
+                        local shownIcon = icon or info.icon
+                        local shownName = name or info.name
+                        if shownIcon and shownIcon ~= 0 and type(shownName) == "string" and shownName ~= "" then
+                            seen[itemID] = true
+                            local source = type(names) == "table" and names[encounterID] or nil
+                            entries[#entries + 1] = {
+                                itemID = itemID,
+                                name = shownName,
+                                icon = shownIcon,
+                                equipLoc = equipLoc,
+                                equipLabel = EQUIP_LABEL[equipLoc] or "Gear",
+                                quality = quality,
+                                source = source or "Raid",
+                            }
+                        else
+                            pending = true
+                        end
+                    end
                 end
             end
         end
@@ -888,7 +909,7 @@ local function CollectEntries(difficultyID, instanceIDs, encounterSet, names)
         end
         return (left.name or "") < (right.name or "")
     end)
-    return entries
+    return entries, pending
 end
 
 local function InstanceForMap(mapID)
@@ -966,7 +987,8 @@ function Rewards.ItemsForSlot(slot)
 
     if Utils.SameType(slot.type, Utils.ThresholdType("Raid")) then
         local instanceIDs, encounterSet, names = RaidScope(slot)
-        return StampReward(CollectEntries(slot.level, instanceIDs, encounterSet, names), slot)
+        local entries, pending = CollectEntries(slot.level, instanceIDs, encounterSet, names)
+        return StampReward(entries, slot), pending
     end
 
     if Utils.SameType(slot.type, Utils.ThresholdType("Activities")) then
@@ -976,15 +998,29 @@ function Rewards.ItemsForSlot(slot)
         end
         local instanceIDs = MythicPlusInstances()
         if #instanceIDs == 0 then
-            return {}
+            return {}, true
         end
         local challengeNames = ChallengeNameByInstance()
         local groups = {}
+        local pending = false
         for _, instanceID in ipairs(instanceIDs) do
-            local batch = CollectEntries(difficultyID, { instanceID }, nil, nil)
-            if #batch > 0 then
-                local name = challengeNames[instanceID] or JournalInstanceName(instanceID) or "Mythic+"
-                groups[#groups + 1] = { name = name, entries = batch }
+            local batch, batchPending = CollectEntries(difficultyID, { instanceID }, nil, nil)
+            if batchPending then
+                pending = true
+            end
+            local name = challengeNames[instanceID] or JournalInstanceName(instanceID) or "Mythic+"
+            local usable = {}
+            for _, entry in ipairs(batch) do
+                local named = type(entry.name) == "string" and entry.name ~= "" and entry.name ~= "Item" and entry.name ~= name
+                local icon = entry.icon and entry.icon ~= 0
+                if named and icon and Utils.IsUsableNumber(entry.itemID) then
+                    usable[#usable + 1] = entry
+                else
+                    pending = true
+                end
+            end
+            if #usable > 0 then
+                groups[#groups + 1] = { name = name, entries = usable }
             end
         end
         table.sort(groups, function(left, right)
@@ -997,7 +1033,7 @@ function Rewards.ItemsForSlot(slot)
                 entries[#entries + 1] = entry
             end
         end
-        return StampReward(entries, slot)
+        return StampReward(entries, slot), pending
     end
 
     if Utils.SameType(slot.type, Utils.ThresholdType("World")) then
