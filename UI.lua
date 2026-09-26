@@ -68,6 +68,11 @@ local REEL_LEFT = 2
 local REEL_RIGHT = 4
 local REEL_TICK = 1 / 60
 local REEL_SPEED = 100
+local REEL_REFRESH = 0.25
+local REEL_REFRESH_EMPTY = 0.1
+local PUMP_STALL_DELAY = 0.25
+-- Retries cover the ~10s Rewards may wait on item data before settling a list.
+local PUMP_STALL_RETRIES = 40
 
 local function ColorTexture(texture, r, g, b, a)
     if texture.SetColorTexture then
@@ -479,6 +484,29 @@ local function EnsureReel(fx)
             fx.reveal = fx.revealAim or 0
         end
         LayoutDoors(fx)
+        -- The list was still loading when the case opened (a loot spec change clears it); keep
+        -- asking while the case is open, so the reel fills in and scrolls without re-hovering.
+        if fx.iconsPending and (fx.revealTarget or 0) > 0 and fx.owner and fx.owner.bgvSlot then
+            fx.refreshClock = (fx.refreshClock or 0) + REEL_TICK
+            -- Nothing to show yet: check more often, so items appear soon after they load.
+            if fx.refreshClock >= ((fx.iconCount or 0) == 0 and REEL_REFRESH_EMPTY or REEL_REFRESH) then
+                fx.refreshClock = 0
+                local icons, pending = BGV.Rewards.PossibleIcons(fx.owner.bgvSlot)
+                fx.iconsPending = pending == true
+                if type(icons) == "table" and (icons ~= fx.iconKey or #icons ~= fx.iconCount) then
+                    fx.icons = icons
+                    fx.iconKey = icons
+                    fx.iconCount = #icons
+                    if #icons > 0 and not fx.reelReady then
+                        fx.cursor = math.random(#icons)
+                        fx.offset = 0
+                        fx.reelReady = true
+                    end
+                    PaintReel(fx)
+                    PlaceReel(fx)
+                end
+            end
+        end
         if (fx.reveal or 0) > 0 and fx.owner and fx.owner.bgvText then
             local text = fx.owner.bgvText
             if text.bgvFadeTarget ~= 0 then
@@ -619,6 +647,12 @@ end
 function PaintReel(fx)
     local icons = fx.icons
     if type(icons) ~= "table" or #icons == 0 then
+        -- Nothing loaded yet (e.g. right after a loot spec change): show an empty reel rather
+        -- than the previous list's icons.
+        for _, cell in ipairs(fx.cells or {}) do
+            cell.icon:SetTexture(nil)
+            cell.back:Hide()
+        end
         return
     end
     local specID = BGV.Bis and Utils.LootSpecID()
@@ -975,13 +1009,19 @@ local function UpdateFX(activityFrame, slot, fromEnter)
     local fx = activityFrame.bgvFX
     local hovering = fromEnter or (activityFrame.bgvHit and activityFrame.bgvHit:IsMouseOver())
     if hovering and slot and slot.unlocked and VaultIsOpen() then
-        local icons = BGV.Rewards.PossibleIcons(slot)
-        if fx.iconKey ~= icons then
+        local icons, pending = BGV.Rewards.PossibleIcons(slot)
+        if fx.iconKey ~= icons or (type(icons) == "table" and #icons ~= fx.iconCount) then
             fx.reelReady = nil
         end
         fx.icons = icons
         fx.iconKey = icons
+        fx.iconCount = type(icons) == "table" and #icons or 0
+        fx.iconsPending = pending == true
+        fx.refreshClock = 0
         StartCase(activityFrame)
+        if not fx.reelReady then
+            PaintReel(fx)
+        end
         return
     end
     if slot and slot.unlocked then
@@ -1438,8 +1478,15 @@ function UI.ScheduleContent(weeklyRewardsFrame)
             return
         end
         weeklyRewardsFrame.bgvPumping = true
+        -- A restart (e.g. after a loot spec change) supersedes any run still scheduled.
+        local generation = (weeklyRewardsFrame.bgvPumpGen or 0) + 1
+        weeklyRewardsFrame.bgvPumpGen = generation
+        weeklyRewardsFrame.bgvPumpStalls = 0
         local index = weeklyRewardsFrame.bgvPumpIndex or 1
         local function Step()
+            if weeklyRewardsFrame.bgvPumpGen ~= generation then
+                return
+            end
             if not VaultIsOpen() then
                 weeklyRewardsFrame.bgvPumping = nil
                 return
@@ -1466,10 +1513,18 @@ function UI.ScheduleContent(weeklyRewardsFrame)
             local icons, pending = BGV.Rewards.PossibleIcons(snapshot[index])
             local count = type(icons) == "table" and #icons or 0
             if pending and count <= (weeklyRewardsFrame.bgvPumpCount or -1) then
+                -- No progress this pass. Loot often arrives without a journal event, so retry on a
+                -- short timer for a few seconds before falling back to waiting for one.
+                weeklyRewardsFrame.bgvPumpStalls = (weeklyRewardsFrame.bgvPumpStalls or 0) + 1
+                if weeklyRewardsFrame.bgvPumpStalls <= PUMP_STALL_RETRIES then
+                    C_Timer.After(PUMP_STALL_DELAY, Step)
+                    return
+                end
                 weeklyRewardsFrame.bgvPumping = nil
                 weeklyRewardsFrame.bgvPumpWait = true
                 return
             end
+            weeklyRewardsFrame.bgvPumpStalls = 0
             if pending then
                 weeklyRewardsFrame.bgvPumpCount = count
             else

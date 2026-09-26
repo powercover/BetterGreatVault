@@ -276,13 +276,22 @@ end
 
 local iconLists = {}
 local journalBatches = {}
-local iconBatches = {}
 local specKnown = {}
 local specAnswers = {}
 
+-- Reads of an instance that didn't settle (see CollectEntries): batchKey -> { tries, since }.
+local readAttempts = {}
+
+-- Batches kept after giving up on a read, and what could still complete them (see
+-- Rewards.RetryGivenUp): batchKey -> { items = { [itemID] = true } or nil, stale = bool }.
+local givenUp = {}
+
+-- Timed retries already spent on lists given up on while empty and out of date: batchKey -> n.
+local staleRetries = {}
+
 local mythicMaps
 
--- /bgv debug: what each Mythic+ dungeon is waiting on during a load pass (instanceID -> text).
+-- /bgv debug: what each instance's read found during a load pass (instanceID -> text).
 local loadTrace
 local lastTraceLine
 
@@ -293,33 +302,39 @@ end
 function Rewards.InvalidateIcons()
     iconLists = {}
     journalBatches = {}
-    iconBatches = {}
+    readAttempts = {}
+    givenUp = {}
+    staleRetries = {}
     specKnown = {}
     specAnswers = {}
     mythicMaps = nil
 end
 
--- Changing the journal's loot filter or difficulty makes the client rebuild its loot list and
--- fire EJ_LOOT_DATA_RECIEVED, which makes us rescan. So a scan only sets them when it has to
--- read an uncached instance, and only if they differ from what's already set.
---
--- The player's own settings go back once scanning has been idle for a moment, not after every
--- scan: an instance whose loot isn't loaded yet (e.g. right after a loot spec change) starts
--- loading for our filter, and flipping the filter back straight away would undo that load, so
--- the next pass would find it still loading, forever.
-local RESTORE_IDLE = 1.5
-local session
+-- The journal's state (selected instance and boss, difficulty, loot and slot filters) is global
+-- and shared with the Adventure Guide, which stays registered for its journal events even while
+-- hidden. Both events fire inside the call that causes them: on EJ_DIFFICULTY_UPDATE the guide
+-- re-selects the boss or instance the player last browsed before our EJ_SetDifficulty returns
+-- (our reads then came back as that boss's loot, or empty), and on EJ_LOOT_DATA_RECIEVED it
+-- rebuilds its loot list. So a scan detaches those two handlers, saves the journal state, sets
+-- its own, reads, then puts everything back and reattaches them, all inside one call: nothing
+-- else runs in between, and the journal is left as the guide (or the game) had it.
+local GUIDE_EVENTS = { "EJ_DIFFICULTY_UPDATE", "EJ_LOOT_DATA_RECIEVED" }
+
+local scan
+
+-- True while a scan is running: journal events fired then are our own changes, not new data.
+function Rewards.IsScanning()
+    return scan ~= nil
+end
 
 local function SetDifficultyIfNeeded(difficultyID)
-    if difficultyID and type(EJ_SetDifficulty) == "function"
+    if Utils.IsUsableNumber(difficultyID) and type(EJ_SetDifficulty) == "function"
         and not (type(EJ_GetDifficulty) == "function" and EJ_GetDifficulty() == difficultyID) then
         EJ_SetDifficulty(difficultyID)
     end
 end
 
--- A read taken while the journal sits on another difficulty (EJ_SetDifficulty can be ignored
--- when the difficulty isn't valid for the instance selected at that moment) is wrong, and an
--- empty one would be cached as "no loot" for the session. Such reads count as still loading.
+-- EJ_SetDifficulty is ignored when the difficulty isn't valid for the selected instance.
 local function OnWantedDifficulty(difficultyID)
     if not difficultyID or type(EJ_GetDifficulty) ~= "function" then
         return true
@@ -328,92 +343,151 @@ local function OnWantedDifficulty(difficultyID)
     return current == nil or current == difficultyID
 end
 
-local function RestoreJournal()
-    if not session then
+local function SetLootFilterIfNeeded(classID, specID)
+    if not Utils.IsUsableNumber(classID) or type(EJ_SetLootFilter) ~= "function" then
         return
     end
-    if session.oldClass and type(EJ_SetLootFilter) == "function" then
-        EJ_SetLootFilter(session.oldClass, session.oldSpec or 0)
-    elseif type(EJ_ResetLootFilter) == "function" then
-        EJ_ResetLootFilter()
-    end
-    SetDifficultyIfNeeded(session.oldDifficulty)
-    session = nil
-end
-
-local function RestoreWhenIdle()
-    if not session then
-        return
-    end
-    if not (C_Timer and type(C_Timer.After) == "function" and type(GetTime) == "function") then
-        RestoreJournal()
-        return
-    end
-    session.lastUse = GetTime()
-    if session.restoreQueued then
-        return
-    end
-    session.restoreQueued = true
-    local function Check()
-        if not session then
+    specID = specID or 0
+    if type(EJ_GetLootFilter) == "function" then
+        local currentClass, currentSpec = EJ_GetLootFilter()
+        if currentClass == classID and (currentSpec or 0) == specID then
             return
         end
-        local idle = GetTime() - (session.lastUse or 0)
-        if idle >= RESTORE_IDLE then
-            RestoreJournal()
-        else
-            C_Timer.After(RESTORE_IDLE - idle, Check)
-        end
     end
-    C_Timer.After(RESTORE_IDLE, Check)
+    EJ_SetLootFilter(classID, specID)
 end
 
-local function EnterScan(scan)
-    if scan.entered then
+local function SlotFilter()
+    if C_EncounterJournal and type(C_EncounterJournal.GetSlotFilter) == "function" then
+        return C_EncounterJournal.GetSlotFilter()
+    end
+end
+
+-- The journal's selected instance, from its link (|Hjournal:0:instanceID:difficultyID|h). Only
+-- needed when the guide shows no instance of its own, e.g. it was never opened.
+local function SelectedInstance()
+    if type(EJ_GetInstanceInfo) ~= "function" then
+        return nil
+    end
+    -- pcall directly: earlier returns can be nil, which Utils.Call's unpack may cut off at.
+    local ok, _, _, _, _, _, _, _, link = pcall(EJ_GetInstanceInfo)
+    local instanceID = ok and type(link) == "string" and tonumber(link:match("journal:%d+:(%d+)")) or nil
+    if Utils.IsUsableNumber(instanceID) and instanceID > 0 then
+        return instanceID
+    end
+end
+
+-- Another addon doing the same dance (e.g. BonusRollPreview) can hand the guide its events back
+-- from a handler that runs inside one of our journal calls; detach them again right after.
+local function KeepGuideDetached()
+    local guide = scan and scan.guide
+    if not guide then
         return
     end
-    scan.entered = true
-    if not session then
-        session = {}
-        if type(EJ_GetLootFilter) == "function" then
-            session.oldClass, session.oldSpec = EJ_GetLootFilter()
-        end
-        session.oldDifficulty = type(EJ_GetDifficulty) == "function" and EJ_GetDifficulty() or nil
-        if C_EncounterJournal and type(C_EncounterJournal.ResetSlotFilter) == "function" then
-            C_EncounterJournal.ResetSlotFilter()
+    for _, event in ipairs(GUIDE_EVENTS) do
+        if guide:IsEventRegistered(event) then
+            guide:UnregisterEvent(event)
+            local listed = false
+            for _, detached in ipairs(scan.detached) do
+                listed = listed or detached == event
+            end
+            if not listed then
+                scan.detached[#scan.detached + 1] = event
+            end
         end
     end
+end
+
+-- Opened lazily, by the first read of an uncached instance; closed by Rewards.ItemsForSlot.
+local function OpenScan(specID)
+    if scan then
+        return
+    end
+    local saved = { detached = {} }
+    local guide = EncounterJournal
+    if type(guide) == "table" and type(guide.IsEventRegistered) == "function"
+        and type(guide.UnregisterEvent) == "function" and type(guide.RegisterEvent) == "function" then
+        saved.guide = guide
+        saved.guideInstance = guide.instanceID
+        saved.guideEncounter = guide.encounterID
+        for _, event in ipairs(GUIDE_EVENTS) do
+            if guide:IsEventRegistered(event) then
+                guide:UnregisterEvent(event)
+                saved.detached[#saved.detached + 1] = event
+            end
+        end
+    end
+    scan = saved
+    if type(EJ_GetLootFilter) == "function" then
+        saved.class, saved.spec = EJ_GetLootFilter()
+    end
+    saved.difficulty = type(EJ_GetDifficulty) == "function" and EJ_GetDifficulty() or nil
+    saved.slotFilter = SlotFilter()
+    saved.tier = type(EJ_GetCurrentTier) == "function" and EJ_GetCurrentTier() or nil
+    if not Utils.IsUsableNumber(saved.guideInstance) then
+        saved.instance = SelectedInstance()
+    end
+
     local _, _, classID = UnitClass("player")
-    if classID and scan.specID and type(EJ_SetLootFilter) == "function" then
-        local currentClass, currentSpec
-        if type(EJ_GetLootFilter) == "function" then
-            currentClass, currentSpec = EJ_GetLootFilter()
-        end
-        if currentClass ~= classID or currentSpec ~= scan.specID then
-            EJ_SetLootFilter(classID, scan.specID)
-        end
-    end
-    SetDifficultyIfNeeded(scan.difficultyID)
-end
-
-local function LeaveScan(scan)
-    if scan.entered then
-        RestoreWhenIdle()
+    SetLootFilterIfNeeded(classID, specID)
+    local noFilter = Enum and Enum.ItemSlotFilterType and Enum.ItemSlotFilterType.NoFilter
+    if C_EncounterJournal and type(C_EncounterJournal.ResetSlotFilter) == "function"
+        and (noFilter == nil or saved.slotFilter ~= noFilter) then
+        C_EncounterJournal.ResetSlotFilter()
     end
 end
 
-local function LiveJournalBudget()
-    return type(debugprofilestop) == "function"
+local function RestoreJournal(saved)
+    if Utils.IsUsableNumber(saved.tier) and type(EJ_SelectTier) == "function"
+        and type(EJ_GetCurrentTier) == "function" and EJ_GetCurrentTier() ~= saved.tier then
+        EJ_SelectTier(saved.tier)
+    end
+    -- The guide's own fields still say what it shows. Select its instance before restoring the
+    -- difficulty, which is only accepted if valid for the selected instance, then its boss.
+    local instanceID = Utils.IsUsableNumber(saved.guideInstance) and saved.guideInstance or saved.instance
+    if Utils.IsUsableNumber(instanceID) and type(EJ_SelectInstance) == "function" then
+        EJ_SelectInstance(instanceID)
+    end
+    SetDifficultyIfNeeded(saved.difficulty)
+    if Utils.IsUsableNumber(saved.guideEncounter) and type(EJ_SelectEncounter) == "function" then
+        EJ_SelectEncounter(saved.guideEncounter)
+    end
+    SetLootFilterIfNeeded(saved.class, saved.spec)
+    if saved.slotFilter ~= nil and saved.slotFilter ~= SlotFilter()
+        and C_EncounterJournal and type(C_EncounterJournal.SetSlotFilter) == "function" then
+        C_EncounterJournal.SetSlotFilter(saved.slotFilter)
+    end
 end
 
-local function AllowJournalSelect(budget)
-    if not budget or not LiveJournalBudget() then
-        return true
+local function CloseScan()
+    local saved = scan
+    if not saved then
+        return
     end
-    if budget.used >= 1 then
+    local ok, err = pcall(RestoreJournal, saved)
+    scan = nil
+    -- Reattach the guide even if restoring failed: without these events it would stop updating.
+    for _, event in ipairs(saved.detached) do
+        saved.guide:RegisterEvent(event)
+    end
+    if not ok then
+        error(err, 0)
+    end
+end
+
+-- Time a pass may spend reading uncached instances. At least one is always read, so every list
+-- keeps making progress; the rest wait for the next pass.
+local SCAN_BUDGET_MS = 8
+
+local function NewBudget()
+    return { reads = 0, start = type(debugprofilestop) == "function" and debugprofilestop() or nil }
+end
+
+local function AllowRead(budget)
+    if budget.reads > 0 and budget.start and debugprofilestop() - budget.start >= SCAN_BUDGET_MS then
         return false
     end
-    budget.used = budget.used + 1
+    budget.reads = budget.reads + 1
     return true
 end
 
@@ -510,97 +584,6 @@ local function InEncounterPool(encounterSet, encounterID)
         return true
     end
     return Utils.IsUsableNumber(encounterID) and encounterID ~= 0 and encounterSet[encounterID] == true
-end
-
-local function AddInstanceIcons(instanceID, icons, seen, encounterSet, difficultyID)
-    if not Utils.IsUsableNumber(instanceID) or type(EJ_SelectInstance) ~= "function" or type(EJ_GetNumLoot) ~= "function" then
-        return
-    end
-    if not (C_EncounterJournal and type(C_EncounterJournal.GetLootInfoByIndex) == "function") then
-        return
-    end
-
-    EJ_SelectInstance(instanceID)
-    SetDifficultyIfNeeded(difficultyID)
-    -- EJ_IsLootListOutOfDate() means the list must be re-read (it's set after a filter or spec
-    -- change); Blizzard's own journal re-reads right away, and waiting for it to clear never
-    -- ends. Read it: real loot is used, but an empty read of a stale list may just not be
-    -- loaded yet, so that one alone counts as still loading. Unloaded items are missing info.
-    if not OnWantedDifficulty(difficultyID) then
-        return true
-    end
-    local stale = type(EJ_IsLootListOutOfDate) == "function" and EJ_IsLootListOutOfDate()
-    local unresolved = false
-    local count = EJ_GetNumLoot() or 0
-    if stale and count == 0 then
-        return true
-    end
-    for index = 1, count do
-        local info = Utils.Call(C_EncounterJournal.GetLootInfoByIndex, index)
-        local encounterID = type(info) == "table" and info.encounterID or nil
-        local fromSlot = InEncounterPool(encounterSet, encounterID)
-        if type(info) == "table" and fromSlot and not info.handError and not info.weaponTypeError then
-            local itemID = info.itemID
-            if info.icon and info.icon ~= 0 and IsVaultGear(itemID) and Utils.IsUsableNumber(itemID) then
-                if not seen[itemID] then
-                    seen[itemID] = true
-                    icons[#icons + 1] = {
-                        itemID = itemID,
-                        icon = info.icon,
-                    }
-                end
-            elseif info.name or info.icon or info.encounterID or itemID then
-                unresolved = true
-            end
-        end
-    end
-    return unresolved
-end
-
-local function CollectIcons(difficultyID, instanceIDs, encounterSet)
-    if not Rewards.EnsureJournal() or type(EJ_SetLootFilter) ~= "function" or type(instanceIDs) ~= "table" or #instanceIDs == 0 then
-        return {}, not Rewards.EnsureJournal()
-    end
-
-    local specID = Utils.LootSpecID()
-    local scan = { specID = specID, difficultyID = difficultyID }
-    local icons = {}
-    local seen = {}
-    local pending = false
-    local budget = { used = 0 }
-    for _, instanceID in ipairs(instanceIDs) do
-        local batchKey = JournalBatchKey(difficultyID, instanceID, encounterSet, specID)
-        local cached = iconBatches[batchKey]
-        if cached then
-            for _, icon in ipairs(cached) do
-                local itemID = icon.itemID
-                if not itemID or not seen[itemID] then
-                    if itemID then
-                        seen[itemID] = true
-                    end
-                    icons[#icons + 1] = icon
-                end
-            end
-        elseif not AllowJournalSelect(budget) then
-            pending = true
-            break
-        else
-            EnterScan(scan)
-            local startCount = #icons
-            if AddInstanceIcons(instanceID, icons, seen, encounterSet, difficultyID) then
-                pending = true
-            else
-                local batch = {}
-                for index = startCount + 1, #icons do
-                    batch[#batch + 1] = icons[index]
-                end
-                iconBatches[batchKey] = batch
-            end
-        end
-    end
-    LeaveScan(scan)
-
-    return icons, pending
 end
 
 local RAID_RANK = {
@@ -725,78 +708,60 @@ local function RaidScope(slot)
     return ids, encounters, names, ceiling
 end
 
--- Single pass over the season's challenge maps: returns both the deduped instance ID
--- list (which dungeons to scan for loot) and an instanceID -> display name map, instead
--- of walking C_ChallengeMode.GetMapTable() and calling GetMapUIInfo per map twice over.
+-- C_ChallengeMode.GetMapUIInfo's last return is a game map ID (the dungeon's instance map), not
+-- a UI map ID, so it resolves through GetInstanceForGameMap; EJ_GetInstanceForMap takes UI maps.
+local function JournalInstanceForGameMap(mapID)
+    if not Utils.IsUsableNumber(mapID) then
+        return nil
+    end
+    local instanceID
+    if C_EncounterJournal and type(C_EncounterJournal.GetInstanceForGameMap) == "function" then
+        instanceID = Utils.Call(C_EncounterJournal.GetInstanceForGameMap, mapID)
+    end
+    if Utils.IsUsableNumber(instanceID) and instanceID > 0 then
+        return instanceID
+    end
+end
+
+-- The season's Mythic+ dungeons, from its challenge maps: the journal instance IDs to scan, an
+-- instanceID -> dungeon name map, how many challenge maps there are and how many didn't resolve.
+-- Doesn't touch the journal's selection. Built once per cache reset; with no challenge maps yet
+-- (map info not loaded on a cold login) it isn't kept, and map info is requested.
 local function MythicPlusMapInfo()
-    -- The season's dungeon list doesn't change during a session; building it selects a
-    -- journal tier and walks every challenge map, so do it once (cleared with the loot caches).
     if mythicMaps then
-        return mythicMaps.ids, mythicMaps.names, mythicMaps.seasonMaps
+        return mythicMaps.ids, mythicMaps.names, mythicMaps.seasonMaps, mythicMaps.unresolved
     end
     local ids = {}
     local names = {}
     local seen = {}
-    Rewards.EnsureJournal()
-    if type(EJ_GetCurrentTier) == "function" and type(EJ_SelectTier) == "function" then
-        local tier = EJ_GetCurrentTier()
-        if tier then
-            EJ_SelectTier(tier)
-        end
-    end
-
-    local function AddInstance(instanceID)
-        if Utils.IsUsableNumber(instanceID) and instanceID > 0 and not seen[instanceID] then
-            seen[instanceID] = true
-            ids[#ids + 1] = instanceID
-        end
-    end
-
     local seasonMaps = 0
-    if type(C_ChallengeMode.GetMapUIInfo) == "function" then
-        local maps = Utils.Call(C_ChallengeMode.GetMapTable)
-        if type(maps) == "table" then
-            seasonMaps = #maps
-            for _, mapID in ipairs(maps) do
-                local name, infoID, _, _, _, uiMapID = Utils.Call(C_ChallengeMode.GetMapUIInfo, mapID)
-                local resolvedID
-                if Utils.IsUsableNumber(uiMapID) and type(EJ_GetInstanceForMap) == "function" then
-                    local instanceID = Utils.Call(EJ_GetInstanceForMap, uiMapID)
-                    if Utils.IsUsableNumber(instanceID) and instanceID > 0 then
-                        AddInstance(instanceID)
-                        resolvedID = resolvedID or instanceID
-                    end
+    local unresolved = 0
+    Rewards.EnsureJournal()
+    local maps = C_ChallengeMode and Utils.Call(C_ChallengeMode.GetMapTable)
+    if type(maps) == "table" and type(C_ChallengeMode.GetMapUIInfo) == "function" then
+        seasonMaps = #maps
+        for _, mapID in ipairs(maps) do
+            local name, _, _, _, _, gameMapID = Utils.Call(C_ChallengeMode.GetMapUIInfo, mapID)
+            local instanceID = JournalInstanceForGameMap(gameMapID)
+            if instanceID then
+                if not seen[instanceID] then
+                    seen[instanceID] = true
+                    ids[#ids + 1] = instanceID
                 end
-                if Utils.IsUsableNumber(infoID) and infoID ~= mapID and type(EJ_GetInstanceForMap) == "function" then
-                    local instanceID = Utils.Call(EJ_GetInstanceForMap, infoID)
-                    if Utils.IsUsableNumber(instanceID) and instanceID > 0 then
-                        AddInstance(instanceID)
-                        resolvedID = resolvedID or instanceID
-                    end
+                if Utils.IsUsableString(name) and not names[instanceID] then
+                    names[instanceID] = name
                 end
-                if resolvedID and Utils.IsUsableString(name) and not names[resolvedID] then
-                    names[resolvedID] = name
-                end
+            else
+                unresolved = unresolved + 1
             end
         end
     end
-
-    if type(EJ_GetInstanceByIndex) == "function" then
-        for index = 1, 40 do
-            local instanceID = EJ_GetInstanceByIndex(index, false)
-            if not instanceID then
-                break
-            end
-            AddInstance(instanceID)
-        end
-    end
-
-    -- No challenge maps yet means map info hasn't arrived (cold login); the fallback list above
-    -- would miss the season dungeons, so don't keep it and build it again next time.
     if seasonMaps > 0 then
-        mythicMaps = { ids = ids, names = names, seasonMaps = seasonMaps }
+        mythicMaps = { ids = ids, names = names, seasonMaps = seasonMaps, unresolved = unresolved }
+    elseif BGV.GreatVault and type(BGV.GreatVault.RequestRunData) == "function" then
+        BGV.GreatVault.RequestRunData()
     end
-    return ids, names, seasonMaps
+    return ids, names, seasonMaps, unresolved
 end
 
 local function SpecCanUse(itemID, specID)
@@ -916,8 +881,13 @@ function Rewards.PossibleIcons(slot)
         return {}
     end
 
+    -- Every reel spins the same items the loot table lists for that slot (Rewards.ItemsForSlot),
+    -- so both share one scan and its cached journal reads.
     local lootSpecID = Utils.LootSpecID()
+    local worldSlot = Utils.SameType(slot.type, Utils.ThresholdType("World"))
+    local key
     if Utils.SameType(slot.type, Utils.ThresholdType("Raid")) then
+        -- The boss pool is part of the key, so a new kill gives the reel a fresh list.
         local instanceIDs, encounterSet = RaidScope(slot)
         local encounterKey = {}
         if type(encounterSet) == "table" then
@@ -926,24 +896,8 @@ function Rewards.PossibleIcons(slot)
             end
             table.sort(encounterKey)
         end
-        local slotKey = "raid:" .. tostring(slot.level) .. ":" .. table.concat(instanceIDs, ",") .. ":" .. table.concat(encounterKey, ",") .. ":" .. tostring(lootSpecID) .. ":slot:" .. tostring(slot.index or 0)
-        local finished = iconLists[slotKey]
-        if finished and finished.bgvFinal then
-            return finished, false
-        end
-        local icons, pending = CollectIcons(slot.level, instanceIDs, encounterSet)
-        if #icons == 0 then
-            if finished then
-                return finished, pending == true
-            end
-            return icons, pending == true
-        end
-        return StableOrder(slotKey, icons, pending == true), pending == true
-    end
-
-    local worldSlot = Utils.SameType(slot.type, Utils.ThresholdType("World"))
-    local key
-    if Utils.SameType(slot.type, Utils.ThresholdType("Activities")) then
+        key = "loot:raid:" .. tostring(lootSpecID) .. ":" .. tostring(slot.level) .. ":" .. table.concat(instanceIDs, ",") .. ":" .. table.concat(encounterKey, ",") .. ":" .. tostring(slot.index or 0)
+    elseif Utils.SameType(slot.type, Utils.ThresholdType("Activities")) then
         key = "loot:mplus:" .. tostring(lootSpecID) .. ":" .. tostring(slot.index) .. ":" .. tostring(slot.itemLevel)
     elseif worldSlot then
         key = "loot:world:" .. tostring(lootSpecID) .. ":" .. tostring(slot.index) .. ":" .. tostring(slot.itemLevel)
@@ -1046,118 +1000,297 @@ local function ItemFields(itemID)
     return equipLoc, icon, name, quality
 end
 
-local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, budget)
-    if not Rewards.EnsureJournal() or type(EJ_SetLootFilter) ~= "function" or type(instanceIDs) ~= "table" or #instanceIDs == 0 then
-        return {}, not Rewards.EnsureJournal()
+-- A read that can't be trusted (the journal refused the difficulty, listed no bosses, returned an
+-- empty list it flags as out of date, or listed another instance's loot) is retried a few times
+-- over at least a second, then kept as it is: a list that never settles is re-read on every pass
+-- and keeps the reels and the loot table polling. Items whose info hasn't loaded yet get longer,
+-- since that data does arrive, just later.
+local FAILED_READ_TRIES = 3
+local FAILED_READ_SECONDS = 1
+local ITEM_WAIT_TRIES = 2
+local ITEM_WAIT_SECONDS = 8
+
+local STALE_EMPTY = "empty list, flagged out of date"
+
+local function GiveUp(batchKey, tries, seconds)
+    local now = type(GetTime) == "function" and GetTime() or nil
+    local attempt = readAttempts[batchKey]
+    if not attempt then
+        attempt = { tries = 0, since = now }
+        readAttempts[batchKey] = attempt
+    end
+    attempt.tries = attempt.tries + 1
+    local waited = (now and attempt.since) and (now - attempt.since) or 0
+    return attempt.tries >= tries and waited >= seconds
+end
+
+local function BossList(instanceID)
+    local bosses = {}
+    for bossIndex = 1, 40 do
+        local name, _, bossID, _, _, _, dungeonEncounterID = Utils.Call(EJ_GetEncounterInfoByIndex, bossIndex, instanceID)
+        if not Utils.IsUsableNumber(bossID) then
+            break
+        end
+        bosses[#bosses + 1] = {
+            id = bossID,
+            alt = Utils.IsUsableNumber(dungeonEncounterID) and dungeonEncounterID or nil,
+            name = Utils.IsUsableString(name) and name or nil,
+        }
+    end
+    return bosses
+end
+
+-- Whether loot row `index` drops from one of the encounters in `set`. An item several bosses drop
+-- is listed under one of them, with the others under further encounter indexes.
+local function RowFrom(index, info, set)
+    if Utils.IsUsableNumber(info.encounterID) and set[info.encounterID] then
+        return true
+    end
+    if type(EJ_GetNumEncountersForLootByIndex) == "function" then
+        local count = Utils.Call(EJ_GetNumEncountersForLootByIndex, index)
+        for encounterIndex = 2, Utils.IsUsableNumber(count) and count or 0 do
+            local other = Utils.Call(C_EncounterJournal.GetLootInfoByIndex, index, encounterIndex)
+            if type(other) == "table" and Utils.IsUsableNumber(other.encounterID) and set[other.encounterID] then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- Reads one instance's loot inside an open scan. Raids go boss by boss, only through the bosses
+-- in the slot's pool (encounterSet): with a boss selected the list is that boss's loot, and each
+-- item gets its source. Mythic+ dungeons are read whole. Returns { entries, bosses, rows,
+-- missing (items whose info hasn't loaded), problem (why the read can't be trusted),
+-- unsupported (the instance has no such difficulty) }.
+local function ReadInstance(instanceID, difficultyID, encounterSet, names)
+    local read = { entries = {}, bosses = 0, rows = 0, missing = 0, missingItems = {} }
+    -- Mythic+ reads the whole dungeon: the journal lists no bosses for keystone dungeons (in game,
+    -- EJ_GetEncounterInfoByIndex returns nothing for them, with or without the instance ID), and
+    -- nothing needs a per-boss source there. Raids read boss by boss for their kill pool.
+    local byBoss = encounterSet ~= nil and type(EJ_GetEncounterInfoByIndex) == "function" and type(EJ_SelectEncounter) == "function"
+    local function UseDifficulty()
+        EJ_SelectInstance(instanceID)
+        SetDifficultyIfNeeded(difficultyID)
+        KeepGuideDetached()
+        return OnWantedDifficulty(difficultyID)
+    end
+    -- Twice: another addon's handler running inside the first EJ_SetDifficulty can move the
+    -- selection elsewhere.
+    if not UseDifficulty() and not UseDifficulty() and byBoss then
+        -- In case a boss selected elsewhere outlived EJ_SelectInstance and the difficulty was
+        -- judged against its instance: select one of ours and try again.
+        local first = BossList(instanceID)[1]
+        if first then
+            EJ_SelectEncounter(first.id)
+            SetDifficultyIfNeeded(difficultyID)
+            KeepGuideDetached()
+        end
+    end
+    if not OnWantedDifficulty(difficultyID) then
+        -- Judge the difficulty against this instance, whatever ended up selected.
+        EJ_SelectInstance(instanceID)
+        if type(EJ_IsValidInstanceDifficulty) == "function" and not EJ_IsValidInstanceDifficulty(difficultyID) then
+            read.unsupported = true
+        else
+            read.problem = "journal kept difficulty " .. tostring(EJ_GetDifficulty())
+        end
+        return read
     end
 
-    local specID = Utils.LootSpecID()
-    local scan = { specID = specID, difficultyID = difficultyID }
-    local entries = {}
-    local seen = {}
-    local pending = false
-    local deferred = false
-    if not budget then
-        budget = { used = 0 }
+    local byItem = {}
+    local function AddRow(info, boss)
+        local itemID = info.itemID
+        if info.handError or info.weaponTypeError or not Utils.IsUsableNumber(itemID) or not IsVaultGear(itemID) then
+            return
+        end
+        local existing = byItem[itemID]
+        if existing then
+            -- Dropped by several of the bosses read: any of them can award it.
+            if boss then
+                existing.encounterIDs[#existing.encounterIDs + 1] = boss.id
+                existing.encounterIDs[#existing.encounterIDs + 1] = boss.alt
+            end
+            return
+        end
+        -- The row's own name and icon aren't the item's until its data has loaded (a cold journal
+        -- lists the dungeon's name and a placeholder icon), so wait for the item itself.
+        local equipLoc, icon, name, quality = ItemFields(itemID)
+        if not (icon and icon ~= 0 and type(name) == "string" and name ~= "") then
+            read.missing = read.missing + 1
+            read.missingItems[itemID] = true
+            return
+        end
+        local encounterID = boss and boss.id or info.encounterID
+        local source = type(names) == "table" and (names[encounterID] or (boss and boss.alt and names[boss.alt])) or nil
+        local entry = {
+            itemID = itemID,
+            name = name,
+            icon = icon,
+            equipLoc = equipLoc,
+            equipLabel = EQUIP_LABEL[equipLoc] or "Gear",
+            quality = quality,
+            source = source or (boss and boss.name) or "Raid",
+            encounterID = encounterID,
+            encounterIDs = { encounterID, boss and boss.alt or nil },
+        }
+        byItem[itemID] = entry
+        read.entries[#read.entries + 1] = entry
     end
-    for _, instanceID in ipairs(instanceIDs) do
-        if Utils.IsUsableNumber(instanceID) and type(EJ_SelectInstance) == "function" and type(EJ_GetNumLoot) == "function" and C_EncounterJournal and type(C_EncounterJournal.GetLootInfoByIndex) == "function" then
-            local batchKey = JournalBatchKey(difficultyID, instanceID, encounterSet, specID)
-            local cached = journalBatches[batchKey]
-            if cached then
-                for _, entry in ipairs(cached) do
-                    if not seen[entry.itemID] then
-                        seen[entry.itemID] = true
-                        entries[#entries + 1] = entry
+
+    local stale = false
+    local function ReadRows(boss, own)
+        stale = stale or (type(EJ_IsLootListOutOfDate) == "function" and EJ_IsLootListOutOfDate() == true)
+        local count = EJ_GetNumLoot() or 0
+        read.rows = read.rows + count
+        local mine = boss and { [boss.id] = true } or nil
+        if boss and boss.alt then
+            mine[boss.alt] = true
+        end
+        for index = 1, count do
+            local info = Utils.Call(C_EncounterJournal.GetLootInfoByIndex, index)
+            if type(info) == "table" then
+                local tied = Utils.IsUsableNumber(info.encounterID) and info.encounterID ~= 0
+                if not boss then
+                    -- Whole-instance read (journal API without boss selection).
+                    if InEncounterPool(encounterSet, info.encounterID) then
+                        AddRow(info, nil)
                     end
-                end
-                if loadTrace then
-                    loadTrace[instanceID] = "cached(" .. #cached .. ")"
-                end
-            elseif not AllowJournalSelect(budget) then
-                pending = true
-                deferred = true
-                if loadTrace then
-                    loadTrace[instanceID] = "next pass"
-                end
-                break
-            else
-                local instancePending = false
-                local missing = 0
-                local lootCount
-                local startCount = #entries
-                EnterScan(scan)
-                -- Select first, then set difficulty: Blizzard's journal does it in this order, and
-                -- a difficulty set while another instance is selected (e.g. keystone difficulty
-                -- while the previous raid is still selected) can be ignored.
-                EJ_SelectInstance(instanceID)
-                SetDifficultyIfNeeded(difficultyID)
-                local wrongDifficulty = not OnWantedDifficulty(difficultyID)
-                -- Read even when EJ_IsLootListOutOfDate() is set: it means "re-read me", not
-                -- "not ready" (see AddInstanceIcons). Only an empty read of a stale list is
-                -- treated as still loading; unloaded items count as missing info.
-                local stale = type(EJ_IsLootListOutOfDate) == "function" and EJ_IsLootListOutOfDate()
-                do
-                    local count = EJ_GetNumLoot() or 0
-                    if wrongDifficulty or (stale and count == 0) then
-                        instancePending = true
-                    else
-                        lootCount = count
+                elseif not tied then
+                    -- Tied to no boss: Mythic+ keeps it, raids skip it (the vault awards boss loot).
+                    if not encounterSet then
+                        AddRow(info, boss)
                     end
-                    for index = 1, lootCount or 0 do
-                        local info = Utils.Call(C_EncounterJournal.GetLootInfoByIndex, index)
-                        local encounterID = type(info) == "table" and info.encounterID or nil
-                        local fromSlot = InEncounterPool(encounterSet, encounterID)
-                        local itemID = type(info) == "table" and info.itemID or nil
-                        if type(info) == "table" and fromSlot and not info.handError and not info.weaponTypeError and IsVaultGear(itemID) and Utils.IsUsableNumber(itemID) and not seen[itemID] then
-                            local equipLoc, icon, name, quality = ItemFields(itemID)
-                            local shownIcon = icon or info.icon
-                            local shownName = name or info.name
-                            if shownIcon and shownIcon ~= 0 and type(shownName) == "string" and shownName ~= "" then
-                                seen[itemID] = true
-                                local source = type(names) == "table" and names[encounterID] or nil
-                                entries[#entries + 1] = {
-                                    itemID = itemID,
-                                    name = shownName,
-                                    icon = shownIcon,
-                                    equipLoc = equipLoc,
-                                    equipLabel = EQUIP_LABEL[equipLoc] or "Gear",
-                                    quality = quality,
-                                    source = source or "Raid",
-                                    encounterID = encounterID,
-                                }
-                            else
-                                instancePending = true
-                                missing = missing + 1
-                            end
-                        end
-                    end
+                elseif RowFrom(index, info, mine) then
+                    AddRow(info, boss)
+                elseif not RowFrom(index, info, own) then
+                    read.problem = "another instance's loot in the list"
                 end
-                if loadTrace then
-                    if wrongDifficulty then
-                        loadTrace[instanceID] = "journal on difficulty " .. tostring(type(EJ_GetDifficulty) == "function" and EJ_GetDifficulty() or nil)
-                    elseif not lootCount then
-                        loadTrace[instanceID] = "journal still loading"
-                    elseif missing > 0 then
-                        loadTrace[instanceID] = string.format("item info missing %d/%d", missing, lootCount)
-                    else
-                        loadTrace[instanceID] = string.format("scanned %d of %d loot", #entries - startCount, lootCount)
-                    end
-                end
-                if instancePending then
-                    pending = true
-                else
-                    local batch = {}
-                    for index = startCount + 1, #entries do
-                        batch[#batch + 1] = entries[index]
-                    end
-                    journalBatches[batchKey] = batch
-                end
+                -- Other rows belong to this instance's other bosses (the journal sometimes lists a
+                -- whole instance with a boss selected); they're read with their own boss.
             end
         end
     end
 
-    LeaveScan(scan)
+    local bosses = byBoss and BossList(instanceID) or {}
+    read.bosses = #bosses
+    if #bosses == 0 then
+        -- Whole instance: Mythic+ always (see above); a raid whose bosses the journal won't
+        -- list is filtered to the slot's pool by each row's boss instead.
+        ReadRows(nil, nil)
+    else
+        local own = {}
+        for _, boss in ipairs(bosses) do
+            own[boss.id] = true
+            if boss.alt then
+                own[boss.alt] = true
+            end
+        end
+        for _, boss in ipairs(bosses) do
+            if not encounterSet or encounterSet[boss.id] or (boss.alt and encounterSet[boss.alt]) then
+                EJ_SelectEncounter(boss.id)
+                KeepGuideDetached()
+                ReadRows(boss, own)
+            end
+        end
+    end
+    if read.rows == 0 and stale then
+        read.problem = STALE_EMPTY
+    end
+    return read
+end
+
+-- The journal may never announce that a list it flagged out of date has loaded, so a list given
+-- up on while empty and out of date is also retried on a timer, a few times.
+local STALE_RETRY_SECONDS = 3
+local STALE_RETRY_LIMIT = 3
+
+local function ScheduleStaleRetry(batchKey)
+    local spent = staleRetries[batchKey] or 0
+    if spent >= STALE_RETRY_LIMIT or not (C_Timer and type(C_Timer.After) == "function") then
+        return
+    end
+    staleRetries[batchKey] = spent + 1
+    C_Timer.After(STALE_RETRY_SECONDS, function()
+        if givenUp[batchKey] and type(BGV.RetryLootLists) == "function" then
+            BGV.RetryLootLists(nil)
+        end
+    end)
+end
+
+local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, budget)
+    if type(instanceIDs) ~= "table" or #instanceIDs == 0 then
+        return {}, false
+    end
+    if not Rewards.EnsureJournal() or type(EJ_SelectInstance) ~= "function"
+        or not (C_EncounterJournal and type(C_EncounterJournal.GetLootInfoByIndex) == "function") then
+        return {}, true
+    end
+
+    local specID = Utils.LootSpecID()
+    local entries = {}
+    local seen = {}
+    local pending = false
+    budget = budget or NewBudget()
+    for _, instanceID in ipairs(instanceIDs) do
+        if Utils.IsUsableNumber(instanceID) then
+            local batchKey = JournalBatchKey(difficultyID, instanceID, encounterSet, specID)
+            local batch = journalBatches[batchKey]
+            if batch then
+                if loadTrace then
+                    loadTrace[instanceID] = "cached(" .. #batch .. ")"
+                end
+            elseif not AllowRead(budget) then
+                pending = true
+                if loadTrace then
+                    loadTrace[instanceID] = "next pass"
+                end
+            else
+                OpenScan(specID)
+                local read = ReadInstance(instanceID, difficultyID, encounterSet, names)
+                batch = read.entries
+                local settled, status
+                if read.unsupported then
+                    settled = true
+                    status = "no difficulty " .. tostring(difficultyID) .. " in the journal, skipped"
+                elseif read.problem then
+                    settled = GiveUp(batchKey, FAILED_READ_TRIES, FAILED_READ_SECONDS)
+                    status = read.problem .. (settled and ", gave up" or ", retrying")
+                elseif read.missing > 0 then
+                    settled = GiveUp(batchKey, ITEM_WAIT_TRIES, ITEM_WAIT_SECONDS)
+                    status = string.format("item info missing %d%s", read.missing, settled and ", gave up" or "")
+                else
+                    settled = true
+                    status = string.format("%s, %d loot, %d kept",
+                        read.bosses > 0 and (read.bosses .. " bosses") or "whole instance", read.rows, #batch)
+                end
+                if settled then
+                    journalBatches[batchKey] = batch
+                    readAttempts[batchKey] = nil
+                    if read.problem or read.missing > 0 then
+                        givenUp[batchKey] = {
+                            items = read.missing > 0 and read.missingItems or nil,
+                            stale = read.problem == STALE_EMPTY,
+                        }
+                        if read.problem == STALE_EMPTY then
+                            ScheduleStaleRetry(batchKey)
+                        end
+                    end
+                else
+                    pending = true
+                end
+                if loadTrace then
+                    loadTrace[instanceID] = status
+                end
+            end
+            for _, entry in ipairs(batch or {}) do
+                if not seen[entry.itemID] then
+                    seen[entry.itemID] = true
+                    entries[#entries + 1] = entry
+                end
+            end
+        end
+    end
 
     table.sort(entries, function(left, right)
         if left.equipLabel ~= right.equipLabel then
@@ -1165,7 +1298,27 @@ local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, bu
         end
         return (left.name or "") < (right.name or "")
     end)
-    return entries, pending, deferred
+    return entries, pending
+end
+
+-- A read given up on is kept, so a list can't poll forever, but it may still complete: when an
+-- item it was missing loads (GET_ITEM_INFO_RECEIVED / EJ_LOOT_DATA_RECIEVED with that item), or,
+-- for a list that was empty and out of date, when the journal reports new loot data (itemID nil).
+-- Drops those batches so the next pass reads them again; returns true if it dropped any.
+function Rewards.RetryGivenUp(itemID)
+    local dropped = false
+    for batchKey, why in pairs(givenUp) do
+        if (itemID and why.items and why.items[itemID]) or (not itemID and why.stale) then
+            journalBatches[batchKey] = nil
+            readAttempts[batchKey] = nil
+            givenUp[batchKey] = nil
+            dropped = true
+        end
+    end
+    if dropped then
+        iconLists = {}
+    end
+    return dropped
 end
 
 local function JournalInstanceName(instanceID)
@@ -1179,6 +1332,50 @@ local function JournalInstanceName(instanceID)
 end
 
 local KEYSTONE_DIFFICULTY = 8
+
+-- /bgv debug: one line per load pass (printed only when it changes) with what each instance's
+-- read found. `names` maps instanceID -> display name.
+local function ReportLoadTrace(kind, instanceIDs, names, pending, specID, difficultyID)
+    if not loadTrace then
+        return
+    end
+    local parts = {}
+    for _, instanceID in ipairs(instanceIDs) do
+        local name = type(names) == "table" and names[instanceID] or JournalInstanceName(instanceID)
+        parts[#parts + 1] = string.format("%s (%s): %s", name or "?", tostring(instanceID), loadTrace[instanceID] or "not reached")
+    end
+    local guide = EncounterJournal
+    local line = string.format("%s loot %s | loot spec %s, difficulty %s, guide on %s/%s | %s",
+        kind,
+        pending and "LOADING" or "done",
+        tostring(specID), tostring(difficultyID),
+        tostring(guide and guide.instanceID), tostring(guide and guide.encounterID),
+        table.concat(parts, "; "))
+    if line ~= lastTraceLine then
+        lastTraceLine = line
+        Utils.Print(line)
+    end
+    loadTrace = nil
+end
+
+local function ReportLine(line)
+    if BetterGreatVaultDB and BetterGreatVaultDB.debug and line ~= lastTraceLine then
+        lastTraceLine = line
+        Utils.Print(line)
+    end
+end
+
+local function AtCeiling(entry, ceilingEncounters)
+    if type(entry.encounterIDs) == "table" then
+        for _, encounterID in ipairs(entry.encounterIDs) do
+            if ceilingEncounters[encounterID] then
+                return true
+            end
+        end
+        return false
+    end
+    return entry.encounterID ~= nil and ceilingEncounters[entry.encounterID] == true
+end
 
 -- Returns fresh copies: the input entries are cached journal batches shared by every slot
 -- that draws on the same dungeon or boss, so stamping them in place would let one slot's
@@ -1196,7 +1393,7 @@ local function StampReward(entries, slot, ceilingEncounters)
         for key, value in pairs(source) do
             entry[key] = value
         end
-        local capped = slotAtCeiling and not (entry.encounterID and ceilingEncounters[entry.encounterID])
+        local capped = slotAtCeiling and not AtCeiling(entry, ceilingEncounters)
         entry.upgradeTrack = slot.upgradeTrack
         if capped then
             entry.itemLevel = MYTHIC_VAULT_ILVL
@@ -1217,15 +1414,18 @@ local function StampReward(entries, slot, ceilingEncounters)
     return stamped
 end
 
-function Rewards.ItemsForSlot(slot)
-    if type(slot) ~= "table" or not slot.unlocked then
-        return {}
-    end
+local function SlotItems(slot)
     Rewards.EnsureJournal()
 
     if Utils.SameType(slot.type, Utils.ThresholdType("Raid")) then
         local instanceIDs, encounterSet, names, ceilingEncounters = RaidScope(slot)
+        loadTrace = BetterGreatVaultDB and BetterGreatVaultDB.debug and {} or nil
         local entries, pending = CollectEntries(slot.level, instanceIDs, encounterSet, names)
+        local raidNames = {}
+        for _, instanceID in ipairs(instanceIDs) do
+            raidNames[instanceID] = JournalInstanceName(instanceID)
+        end
+        ReportLoadTrace("Raid", instanceIDs, raidNames, pending, Utils.LootSpecID(), slot.level)
         return StampReward(entries, slot, ceilingEncounters), pending
     end
 
@@ -1234,86 +1434,48 @@ function Rewards.ItemsForSlot(slot)
         if Utils.IsHeroicDungeonTier(slot.activityTierID) then
             difficultyID = DifficultyUtil and DifficultyUtil.ID and DifficultyUtil.ID.DungeonHeroic or 2
         end
-        local instanceIDs, challengeNames, seasonMaps = MythicPlusMapInfo()
+        local instanceIDs, challengeNames, seasonMaps, unresolved = MythicPlusMapInfo()
         if #instanceIDs == 0 then
-            if BetterGreatVaultDB and BetterGreatVaultDB.debug then
-                local line = string.format("M+ loot LOADING | no dungeon list: %d challenge maps, none resolved to a journal instance", seasonMaps or 0)
-                if line ~= lastTraceLine then
-                    lastTraceLine = line
-                    Utils.Print(line)
-                end
-            end
-            return {}, true
+            -- No challenge maps yet: map info is on its way (CHALLENGE_MODE_MAPS_UPDATE resets the
+            -- lists). Maps that the journal can't place won't change, so that isn't loading.
+            ReportLine(string.format("M+ loot %s | no dungeon list: %d challenge maps, %d not found in the journal",
+                seasonMaps == 0 and "LOADING" or "done", seasonMaps or 0, unresolved or 0))
+            return {}, seasonMaps == 0
         end
         local groups = {}
         local pending = false
-        local budget = { used = 0 }
+        local budget = NewBudget()
         local specID = Utils.LootSpecID()
         loadTrace = BetterGreatVaultDB and BetterGreatVaultDB.debug and {} or nil
         for _, instanceID in ipairs(instanceIDs) do
-            local batch, batchPending, deferred = CollectEntries(difficultyID, { instanceID }, nil, nil, budget)
-            if deferred then
-                pending = true
-                break
-            end
+            local batch, batchPending = CollectEntries(difficultyID, { instanceID }, nil, nil, budget)
             if batchPending then
                 pending = true
             end
-            local name = challengeNames[instanceID] or JournalInstanceName(instanceID) or "Mythic+"
-            local usable = {}
-            local rejected = false
-            for _, entry in ipairs(batch) do
-                local named = type(entry.name) == "string" and entry.name ~= "" and entry.name ~= "Item" and entry.name ~= name
-                local icon = entry.icon and entry.icon ~= 0
-                if named and icon and Utils.IsUsableNumber(entry.itemID) then
-                    usable[#usable + 1] = entry
-                else
-                    rejected = true
-                    pending = true
-                    if loadTrace then
-                        loadTrace[instanceID] = (loadTrace[instanceID] or "") .. " +placeholder"
-                    end
-                end
-            end
-            if rejected or batchPending then
-                journalBatches[JournalBatchKey(difficultyID, instanceID, nil, specID)] = nil
-            end
-            if #usable > 0 then
-                groups[#groups + 1] = { name = name, entries = usable }
+            if #batch > 0 then
+                groups[#groups + 1] = {
+                    name = challengeNames[instanceID] or JournalInstanceName(instanceID) or "Mythic+",
+                    entries = batch,
+                }
             end
         end
-        if loadTrace then
-            local parts = {}
-            for _, instanceID in ipairs(instanceIDs) do
-                parts[#parts + 1] = string.format("%s: %s", challengeNames[instanceID] or tostring(instanceID), loadTrace[instanceID] or "not reached")
-            end
-            local journalSpec
-            if type(EJ_GetLootFilter) == "function" then
-                local _, spec = EJ_GetLootFilter()
-                journalSpec = spec
-            end
-            local line = string.format("M+ loot %s | loot spec %s, journal spec %s, difficulty %s (want %s) | %s",
-                pending and "LOADING" or "done",
-                tostring(specID), tostring(journalSpec),
-                tostring(type(EJ_GetDifficulty) == "function" and EJ_GetDifficulty() or nil), tostring(difficultyID),
-                table.concat(parts, "; "))
-            if line ~= lastTraceLine then
-                lastTraceLine = line
-                Utils.Print(line)
-            end
-            loadTrace = nil
-        end
+        ReportLoadTrace("M+", instanceIDs, challengeNames, pending, specID, difficultyID)
         table.sort(groups, function(left, right)
             return left.name < right.name
         end)
         local entries = {}
+        local sources = {}
         for _, group in ipairs(groups) do
             for _, entry in ipairs(group.entries) do
-                entry.source = group.name
                 entries[#entries + 1] = entry
+                sources[#entries] = group.name
             end
         end
-        return StampReward(entries, slot), pending
+        local stamped = StampReward(entries, slot)
+        for index, entry in ipairs(stamped) do
+            entry.source = sources[index]
+        end
+        return stamped, pending
     end
 
     if Utils.SameType(slot.type, Utils.ThresholdType("World")) then
@@ -1332,7 +1494,7 @@ function Rewards.ItemsForSlot(slot)
                 if specKnown[answerKey] then
                     allowed = specAnswers[answerKey]
                 else
-                    if LiveJournalBudget() and lookups >= 40 then
+                    if type(debugprofilestop) == "function" and lookups >= 40 then
                         pending = true
                         break
                     end
@@ -1373,4 +1535,25 @@ function Rewards.ItemsForSlot(slot)
     end
 
     return {}
+end
+
+-- Every read runs inside one scan (see OpenScan), closed here even if reading failed, so the
+-- journal and the Adventure Guide are always put back before anything else can run.
+local scanDepth = 0
+
+function Rewards.ItemsForSlot(slot)
+    if type(slot) ~= "table" or not slot.unlocked then
+        return {}
+    end
+    -- Only the outermost call closes the scan, should anything call back into us mid-scan.
+    scanDepth = scanDepth + 1
+    local ok, entries, pending = pcall(SlotItems, slot)
+    scanDepth = scanDepth - 1
+    if scanDepth == 0 then
+        CloseScan()
+    end
+    if not ok then
+        error(entries, 0)
+    end
+    return entries, pending
 end

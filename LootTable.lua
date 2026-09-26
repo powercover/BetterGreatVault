@@ -176,6 +176,17 @@ function BGV.LootTable.Invalidate()
     end
 end
 
+-- Rebuilds the shown lists from Rewards' caches, keeping them (unlike Invalidate): used when
+-- Rewards dropped just the batches that can now complete (Rewards.RetryGivenUp).
+function BGV.LootTable.Reload()
+    itemCache = {}
+    templateCache = {}
+    ResetWatch()
+    if frame and type(frame.IsShown) == "function" and frame:IsShown() then
+        Layout()
+    end
+end
+
 function BGV.LootTable.RefreshPending(delay)
     if chunkQueued or not frame or type(frame.IsShown) ~= "function" or not frame:IsShown() then
         return
@@ -904,6 +915,9 @@ local function ApplyFilter(id, label)
     if filterLabel then
         filterLabel:SetText(label)
     end
+    if scroll then
+        scroll:SetVerticalScroll(0)
+    end
     Layout()
 end
 
@@ -1103,7 +1117,10 @@ local function Build()
             return
         end
         if event == "EJ_LOOT_DATA_RECIEVED" then
-            BGV.LootTable.Nudge()
+            -- Our own scans fire it too, with the journal changes they make.
+            if not (BGV.Rewards and type(BGV.Rewards.IsScanning) == "function" and BGV.Rewards.IsScanning()) then
+                BGV.LootTable.Nudge()
+            end
             return
         end
         BGV.LootTable.Invalidate()
@@ -1157,6 +1174,9 @@ end
 
 function BGV.LootTable.Show(slot)
     local window = Build()
+    if type(BGV.CloseJournalForVault) == "function" then
+        BGV.CloseJournalForVault()
+    end
     itemCache = {}
     templateCache = {}
     ResetWatch()

@@ -146,6 +146,11 @@ end
 
 C_EncounterJournal = {}
 
+-- GetMapUIInfo's last return (dungeon.uiMapID here) stands in for the game map ID.
+function C_EncounterJournal.GetInstanceForGameMap(mapID)
+    return EJ_GetInstanceForMap(mapID)
+end
+
 function C_EncounterJournal.GetLootInfoByIndex(index)
     local rows = state.loot[state.selected]
     return rows and rows[index] or nil
