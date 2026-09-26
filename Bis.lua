@@ -2028,7 +2028,7 @@ function BGV.Bis.Tier(itemID)
     if type(itemID) ~= "number" then
         return nil
     end
-    local specID = BGV.Utils.CurrentSpecID()
+    local specID = BGV.Utils.LootSpecID()
     local specTiers = specID and tiers[specID]
     return specTiers and specTiers[itemID] or nil
 end

@@ -443,8 +443,7 @@ local function CollectIcons(difficultyID, instanceIDs, encounterSet)
     end
 
     local _, _, classID = UnitClass("player")
-    local specIndex = type(GetSpecialization) == "function" and GetSpecialization() or nil
-    local specID = specIndex and type(GetSpecializationInfo) == "function" and GetSpecializationInfo(specIndex) or nil
+    local specID = Utils.LootSpecID()
     local oldClass, oldSpec
     if type(EJ_GetLootFilter) == "function" then
         oldClass, oldSpec = EJ_GetLootFilter()
@@ -674,7 +673,7 @@ local function WorldIcons()
     if type(rows) ~= "table" then
         return {}, false
     end
-    local specID = Utils.CurrentSpecID()
+    local specID = Utils.LootSpecID()
     local icons = {}
     local pending = false
     for _, itemID in ipairs(rows) do
@@ -799,7 +798,7 @@ function Rewards.PossibleIcons(slot)
         return {}
     end
 
-    local specIndex = type(GetSpecialization) == "function" and GetSpecialization() or 0
+    local lootSpecID = Utils.LootSpecID()
     if Utils.SameType(slot.type, Utils.ThresholdType("Raid")) then
         local instanceIDs, encounterSet = RaidScope(slot)
         local encounterKey = {}
@@ -809,7 +808,7 @@ function Rewards.PossibleIcons(slot)
             end
             table.sort(encounterKey)
         end
-        local slotKey = "raid:" .. tostring(slot.level) .. ":" .. table.concat(instanceIDs, ",") .. ":" .. table.concat(encounterKey, ",") .. ":" .. tostring(specIndex) .. ":slot:" .. tostring(slot.index or 0)
+        local slotKey = "raid:" .. tostring(slot.level) .. ":" .. table.concat(instanceIDs, ",") .. ":" .. table.concat(encounterKey, ",") .. ":" .. tostring(lootSpecID) .. ":slot:" .. tostring(slot.index or 0)
         local finished = iconLists[slotKey]
         if finished and finished.bgvFinal then
             return finished, false
@@ -827,9 +826,9 @@ function Rewards.PossibleIcons(slot)
     local worldSlot = Utils.SameType(slot.type, Utils.ThresholdType("World"))
     local key
     if Utils.SameType(slot.type, Utils.ThresholdType("Activities")) then
-        key = "loot:mplus:" .. tostring(specIndex) .. ":" .. tostring(slot.index) .. ":" .. tostring(slot.itemLevel)
+        key = "loot:mplus:" .. tostring(lootSpecID) .. ":" .. tostring(slot.index) .. ":" .. tostring(slot.itemLevel)
     elseif worldSlot then
-        key = "loot:world:" .. tostring(Utils.CurrentSpecID()) .. ":" .. tostring(slot.index) .. ":" .. tostring(slot.itemLevel)
+        key = "loot:world:" .. tostring(lootSpecID) .. ":" .. tostring(slot.index) .. ":" .. tostring(slot.itemLevel)
     else
         return {}
     end
@@ -935,8 +934,7 @@ local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, bu
     end
 
     local _, _, classID = UnitClass("player")
-    local specIndex = type(GetSpecialization) == "function" and GetSpecialization() or nil
-    local specID = specIndex and type(GetSpecializationInfo) == "function" and GetSpecializationInfo(specIndex) or nil
+    local specID = Utils.LootSpecID()
     local oldClass, oldSpec
     if type(EJ_GetLootFilter) == "function" then
         oldClass, oldSpec = EJ_GetLootFilter()
@@ -1139,8 +1137,7 @@ function Rewards.ItemsForSlot(slot)
         local groups = {}
         local pending = false
         local budget = { used = 0 }
-        local specIndex = type(GetSpecialization) == "function" and GetSpecialization() or nil
-        local specID = specIndex and type(GetSpecializationInfo) == "function" and GetSpecializationInfo(specIndex) or nil
+        local specID = Utils.LootSpecID()
         for _, instanceID in ipairs(instanceIDs) do
             local batch, batchPending, deferred = CollectEntries(difficultyID, { instanceID }, nil, nil, budget)
             if deferred then
@@ -1184,7 +1181,7 @@ function Rewards.ItemsForSlot(slot)
     end
 
     if Utils.SameType(slot.type, Utils.ThresholdType("World")) then
-        local specID = Utils.CurrentSpecID()
+        local specID = Utils.LootSpecID()
         local entries = {}
         local pending = false
         local rows = BGV.WorldLoot
