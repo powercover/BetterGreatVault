@@ -40,12 +40,7 @@ local function SpecAccentOn()
     return not saved or saved.useSpecAccent ~= false
 end
 
-local function Pixel(parent, layer, r, g, b, a)
-    local texture = parent:CreateTexture(nil, layer or "BACKGROUND")
-    texture:SetTexture("Interface\\Buttons\\WHITE8X8")
-    texture:SetVertexColor(r, g, b, a or 1)
-    return texture
-end
+local Pixel = BGV.Utils.Pixel
 
 local function Edge(parent, target, point1, rel1, x1, y1, point2, rel2, x2, y2, horizontal)
     local line = Pixel(parent, "BORDER", 0.22, 0.22, 0.24, 1)

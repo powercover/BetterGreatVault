@@ -2024,11 +2024,13 @@ local tiers = {
     },
 }
 
-function BGV.Bis.Tier(itemID)
+-- specID can be passed in by callers that already resolved it (e.g. once per reel
+-- repaint instead of once per cell) to avoid redundant GetLootSpecialization calls.
+function BGV.Bis.Tier(itemID, specID)
     if type(itemID) ~= "number" then
         return nil
     end
-    local specID = BGV.Utils.LootSpecID()
+    specID = specID or BGV.Utils.LootSpecID()
     local specTiers = specID and tiers[specID]
     return specTiers and specTiers[itemID] or nil
 end

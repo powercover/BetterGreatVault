@@ -48,12 +48,7 @@ local Layout
 local pendingWatch
 local chunkQueued
 
-local function Pixel(parent, layer, r, g, b, a)
-    local texture = parent:CreateTexture(nil, layer or "BACKGROUND")
-    texture:SetTexture("Interface\\Buttons\\WHITE8X8")
-    texture:SetVertexColor(r, g, b, a or 1)
-    return texture
-end
+local Pixel = BGV.Utils.Pixel
 
 local function CategoryFor(slot)
     if type(slot) ~= "table" then
@@ -726,7 +721,6 @@ end
 
 local function ApplyFilter(id, label)
     filterID = id
-    itemCache = {}
     if filterLabel then
         filterLabel:SetText(label)
     end

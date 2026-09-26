@@ -595,8 +595,12 @@ local function RaidScope(slot)
     return ids, encounters, names
 end
 
-local function MythicPlusInstances()
+-- Single pass over the season's challenge maps: returns both the deduped instance ID
+-- list (which dungeons to scan for loot) and an instanceID -> display name map, instead
+-- of walking C_ChallengeMode.GetMapTable() and calling GetMapUIInfo per map twice over.
+local function MythicPlusMapInfo()
     local ids = {}
+    local names = {}
     local seen = {}
     Rewards.EnsureJournal()
     if type(EJ_GetCurrentTier) == "function" and type(EJ_SelectTier) == "function" then
@@ -613,24 +617,28 @@ local function MythicPlusInstances()
         end
     end
 
-    local maps = Utils.Call(C_ChallengeMode.GetMapTable)
-    if type(maps) == "table" then
-        for _, mapID in ipairs(maps) do
-            if type(C_ChallengeMode.GetMapUIInfo) == "function" then
-                local ok, _, infoID, _, _, _, uiMapID = pcall(C_ChallengeMode.GetMapUIInfo, mapID)
-                if ok then
-                    if Utils.IsUsableNumber(uiMapID) and type(EJ_GetInstanceForMap) == "function" then
-                        local found, instanceID = pcall(EJ_GetInstanceForMap, uiMapID)
-                        if found then
-                            AddInstance(instanceID)
-                        end
+    if type(C_ChallengeMode.GetMapUIInfo) == "function" then
+        local maps = Utils.Call(C_ChallengeMode.GetMapTable)
+        if type(maps) == "table" then
+            for _, mapID in ipairs(maps) do
+                local name, infoID, _, _, _, uiMapID = Utils.Call(C_ChallengeMode.GetMapUIInfo, mapID)
+                local resolvedID
+                if Utils.IsUsableNumber(uiMapID) and type(EJ_GetInstanceForMap) == "function" then
+                    local instanceID = Utils.Call(EJ_GetInstanceForMap, uiMapID)
+                    if Utils.IsUsableNumber(instanceID) and instanceID > 0 then
+                        AddInstance(instanceID)
+                        resolvedID = resolvedID or instanceID
                     end
-                    if Utils.IsUsableNumber(infoID) and infoID ~= mapID and type(EJ_GetInstanceForMap) == "function" then
-                        local found, instanceID = pcall(EJ_GetInstanceForMap, infoID)
-                        if found then
-                            AddInstance(instanceID)
-                        end
+                end
+                if Utils.IsUsableNumber(infoID) and infoID ~= mapID and type(EJ_GetInstanceForMap) == "function" then
+                    local instanceID = Utils.Call(EJ_GetInstanceForMap, infoID)
+                    if Utils.IsUsableNumber(instanceID) and instanceID > 0 then
+                        AddInstance(instanceID)
+                        resolvedID = resolvedID or instanceID
                     end
+                end
+                if resolvedID and Utils.IsUsableString(name) and not names[resolvedID] then
+                    names[resolvedID] = name
                 end
             end
         end
@@ -646,7 +654,7 @@ local function MythicPlusInstances()
         end
     end
 
-    return ids
+    return ids, names
 end
 
 local function SpecCanUse(itemID, specID)
@@ -666,38 +674,6 @@ local function SpecCanUse(itemID, specID)
         end
     end
     return false
-end
-
-local function WorldIcons()
-    local rows = BGV.WorldLoot
-    if type(rows) ~= "table" then
-        return {}, false
-    end
-    local specID = Utils.LootSpecID()
-    local icons = {}
-    local pending = false
-    for _, itemID in ipairs(rows) do
-        if Utils.IsUsableNumber(itemID) and IsVaultGear(itemID) then
-            local allowed = SpecCanUse(itemID, specID)
-            if allowed == nil then
-                pending = true
-            elseif allowed then
-                local icon
-                if type(GetItemInfoInstant) == "function" then
-                    icon = select(5, GetItemInfoInstant(itemID))
-                end
-                if (not icon or icon == 0) and C_Item and type(C_Item.GetItemIconByID) == "function" then
-                    icon = C_Item.GetItemIconByID(itemID)
-                end
-                if icon and icon ~= 0 and not Utils.IsSecret(icon) then
-                    icons[#icons + 1] = { itemID = itemID, icon = icon }
-                else
-                    pending = true
-                end
-            end
-        end
-    end
-    return icons, pending
 end
 
 local WORLD_REEL_LIMIT = 20
@@ -1045,46 +1021,6 @@ local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, bu
     return entries, pending, deferred
 end
 
-local function InstanceForMap(mapID)
-    if not Utils.IsUsableNumber(mapID) or type(C_ChallengeMode.GetMapUIInfo) ~= "function" or type(EJ_GetInstanceForMap) ~= "function" then
-        return nil
-    end
-    local ok, _, infoID, _, _, _, uiMapID = pcall(C_ChallengeMode.GetMapUIInfo, mapID)
-    if not ok then
-        return nil
-    end
-    if Utils.IsUsableNumber(uiMapID) then
-        local found, instanceID = pcall(EJ_GetInstanceForMap, uiMapID)
-        if found and Utils.IsUsableNumber(instanceID) and instanceID > 0 then
-            return instanceID
-        end
-    end
-    if Utils.IsUsableNumber(infoID) then
-        local found, instanceID = pcall(EJ_GetInstanceForMap, infoID)
-        if found and Utils.IsUsableNumber(instanceID) and instanceID > 0 then
-            return instanceID
-        end
-    end
-end
-
-local function ChallengeNameByInstance()
-    local names = {}
-    local maps = Utils.Call(C_ChallengeMode.GetMapTable)
-    if type(maps) ~= "table" then
-        return names
-    end
-    for _, mapID in ipairs(maps) do
-        if Utils.IsUsableNumber(mapID) then
-            local instanceID = InstanceForMap(mapID)
-            local name = Utils.Call(C_ChallengeMode.GetMapUIInfo, mapID)
-            if instanceID and Utils.IsUsableString(name) then
-                names[instanceID] = name
-            end
-        end
-    end
-    return names
-end
-
 local function JournalInstanceName(instanceID)
     if type(EJ_GetInstanceInfo) ~= "function" then
         return nil
@@ -1129,11 +1065,10 @@ function Rewards.ItemsForSlot(slot)
         if Utils.IsHeroicDungeonTier(slot.activityTierID) then
             difficultyID = DifficultyUtil and DifficultyUtil.ID and DifficultyUtil.ID.DungeonHeroic or 2
         end
-        local instanceIDs = MythicPlusInstances()
+        local instanceIDs, challengeNames = MythicPlusMapInfo()
         if #instanceIDs == 0 then
             return {}, true
         end
-        local challengeNames = ChallengeNameByInstance()
         local groups = {}
         local pending = false
         local budget = { used = 0 }
