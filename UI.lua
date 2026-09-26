@@ -66,6 +66,8 @@ local CASE_SLOTS = 12
 local GATE_CORNER = 16
 local REEL_LEFT = 2
 local REEL_RIGHT = 4
+local REEL_TICK = 1 / 60
+local REEL_SPEED = 100
 
 local function ColorTexture(texture, r, g, b, a)
     if texture.SetColorTexture then
@@ -449,7 +451,7 @@ local function EnsureReel(fx)
     if fx.ticker or not (C_Timer and type(C_Timer.NewTicker) == "function") then
         return
     end
-    fx.ticker = C_Timer.NewTicker(0.02, function()
+    fx.ticker = C_Timer.NewTicker(REEL_TICK, function()
         if not VaultIsOpen() then
             if fx.owner then
                 ShutGates(fx.owner)
@@ -464,7 +466,7 @@ local function EnsureReel(fx)
             fx.revealFrom = fx.reveal or 0
             fx.revealClock = 0
         end
-        fx.revealClock = (fx.revealClock or 0) + 0.02
+        fx.revealClock = (fx.revealClock or 0) + REEL_TICK
         local delta = (fx.revealAim or 0) - (fx.revealFrom or 0)
         local duration = math.max(0.16, 0.5 * math.abs(delta))
         local progress = math.min(1, fx.revealClock / duration)
@@ -483,7 +485,7 @@ local function EnsureReel(fx)
             end
         end
         if type(fx.icons) == "table" and #fx.icons > 0 then
-            fx.offset = (fx.offset or 0) - 2
+            fx.offset = (fx.offset or 0) - REEL_SPEED * REEL_TICK
             if fx.offset <= -CASE_STRIDE then
                 fx.offset = fx.offset + CASE_STRIDE
                 fx.cursor = (fx.cursor or 1) + 1
@@ -1428,15 +1430,57 @@ function UI.ScheduleContent(weeklyRewardsFrame)
         if not VaultIsOpen() then
             return
         end
-        local ok, snapshot = pcall(BGV.GreatVault.GetSnapshot)
-        if not ok or type(snapshot) ~= "table" then
+        if weeklyRewardsFrame.bgvPumping then
             return
         end
-        for _, slot in ipairs(snapshot) do
-            if slot.unlocked and not AnimationsDisabled() then
-                BGV.Rewards.PossibleIcons(slot)
+        weeklyRewardsFrame.bgvPumping = true
+        local index = weeklyRewardsFrame.bgvPumpIndex or 1
+        local function Step()
+            if not VaultIsOpen() then
+                weeklyRewardsFrame.bgvPumping = nil
+                return
+            end
+            local ok, snapshot = pcall(BGV.GreatVault.GetSnapshot)
+            if not ok or type(snapshot) ~= "table" then
+                weeklyRewardsFrame.bgvPumping = nil
+                return
+            end
+            while index <= #snapshot do
+                local slot = snapshot[index]
+                if slot.unlocked and not AnimationsDisabled() then
+                    break
+                end
+                index = index + 1
+            end
+            weeklyRewardsFrame.bgvPumpIndex = index
+            if index > #snapshot then
+                weeklyRewardsFrame.bgvPumping = nil
+                weeklyRewardsFrame.bgvPumpIndex = nil
+                weeklyRewardsFrame.bgvPumpCount = nil
+                return
+            end
+            local icons, pending = BGV.Rewards.PossibleIcons(snapshot[index])
+            local count = type(icons) == "table" and #icons or 0
+            if pending and count <= (weeklyRewardsFrame.bgvPumpCount or -1) then
+                weeklyRewardsFrame.bgvPumping = nil
+                weeklyRewardsFrame.bgvPumpWait = true
+                return
+            end
+            if pending then
+                weeklyRewardsFrame.bgvPumpCount = count
+            else
+                index = index + 1
+                weeklyRewardsFrame.bgvPumpIndex = index
+                weeklyRewardsFrame.bgvPumpCount = nil
+            end
+            if index <= #snapshot then
+                C_Timer.After(0.05, Step)
+            else
+                weeklyRewardsFrame.bgvPumping = nil
+                weeklyRewardsFrame.bgvPumpIndex = nil
             end
         end
+        C_Timer.After(0.05, Step)
     end)
 end
 

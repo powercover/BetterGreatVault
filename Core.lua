@@ -190,15 +190,25 @@ frame:SetScript("OnEvent", function(_, event, arg1)
         if WeeklyRewardsFrame and type(WeeklyRewardsFrame.IsShown) == "function" and WeeklyRewardsFrame:IsShown() then
             BGV.UI.RefreshOpenFrame()
             BGV.UI.ScheduleContent(WeeklyRewardsFrame)
-        else
-            BGV.UI.Prepare()
+        elseif WeeklyRewardsFrame then
+            WeeklyRewardsFrame.bgvShellReady = nil
+            WeeklyRewardsFrame.bgvPumping = nil
+            WeeklyRewardsFrame.bgvPumpIndex = nil
+            WeeklyRewardsFrame.bgvPumpWait = nil
         end
         return
     end
 
     if event == "EJ_LOOT_DATA_RECIEVED" then
-        RefreshLootLists()
-        BGV.UI.RefreshOpenFrame()
+        if BGV.LootTable and type(BGV.LootTable.Nudge) == "function" then
+            BGV.LootTable.Nudge()
+        end
+        if WeeklyRewardsFrame and WeeklyRewardsFrame.bgvPumpWait and BGV.UI and type(BGV.UI.ScheduleContent) == "function" then
+            WeeklyRewardsFrame.bgvPumpWait = nil
+            if type(WeeklyRewardsFrame.IsShown) == "function" and WeeklyRewardsFrame:IsShown() then
+                BGV.UI.ScheduleContent(WeeklyRewardsFrame)
+            end
+        end
     end
 end)
 

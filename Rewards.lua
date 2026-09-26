@@ -275,9 +275,50 @@ function Rewards.GetNextIncrease(activity)
 end
 
 local iconLists = {}
+local journalBatches = {}
+local iconBatches = {}
+local specKnown = {}
+local specAnswers = {}
 
 function Rewards.InvalidateIcons()
     iconLists = {}
+    journalBatches = {}
+    iconBatches = {}
+    specKnown = {}
+    specAnswers = {}
+end
+
+local function LiveJournalBudget()
+    return type(debugprofilestop) == "function"
+end
+
+local function AllowJournalSelect(budget)
+    if not budget or not LiveJournalBudget() then
+        return true
+    end
+    if budget.used >= 1 then
+        return false
+    end
+    budget.used = budget.used + 1
+    return true
+end
+
+local function JournalBatchKey(difficultyID, instanceID, encounterSet, specID)
+    local encounterKey = ""
+    if type(encounterSet) == "table" then
+        local ids = {}
+        for encounterID in pairs(encounterSet) do
+            ids[#ids + 1] = tostring(encounterID)
+        end
+        table.sort(ids)
+        encounterKey = table.concat(ids, ",")
+    end
+    return table.concat({
+        tostring(difficultyID),
+        tostring(instanceID),
+        tostring(specID),
+        encounterKey,
+    }, ":")
 end
 
 function Rewards.ShowingWeeklyProgress()
@@ -426,9 +467,34 @@ local function CollectIcons(difficultyID, instanceIDs, encounterSet)
     local icons = {}
     local seen = {}
     local pending = false
+    local budget = { used = 0 }
     for _, instanceID in ipairs(instanceIDs) do
-        if AddInstanceIcons(instanceID, icons, seen, encounterSet, difficultyID) then
+        local batchKey = JournalBatchKey(difficultyID, instanceID, encounterSet, specID)
+        local cached = iconBatches[batchKey]
+        if cached then
+            for _, icon in ipairs(cached) do
+                local itemID = icon.itemID
+                if not itemID or not seen[itemID] then
+                    if itemID then
+                        seen[itemID] = true
+                    end
+                    icons[#icons + 1] = icon
+                end
+            end
+        elseif not AllowJournalSelect(budget) then
             pending = true
+            break
+        else
+            local startCount = #icons
+            if AddInstanceIcons(instanceID, icons, seen, encounterSet, difficultyID) then
+                pending = true
+            else
+                local batch = {}
+                for index = startCount + 1, #icons do
+                    batch[#batch + 1] = icons[index]
+                end
+                iconBatches[batchKey] = batch
+            end
         end
     end
 
@@ -675,6 +741,59 @@ local function ShuffleIcons(icons)
     return order
 end
 
+local function IconIdentity(icon)
+    if type(icon) ~= "table" then
+        return nil
+    end
+    return icon.itemID or icon.icon
+end
+
+local function StableOrder(slotKey, icons, pending, limit)
+    local cached = iconLists[slotKey]
+    if cached and cached.bgvFinal then
+        return cached
+    end
+    if not cached then
+        local seeded = icons
+        if limit and #icons > limit then
+            seeded = SampleIcons(icons, limit)
+        else
+            seeded = ShuffleIcons(icons)
+        end
+        cached = seeded
+        iconLists[slotKey] = cached
+    else
+        local seen = {}
+        for _, icon in ipairs(cached) do
+            local identity = IconIdentity(icon)
+            if identity then
+                seen[identity] = true
+            end
+        end
+        local extra = {}
+        for _, icon in ipairs(icons) do
+            local identity = IconIdentity(icon)
+            if identity and not seen[identity] then
+                seen[identity] = true
+                extra[#extra + 1] = icon
+            end
+        end
+        if #extra > 1 then
+            extra = ShuffleIcons(extra)
+        end
+        for _, icon in ipairs(extra) do
+            if not limit or #cached < limit then
+                cached[#cached + 1] = icon
+            end
+        end
+    end
+    if not pending then
+        cached.bgvFinal = true
+    end
+    cached.bgvCount = #cached
+    return cached
+end
+
 function Rewards.PossibleIcons(slot)
     if type(slot) ~= "table" or not slot.unlocked or not Rewards.ShowingWeeklyProgress() then
         return {}
@@ -691,16 +810,18 @@ function Rewards.PossibleIcons(slot)
             table.sort(encounterKey)
         end
         local slotKey = "raid:" .. tostring(slot.level) .. ":" .. table.concat(instanceIDs, ",") .. ":" .. table.concat(encounterKey, ",") .. ":" .. tostring(specIndex) .. ":slot:" .. tostring(slot.index or 0)
-        if iconLists[slotKey] then
-            return iconLists[slotKey]
+        local finished = iconLists[slotKey]
+        if finished and finished.bgvFinal then
+            return finished, false
         end
         local icons, pending = CollectIcons(slot.level, instanceIDs, encounterSet)
-        if pending or #icons == 0 then
-            return icons
+        if #icons == 0 then
+            if finished then
+                return finished, pending == true
+            end
+            return icons, pending == true
         end
-        local order = ShuffleIcons(icons)
-        iconLists[slotKey] = order
-        return order
+        return StableOrder(slotKey, icons, pending == true), pending == true
     end
 
     local worldSlot = Utils.SameType(slot.type, Utils.ThresholdType("World"))
@@ -714,11 +835,9 @@ function Rewards.PossibleIcons(slot)
     end
 
     local slotKey = key .. ":slot"
-    if not worldSlot and iconLists[slotKey] then
-        return iconLists[slotKey]
-    end
-    if worldSlot and iconLists[slotKey] then
-        return iconLists[slotKey]
+    local finished = iconLists[slotKey]
+    if finished and finished.bgvFinal then
+        return finished, false
     end
 
     local entries, pending = Rewards.ItemsForSlot(slot)
@@ -742,32 +861,18 @@ function Rewards.PossibleIcons(slot)
         end
     end
 
-    if worldSlot then
-        if #icons == 0 then
-            return icons
+    if #icons == 0 then
+        if finished then
+            return finished, pending == true
         end
-        if pending then
-            local loadingKey = slotKey .. ":loading"
-            local cached = iconLists[loadingKey]
-            if not cached or (cached.bgvCount or 0) < #icons then
-                local sample = SampleIcons(icons, WORLD_REEL_LIMIT)
-                sample.bgvCount = #icons
-                iconLists[loadingKey] = sample
-            end
-            return iconLists[loadingKey]
-        end
-        local sample = SampleIcons(icons, WORLD_REEL_LIMIT)
-        sample.bgvCount = #icons
-        iconLists[slotKey] = sample
-        return sample
+        return icons, pending == true
     end
 
-    if pending or #icons == 0 then
-        return icons
+    if worldSlot then
+        return StableOrder(slotKey, icons, pending == true, WORLD_REEL_LIMIT), pending == true
     end
-    local order = ShuffleIcons(icons)
-    iconLists[slotKey] = order
-    return order
+
+    return StableOrder(slotKey, icons, pending == true), pending == true
 end
 
 local EQUIP_LABEL = {
@@ -824,7 +929,7 @@ local function ItemFields(itemID)
     return equipLoc, icon, name, quality
 end
 
-local function CollectEntries(difficultyID, instanceIDs, encounterSet, names)
+local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, budget)
     if not Rewards.EnsureJournal() or type(EJ_SetLootFilter) ~= "function" or type(instanceIDs) ~= "table" or #instanceIDs == 0 then
         return {}, not Rewards.EnsureJournal()
     end
@@ -854,41 +959,71 @@ local function CollectEntries(difficultyID, instanceIDs, encounterSet, names)
     local entries = {}
     local seen = {}
     local pending = false
+    local deferred = false
+    if not budget then
+        budget = { used = 0 }
+    end
     for _, instanceID in ipairs(instanceIDs) do
         if Utils.IsUsableNumber(instanceID) and type(EJ_SelectInstance) == "function" and type(EJ_GetNumLoot) == "function" and C_EncounterJournal and type(C_EncounterJournal.GetLootInfoByIndex) == "function" then
-            EJ_SelectInstance(instanceID)
-            if encounterSet and difficultyID and type(EJ_SetDifficulty) == "function" then
-                EJ_SetDifficulty(difficultyID)
-            end
-            if type(EJ_IsLootListOutOfDate) == "function" and EJ_IsLootListOutOfDate() then
+            local batchKey = JournalBatchKey(difficultyID, instanceID, encounterSet, specID)
+            local cached = journalBatches[batchKey]
+            if cached then
+                for _, entry in ipairs(cached) do
+                    if not seen[entry.itemID] then
+                        seen[entry.itemID] = true
+                        entries[#entries + 1] = entry
+                    end
+                end
+            elseif not AllowJournalSelect(budget) then
                 pending = true
+                deferred = true
+                break
             else
-                local count = EJ_GetNumLoot() or 0
-                for index = 1, count do
-                    local info = Utils.Call(C_EncounterJournal.GetLootInfoByIndex, index)
-                    local encounterID = type(info) == "table" and info.encounterID or nil
-                    local fromSlot = InEncounterPool(encounterSet, encounterID)
-                    local itemID = type(info) == "table" and info.itemID or nil
-                    if type(info) == "table" and fromSlot and not info.handError and not info.weaponTypeError and IsVaultGear(itemID) and Utils.IsUsableNumber(itemID) and not seen[itemID] then
-                        local equipLoc, icon, name, quality = ItemFields(itemID)
-                        local shownIcon = icon or info.icon
-                        local shownName = name or info.name
-                        if shownIcon and shownIcon ~= 0 and type(shownName) == "string" and shownName ~= "" then
-                            seen[itemID] = true
-                            local source = type(names) == "table" and names[encounterID] or nil
-                            entries[#entries + 1] = {
-                                itemID = itemID,
-                                name = shownName,
-                                icon = shownIcon,
-                                equipLoc = equipLoc,
-                                equipLabel = EQUIP_LABEL[equipLoc] or "Gear",
-                                quality = quality,
-                                source = source or "Raid",
-                            }
-                        else
-                            pending = true
+                local instancePending = false
+                local startCount = #entries
+                EJ_SelectInstance(instanceID)
+                if encounterSet and difficultyID and type(EJ_SetDifficulty) == "function" then
+                    EJ_SetDifficulty(difficultyID)
+                end
+                if type(EJ_IsLootListOutOfDate) == "function" and EJ_IsLootListOutOfDate() then
+                    instancePending = true
+                else
+                    local count = EJ_GetNumLoot() or 0
+                    for index = 1, count do
+                        local info = Utils.Call(C_EncounterJournal.GetLootInfoByIndex, index)
+                        local encounterID = type(info) == "table" and info.encounterID or nil
+                        local fromSlot = InEncounterPool(encounterSet, encounterID)
+                        local itemID = type(info) == "table" and info.itemID or nil
+                        if type(info) == "table" and fromSlot and not info.handError and not info.weaponTypeError and IsVaultGear(itemID) and Utils.IsUsableNumber(itemID) and not seen[itemID] then
+                            local equipLoc, icon, name, quality = ItemFields(itemID)
+                            local shownIcon = icon or info.icon
+                            local shownName = name or info.name
+                            if shownIcon and shownIcon ~= 0 and type(shownName) == "string" and shownName ~= "" then
+                                seen[itemID] = true
+                                local source = type(names) == "table" and names[encounterID] or nil
+                                entries[#entries + 1] = {
+                                    itemID = itemID,
+                                    name = shownName,
+                                    icon = shownIcon,
+                                    equipLoc = equipLoc,
+                                    equipLabel = EQUIP_LABEL[equipLoc] or "Gear",
+                                    quality = quality,
+                                    source = source or "Raid",
+                                }
+                            else
+                                instancePending = true
+                            end
                         end
                     end
+                end
+                if instancePending then
+                    pending = true
+                else
+                    local batch = {}
+                    for index = startCount + 1, #entries do
+                        batch[#batch + 1] = entries[index]
+                    end
+                    journalBatches[batchKey] = batch
                 end
             end
         end
@@ -909,7 +1044,7 @@ local function CollectEntries(difficultyID, instanceIDs, encounterSet, names)
         end
         return (left.name or "") < (right.name or "")
     end)
-    return entries, pending
+    return entries, pending, deferred
 end
 
 local function InstanceForMap(mapID)
@@ -1003,21 +1138,33 @@ function Rewards.ItemsForSlot(slot)
         local challengeNames = ChallengeNameByInstance()
         local groups = {}
         local pending = false
+        local budget = { used = 0 }
+        local specIndex = type(GetSpecialization) == "function" and GetSpecialization() or nil
+        local specID = specIndex and type(GetSpecializationInfo) == "function" and GetSpecializationInfo(specIndex) or nil
         for _, instanceID in ipairs(instanceIDs) do
-            local batch, batchPending = CollectEntries(difficultyID, { instanceID }, nil, nil)
+            local batch, batchPending, deferred = CollectEntries(difficultyID, { instanceID }, nil, nil, budget)
+            if deferred then
+                pending = true
+                break
+            end
             if batchPending then
                 pending = true
             end
             local name = challengeNames[instanceID] or JournalInstanceName(instanceID) or "Mythic+"
             local usable = {}
+            local rejected = false
             for _, entry in ipairs(batch) do
                 local named = type(entry.name) == "string" and entry.name ~= "" and entry.name ~= "Item" and entry.name ~= name
                 local icon = entry.icon and entry.icon ~= 0
                 if named and icon and Utils.IsUsableNumber(entry.itemID) then
                     usable[#usable + 1] = entry
                 else
+                    rejected = true
                     pending = true
                 end
+            end
+            if rejected or batchPending then
+                journalBatches[JournalBatchKey(difficultyID, instanceID, nil, specID)] = nil
             end
             if #usable > 0 then
                 groups[#groups + 1] = { name = name, entries = usable }
@@ -1044,12 +1191,28 @@ function Rewards.ItemsForSlot(slot)
         if type(rows) ~= "table" then
             return entries, pending
         end
+        local lookups = 0
         for _, itemID in ipairs(rows) do
             if Utils.IsUsableNumber(itemID) and IsVaultGear(itemID) then
-                local allowed = SpecCanUse(itemID, specID)
-                if allowed == nil then
-                    pending = true
-                elseif allowed then
+                local answerKey = tostring(specID) .. ":" .. tostring(itemID)
+                local allowed
+                if specKnown[answerKey] then
+                    allowed = specAnswers[answerKey]
+                else
+                    if LiveJournalBudget() and lookups >= 40 then
+                        pending = true
+                        break
+                    end
+                    lookups = lookups + 1
+                    allowed = SpecCanUse(itemID, specID)
+                    if allowed == nil then
+                        pending = true
+                    else
+                        specKnown[answerKey] = true
+                        specAnswers[answerKey] = allowed and true or false
+                    end
+                end
+                if allowed then
                     local equipLoc, icon, name, quality = ItemFields(itemID)
                     if icon and icon ~= 0 then
                         entries[#entries + 1] = {

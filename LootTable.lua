@@ -43,6 +43,8 @@ local linkRows = {}
 local itemCache = {}
 local templateCache = {}
 local Layout
+local pendingWatch
+local chunkQueued
 
 local function Pixel(parent, layer, r, g, b, a)
     local texture = parent:CreateTexture(nil, layer or "BACKGROUND")
@@ -143,9 +145,37 @@ end
 function BGV.LootTable.Invalidate()
     itemCache = {}
     templateCache = {}
+    pendingWatch = nil
+    if BGV.Rewards and type(BGV.Rewards.InvalidateIcons) == "function" then
+        BGV.Rewards.InvalidateIcons()
+    end
     if frame and type(frame.IsShown) == "function" and frame:IsShown() then
         Layout()
     end
+end
+
+function BGV.LootTable.RefreshPending()
+    if chunkQueued or not frame or type(frame.IsShown) ~= "function" or not frame:IsShown() then
+        return
+    end
+    if not (C_Timer and type(C_Timer.After) == "function") then
+        return
+    end
+    chunkQueued = true
+    C_Timer.After(0, function()
+        chunkQueued = false
+        if frame and frame:IsShown() then
+            Layout()
+        end
+    end)
+end
+
+function BGV.LootTable.Nudge()
+    if not frame or type(frame.IsShown) ~= "function" or not frame:IsShown() then
+        return
+    end
+    pendingWatch = nil
+    BGV.LootTable.RefreshPending()
 end
 
 local seenCharacter
@@ -559,6 +589,18 @@ function Layout()
         width = solo and 680 or 500
     end
     child:SetWidth(width)
+    local function Continue()
+        if not section or not section.pending then
+            pendingWatch = nil
+            return
+        end
+        local mark = tostring(selectedKey) .. ":" .. tostring(#(section.items or {}))
+        if mark == pendingWatch then
+            return
+        end
+        pendingWatch = mark
+        BGV.LootTable.RefreshPending()
+    end
     if not section then
         local empty = Acquire()
         empty:ClearAllPoints()
@@ -569,6 +611,7 @@ function Layout()
         empty.text:SetText("No Great Vault progress to list yet.")
         empty.text:SetTextColor(0.55, 0.55, 0.58)
         child:SetHeight(48)
+        Continue()
         return
     end
 
@@ -589,6 +632,7 @@ function Layout()
         end
         empty.text:SetTextColor(0.55, 0.55, 0.58)
         child:SetHeight(48)
+        Continue()
         return
     end
 
@@ -649,6 +693,7 @@ function Layout()
         end
     end
     child:SetHeight(math.max(y + 8, 40))
+    Continue()
 end
 
 local function ApplyFilter(id, label)
@@ -814,6 +859,10 @@ local function Build()
     frame:SetScript("OnEvent", function(_, event)
         if event == "PLAYER_ENTERING_WORLD" then
             BGV.LootTable.OnCharacterChanged()
+            return
+        end
+        if event == "EJ_LOOT_DATA_RECIEVED" then
+            BGV.LootTable.Nudge()
             return
         end
         BGV.LootTable.Invalidate()
