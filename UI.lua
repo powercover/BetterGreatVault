@@ -13,6 +13,10 @@ local function OpenLootTableOnClick()
     return not BetterGreatVaultDB or BetterGreatVaultDB.openLootTable ~= false
 end
 
+local function SpecButtonEnabled()
+    return not BetterGreatVaultDB or BetterGreatVaultDB.showLootSpecButton ~= false
+end
+
 local function ApplyFont(fontString)
     local font = GameFontHighlightSmall:GetFont()
     if font then
@@ -1172,17 +1176,21 @@ local function EnsureSpecButton(weeklyRewardsFrame)
     return button
 end
 
-local function RefreshSpecButton(weeklyRewardsFrame)
-    local button = EnsureSpecButton(weeklyRewardsFrame)
-    button:SetText("Loot Spec: " .. Utils.LootSpecLabel())
-    button:Show()
-end
-
 local function HideSpecButton(weeklyRewardsFrame)
     local button = weeklyRewardsFrame and weeklyRewardsFrame.bgvSpecButton
     if button then
         button:Hide()
     end
+end
+
+local function RefreshSpecButton(weeklyRewardsFrame)
+    if not SpecButtonEnabled() then
+        HideSpecButton(weeklyRewardsFrame)
+        return
+    end
+    local button = EnsureSpecButton(weeklyRewardsFrame)
+    button:SetText("Loot Spec: " .. Utils.LootSpecLabel())
+    button:Show()
 end
 
 local function RestoreScene()
