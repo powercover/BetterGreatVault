@@ -403,7 +403,43 @@ local function StopReel(fx)
     end
 end
 
-local PaintReel, PlaceReel, RestClosed, ShutGates, VaultIsOpen
+local PaintReel, PlaceReel, RestClosed, ShutGates, VaultIsOpen, CloseCase
+
+local function PointerOnSlot(activityFrame)
+    local hit = activityFrame and activityFrame.bgvHit
+    if not hit then
+        return false
+    end
+    local function Owned(frame)
+        if frame == GameTooltip then
+            local owner = GameTooltip.GetOwner and GameTooltip:GetOwner()
+            return owner == hit or owner == activityFrame
+        end
+        while frame do
+            if frame == hit or frame == activityFrame then
+                return true
+            end
+            if not frame.GetParent then
+                return false
+            end
+            frame = frame:GetParent()
+        end
+        return false
+    end
+    if type(GetMouseFoci) == "function" then
+        local foci = GetMouseFoci()
+        local top = type(foci) == "table" and foci[1] or nil
+        if top then
+            return Owned(top)
+        end
+    elseif type(GetMouseFocus) == "function" then
+        local focus = GetMouseFocus()
+        if focus then
+            return Owned(focus)
+        end
+    end
+    return hit:IsMouseOver()
+end
 
 local function EnsureReel(fx)
     if fx.ticker or not (C_Timer and type(C_Timer.NewTicker) == "function") then
@@ -415,6 +451,9 @@ local function EnsureReel(fx)
                 ShutGates(fx.owner)
             end
             return
+        end
+        if (fx.revealTarget or 0) > 0 and fx.owner and not PointerOnSlot(fx.owner) then
+            CloseCase(fx.owner)
         end
         if (fx.revealTarget or 0) ~= fx.revealAim then
             fx.revealAim = fx.revealTarget or 0
@@ -745,7 +784,7 @@ local function StartCase(activityFrame)
     FadeCaption(activityFrame, 0)
 end
 
-local function CloseCase(activityFrame)
+function CloseCase(activityFrame)
     if AnimationsDisabled() then
         return
     end
@@ -1005,7 +1044,7 @@ local function EnsureHit(activityFrame)
             if not activityFrame:IsShown() or (activityFrame.bgvHoverGen or 0) ~= generation then
                 return
             end
-            if hit:IsMouseOver() or activityFrame:IsMouseOver() then
+            if PointerOnSlot(activityFrame) then
                 return
             end
             CloseCase(activityFrame)
