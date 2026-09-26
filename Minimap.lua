@@ -96,25 +96,26 @@ end)
 button:SetScript("OnDragStart", function(self)
     self.dragging = true
     self.dragged = true
+    self:SetScript("OnUpdate", function(buttonFrame)
+        if not buttonFrame.dragging or not Minimap then
+            buttonFrame:SetScript("OnUpdate", nil)
+            return
+        end
+        local mx, my = Minimap:GetCenter()
+        local cx, cy = GetCursorPosition()
+        local scale = Minimap:GetEffectiveScale()
+        if not mx or not scale or scale == 0 then
+            return
+        end
+        local angle = math.deg(math.atan2(cy / scale - my, cx / scale - mx))
+        BetterGreatVaultDB.minimapAngle = angle
+        Place()
+    end)
 end)
 
 button:SetScript("OnDragStop", function(self)
     self.dragging = false
-end)
-
-button:SetScript("OnUpdate", function(self)
-    if not self.dragging or not Minimap then
-        return
-    end
-    local mx, my = Minimap:GetCenter()
-    local cx, cy = GetCursorPosition()
-    local scale = Minimap:GetEffectiveScale()
-    if not mx or not scale or scale == 0 then
-        return
-    end
-    local angle = math.deg(math.atan2(cy / scale - my, cx / scale - mx))
-    BetterGreatVaultDB.minimapAngle = angle
-    Place()
+    self:SetScript("OnUpdate", nil)
 end)
 
 button:SetScript("OnEnter", function(self)
