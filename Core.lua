@@ -36,61 +36,6 @@ local function RefreshLootLists()
     end
 end
 
--- The Great Vault and the Adventure Guide are kept apart (the player's choice): whichever one
--- opens last stays, the other is closed with a note. Loot scans no longer depend on this, since
--- each scan isolates the journal (see OpenScan in Rewards.lua). Only while the addon is active:
--- a claim-week vault is plain Blizzard UI.
-local EXCLUSIVE_NOTE = "For the best experience, don't keep the Great Vault and the Adventure Guide open at the same time. Closed %s."
-
-local function PanelShown(panel)
-    return panel ~= nil and type(panel.IsShown) == "function" and panel:IsShown()
-end
-
-local function ClosePanel(panel)
-    if not PanelShown(panel) then
-        return false
-    end
-    if type(HideUIPanel) == "function" then
-        pcall(HideUIPanel, panel)
-    end
-    if PanelShown(panel) then
-        panel:Hide()
-    end
-    return true
-end
-
-local function AddonActive()
-    return BGV.Rewards and type(BGV.Rewards.ShowingWeeklyProgress) == "function" and BGV.Rewards.ShowingWeeklyProgress()
-end
-
-local function Later(callback)
-    if C_Timer and type(C_Timer.After) == "function" then
-        C_Timer.After(0, callback)
-    else
-        callback()
-    end
-end
-
-function BGV.CloseVaultForJournal()
-    if not AddonActive() or not PanelShown(EncounterJournal) then
-        return
-    end
-    local closed = ClosePanel(WeeklyRewardsFrame)
-    closed = ClosePanel(_G.BetterGreatVaultLootTable) or closed
-    if closed then
-        Utils.Print(string.format(EXCLUSIVE_NOTE, "the Great Vault"))
-    end
-end
-
-function BGV.CloseJournalForVault()
-    if not AddonActive() then
-        return
-    end
-    if ClosePanel(EncounterJournal) then
-        Utils.Print(string.format(EXCLUSIVE_NOTE, "the Adventure Guide"))
-    end
-end
-
 -- Restarts the vault's reel preload if it stopped to wait for journal data (or `always`).
 local function ResumePump(always)
     local vault = WeeklyRewardsFrame
@@ -116,30 +61,7 @@ function BGV.RetryLootLists(itemID)
     return true
 end
 
-local function GuardJournal()
-    if EncounterJournal and type(EncounterJournal.HookScript) == "function" and not EncounterJournal.bgvExclusive then
-        EncounterJournal.bgvExclusive = true
-        EncounterJournal:HookScript("OnShow", function()
-            Later(BGV.CloseVaultForJournal)
-        end)
-    end
-end
-
-local function GuardVault()
-    if WeeklyRewardsFrame and type(WeeklyRewardsFrame.HookScript) == "function" and not WeeklyRewardsFrame.bgvExclusive then
-        WeeklyRewardsFrame.bgvExclusive = true
-        WeeklyRewardsFrame:HookScript("OnShow", function()
-            Later(function()
-                if PanelShown(WeeklyRewardsFrame) then
-                    BGV.CloseJournalForVault()
-                end
-            end)
-        end)
-    end
-end
-
 local function AttachToVault()
-    GuardVault()
     BGV.UI.Hook()
     BGV.Tooltip.Hook()
     if BGV.UI.hooked then
@@ -232,8 +154,6 @@ frame:SetScript("OnEvent", function(_, event, arg1)
             BGV.Minimap.RegisterSettings()
         elseif arg1 == "Blizzard_WeeklyRewards" then
             AttachToVault()
-        elseif arg1 == "Blizzard_EncounterJournal" then
-            GuardJournal()
         end
         return
     end
@@ -243,7 +163,6 @@ frame:SetScript("OnEvent", function(_, event, arg1)
         if Utils.IsAddonLoaded("Blizzard_WeeklyRewards") then
             AttachToVault()
         end
-        GuardJournal()
         return
     end
 
