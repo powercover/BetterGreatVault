@@ -36,7 +36,110 @@ local function RefreshLootLists()
     end
 end
 
+-- The Great Vault and the Adventure Guide are kept apart (the player's choice): whichever one
+-- opens last stays, the other is closed with a note. Loot scans no longer depend on this, since
+-- each scan isolates the journal (see OpenScan in Rewards.lua). Only while the addon is active:
+-- a claim-week vault is plain Blizzard UI.
+local EXCLUSIVE_NOTE = "For the best experience, don't keep the Great Vault and the Adventure Guide open at the same time. Closed %s."
+
+local function PanelShown(panel)
+    return panel ~= nil and type(panel.IsShown) == "function" and panel:IsShown()
+end
+
+local function ClosePanel(panel)
+    if not PanelShown(panel) then
+        return false
+    end
+    if type(HideUIPanel) == "function" then
+        pcall(HideUIPanel, panel)
+    end
+    if PanelShown(panel) then
+        panel:Hide()
+    end
+    return true
+end
+
+local function AddonActive()
+    return BGV.Rewards and type(BGV.Rewards.ShowingWeeklyProgress) == "function" and BGV.Rewards.ShowingWeeklyProgress()
+end
+
+local function Later(callback)
+    if C_Timer and type(C_Timer.After) == "function" then
+        C_Timer.After(0, callback)
+    else
+        callback()
+    end
+end
+
+function BGV.CloseVaultForJournal()
+    if not AddonActive() or not PanelShown(EncounterJournal) then
+        return
+    end
+    local closed = ClosePanel(WeeklyRewardsFrame)
+    closed = ClosePanel(_G.BetterGreatVaultLootTable) or closed
+    if closed then
+        Utils.Print(string.format(EXCLUSIVE_NOTE, "the Great Vault"))
+    end
+end
+
+function BGV.CloseJournalForVault()
+    if not AddonActive() then
+        return
+    end
+    if ClosePanel(EncounterJournal) then
+        Utils.Print(string.format(EXCLUSIVE_NOTE, "the Adventure Guide"))
+    end
+end
+
+-- Restarts the vault's reel preload if it stopped to wait for journal data (or `always`).
+local function ResumePump(always)
+    local vault = WeeklyRewardsFrame
+    if not (vault and (vault.bgvPumpWait or always) and BGV.UI and type(BGV.UI.ScheduleContent) == "function") then
+        return
+    end
+    vault.bgvPumpWait = nil
+    if type(vault.IsShown) == "function" and vault:IsShown() then
+        BGV.UI.ScheduleContent(vault)
+    end
+end
+
+-- A list Rewards gave up on can complete once a missing item loads (itemID) or the journal reports
+-- new loot (nil): re-read those lists and refresh what shows them. Returns true if any were.
+function BGV.RetryLootLists(itemID)
+    if not (BGV.Rewards and type(BGV.Rewards.RetryGivenUp) == "function" and BGV.Rewards.RetryGivenUp(itemID)) then
+        return false
+    end
+    if BGV.LootTable and type(BGV.LootTable.Reload) == "function" then
+        BGV.LootTable.Reload()
+    end
+    ResumePump(true)
+    return true
+end
+
+local function GuardJournal()
+    if EncounterJournal and type(EncounterJournal.HookScript) == "function" and not EncounterJournal.bgvExclusive then
+        EncounterJournal.bgvExclusive = true
+        EncounterJournal:HookScript("OnShow", function()
+            Later(BGV.CloseVaultForJournal)
+        end)
+    end
+end
+
+local function GuardVault()
+    if WeeklyRewardsFrame and type(WeeklyRewardsFrame.HookScript) == "function" and not WeeklyRewardsFrame.bgvExclusive then
+        WeeklyRewardsFrame.bgvExclusive = true
+        WeeklyRewardsFrame:HookScript("OnShow", function()
+            Later(function()
+                if PanelShown(WeeklyRewardsFrame) then
+                    BGV.CloseJournalForVault()
+                end
+            end)
+        end)
+    end
+end
+
 local function AttachToVault()
+    GuardVault()
     BGV.UI.Hook()
     BGV.Tooltip.Hook()
     if BGV.UI.hooked then
@@ -129,6 +232,8 @@ frame:SetScript("OnEvent", function(_, event, arg1)
             BGV.Minimap.RegisterSettings()
         elseif arg1 == "Blizzard_WeeklyRewards" then
             AttachToVault()
+        elseif arg1 == "Blizzard_EncounterJournal" then
+            GuardJournal()
         end
         return
     end
@@ -138,6 +243,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
         if Utils.IsAddonLoaded("Blizzard_WeeklyRewards") then
             AttachToVault()
         end
+        GuardJournal()
         return
     end
 
@@ -166,6 +272,17 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     if event == "PLAYER_SPECIALIZATION_CHANGED" or event == "PLAYER_LOOT_SPEC_UPDATED" then
         RefreshLootLists()
         BGV.UI.RefreshOpenFrame()
+        -- Start loading the new spec's reel lists right away, so hovering a slot doesn't find
+        -- an empty reel while they load.
+        if WeeklyRewardsFrame then
+            WeeklyRewardsFrame.bgvPumping = nil
+            WeeklyRewardsFrame.bgvPumpIndex = nil
+            WeeklyRewardsFrame.bgvPumpWait = nil
+            WeeklyRewardsFrame.bgvPumpCount = nil
+            if type(WeeklyRewardsFrame.IsShown) == "function" and WeeklyRewardsFrame:IsShown() then
+                BGV.UI.ScheduleContent(WeeklyRewardsFrame)
+            end
+        end
         return
     end
 
@@ -184,16 +301,18 @@ frame:SetScript("OnEvent", function(_, event, arg1)
         return
     end
 
-    if event == "EJ_LOOT_DATA_RECIEVED" then
+    if event == "EJ_LOOT_DATA_RECIEVED" or event == "GET_ITEM_INFO_RECEIVED" then
+        -- Fired inside our own scans by the journal changes they make; that isn't new data.
+        if BGV.Rewards and type(BGV.Rewards.IsScanning) == "function" and BGV.Rewards.IsScanning() then
+            return
+        end
+        if BGV.RetryLootLists(arg1) or event == "GET_ITEM_INFO_RECEIVED" then
+            return
+        end
         if BGV.LootTable and type(BGV.LootTable.Nudge) == "function" then
             BGV.LootTable.Nudge()
         end
-        if WeeklyRewardsFrame and WeeklyRewardsFrame.bgvPumpWait and BGV.UI and type(BGV.UI.ScheduleContent) == "function" then
-            WeeklyRewardsFrame.bgvPumpWait = nil
-            if type(WeeklyRewardsFrame.IsShown) == "function" and WeeklyRewardsFrame:IsShown() then
-                BGV.UI.ScheduleContent(WeeklyRewardsFrame)
-            end
-        end
+        ResumePump(false)
     end
 end)
 
@@ -201,6 +320,7 @@ frame:RegisterEvent("ADDON_LOADED")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("WEEKLY_REWARDS_UPDATE")
 frame:RegisterEvent("EJ_LOOT_DATA_RECIEVED")
+frame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
 frame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 frame:RegisterEvent("CHALLENGE_MODE_MAPS_UPDATE")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
