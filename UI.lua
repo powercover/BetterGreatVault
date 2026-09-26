@@ -13,10 +13,6 @@ local function OpenLootTableOnClick()
     return not BetterGreatVaultDB or BetterGreatVaultDB.openLootTable ~= false
 end
 
-local function SpecButtonEnabled()
-    return not BetterGreatVaultDB or BetterGreatVaultDB.showLootSpecButton ~= false
-end
-
 local function ApplyFont(fontString)
     local font = GameFontHighlightSmall:GetFont()
     if font then
@@ -1163,15 +1159,9 @@ local function EnsureSpecButton(weeklyRewardsFrame)
     if button then
         return button
     end
-    button = CreateFrame("Button", nil, weeklyRewardsFrame, "UIPanelButtonTemplate")
-    button:SetSize(170, 20)
+    button = Utils.CreateLootSpecButton(weeklyRewardsFrame)
     button:SetPoint("TOPLEFT", weeklyRewardsFrame, "TOPLEFT", 18, -34)
     button:SetFrameLevel(weeklyRewardsFrame:GetFrameLevel() + 20)
-    button:SetScript("OnClick", function(self)
-        if not Utils.OpenLootSpecMenu(self) then
-            Utils.CycleLootSpec()
-        end
-    end)
     weeklyRewardsFrame.bgvSpecButton = button
     return button
 end
@@ -1184,13 +1174,11 @@ local function HideSpecButton(weeklyRewardsFrame)
 end
 
 local function RefreshSpecButton(weeklyRewardsFrame)
-    if not SpecButtonEnabled() then
+    if not Utils.LootSpecButtonEnabled() then
         HideSpecButton(weeklyRewardsFrame)
         return
     end
-    local button = EnsureSpecButton(weeklyRewardsFrame)
-    button:SetText("Loot Spec: " .. Utils.LootSpecLabel())
-    button:Show()
+    Utils.RefreshLootSpecButton(EnsureSpecButton(weeklyRewardsFrame))
 end
 
 local function RestoreScene()

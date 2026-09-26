@@ -35,7 +35,6 @@ local headerTitle
 local headerReward
 local filterLabel
 local specButton
-local specLabel
 local filterID = "ALL"
 local selectedKey
 local solo
@@ -477,6 +476,10 @@ local function ReleaseRows()
     if not child then
         return
     end
+    -- Every row is a child of `child`, so rebuild the pool from scratch. Appending would
+    -- re-add rows still sitting in the pool from the last layout, and a duplicated row gets
+    -- positioned twice, leaving an empty gap where it was first placed.
+    pool = {}
     for _, row in ipairs({ child:GetChildren() }) do
         row:Hide()
         row.entry = nil
@@ -594,13 +597,7 @@ function Layout()
     if not child or not scroll then
         return
     end
-    if specButton then
-        local shown = not BetterGreatVaultDB or BetterGreatVaultDB.showLootSpecButton ~= false
-        specButton:SetShown(shown)
-        if shown and specLabel then
-            specLabel:SetText("Loot Spec: " .. BGV.Utils.LootSpecLabel())
-        end
-    end
+    BGV.Utils.RefreshLootSpecButton(specButton)
     ReleaseRows()
     local model = BuildModel()
     local section = FindSection(model, selectedKey) or FirstSection(model, true)
@@ -863,15 +860,13 @@ local function Build()
         ApplyFilter(FILTERS[nextIndex].id, FILTERS[nextIndex].label)
     end)
 
-    specButton = CreateFrame("Button", "BetterGreatVaultLootTableSpec", frame, "UIPanelButtonTemplate")
-    specButton:SetSize(180, 22)
+    specButton = BGV.Utils.CreateLootSpecButton(frame)
     specButton:SetPoint("RIGHT", filter, "LEFT", -8, 0)
-    specLabel = specButton.Text or _G[specButton:GetName() .. "Text"]
-    specButton:SetScript("OnClick", function(self)
-        if not BGV.Utils.OpenLootSpecMenu(self) then
-            BGV.Utils.CycleLootSpec()
-        end
-    end)
+
+    -- The drag strip spans most of the title bar; keep the header buttons above it so
+    -- clicks reach them instead of starting a window drag.
+    filter:SetFrameLevel(drag:GetFrameLevel() + 2)
+    specButton:SetFrameLevel(drag:GetFrameLevel() + 2)
 
     rail = CreateFrame("Frame", nil, frame)
     rail:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -40)

@@ -230,6 +230,34 @@ function Utils.CycleLootSpec()
     Utils.SetLootSpec(specs[nextIndex].id)
 end
 
+function Utils.LootSpecButtonEnabled()
+    return not BetterGreatVaultDB or BetterGreatVaultDB.showLootSpecButton ~= false
+end
+
+-- The Loot Spec button used by both the Great Vault and the loot table; callers only position it.
+function Utils.CreateLootSpecButton(parent)
+    local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    button:SetSize(170, 20)
+    button:SetScript("OnClick", function(self)
+        if not Utils.OpenLootSpecMenu(self) then
+            Utils.CycleLootSpec()
+        end
+    end)
+    return button
+end
+
+function Utils.RefreshLootSpecButton(button)
+    if not button then
+        return
+    end
+    if not Utils.LootSpecButtonEnabled() then
+        button:Hide()
+        return
+    end
+    button:SetText("Loot Spec: " .. Utils.LootSpecLabel())
+    button:Show()
+end
+
 -- Returns true if a dropdown menu was opened at `anchor`, false if the client has no MenuUtil
 -- and the caller should fall back to something like Utils.CycleLootSpec().
 function Utils.OpenLootSpecMenu(anchor)
