@@ -1446,9 +1446,6 @@ end
 
 function BGV.LootTable.Show(slot)
     local window = Build()
-    if type(BGV.CloseJournalForVault) == "function" then
-        BGV.CloseJournalForVault()
-    end
     itemCache = {}
     templateCache = {}
     ResetWatch()

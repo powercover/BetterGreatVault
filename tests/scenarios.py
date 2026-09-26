@@ -394,6 +394,29 @@ def dungeon_bosses_unlisted(t):
     t.verify()
 
 
+def guide_and_vault_open_together(t):
+    """Progress week, nothing auto-closes any more: the Adventure Guide stays open next to the
+    vault, the player browses it (dungeon boss, then a raid boss on another difficulty) between
+    hovers, and the loot table keeps listing loot the whole time."""
+    t.boot()
+    t.ag("Open")
+    t.ag("PickInstance", t.dungeon(1))
+    t.ag("PickBoss", t.boss(t.dungeon(1), 2))
+    t.ag("SetDifficulty", 23)
+    t.open_vault()
+    t.hover("M1")
+    t.run(0.3)
+    t.ag("PickInstance", t.raid)
+    t.ag("PickBoss", t.raid_boss(3))
+    t.ag("SetDifficulty", 15)
+    t.mark()
+    t.hover("R1")
+    t.run(0.3)
+    t.hover("M2")
+    t.poll(ALL)
+    t.verify()
+
+
 SCENARIOS = [
     ("fresh_login_no_guide", fresh_login_no_guide),
     ("cold_journal_login", cold_journal_login),
@@ -416,6 +439,7 @@ SCENARIOS = [
     ("keystone_difficulty_invalid", keystone_difficulty_invalid),
     ("uncached_items_late", uncached_items_late),
     ("dungeon_bosses_unlisted", dungeon_bosses_unlisted),
+    ("guide_and_vault_open_together", guide_and_vault_open_together),
 ]
 
 
