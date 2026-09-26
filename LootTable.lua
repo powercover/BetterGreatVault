@@ -555,8 +555,12 @@ function Layout()
     if not child or not scroll then
         return
     end
-    if specLabel then
-        specLabel:SetText("Loot Spec: " .. BGV.Utils.LootSpecLabel())
+    if specButton then
+        local shown = not BetterGreatVaultDB or BetterGreatVaultDB.showLootSpecButton ~= false
+        specButton:SetShown(shown)
+        if shown and specLabel then
+            specLabel:SetText("Loot Spec: " .. BGV.Utils.LootSpecLabel())
+        end
     end
     ReleaseRows()
     local model = BuildModel()

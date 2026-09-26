@@ -355,6 +355,17 @@ local function Build()
         DB().openLootTable = value and true or false
     end)
     MakeNote(child, "Left-click a completed slot to open the loot table with every reward that slot can give.")
+    MakeCheckbox(child, "Show loot spec button", nil, function()
+        local saved = DB()
+        return not saved or saved.showLootSpecButton ~= false
+    end, function(value)
+        DB().showLootSpecButton = value and true or false
+        RefreshAccent()
+        if BGV.LootTable and type(BGV.LootTable.Invalidate) == "function" then
+            BGV.LootTable.Invalidate()
+        end
+    end)
+    MakeNote(child, "Shows the Loot Spec button on the Great Vault and the loot table, letting you see and change the spec loot is filtered by.")
     MakeCheckbox(child, "Show minimap button", nil, function()
         local saved = DB()
         return not saved or saved.showMinimap ~= false
