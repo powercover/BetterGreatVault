@@ -1178,6 +1178,37 @@ local function ProgressWeek()
     return not (BGV.Rewards and BGV.Rewards.ShowingWeeklyProgress) or BGV.Rewards.ShowingWeeklyProgress()
 end
 
+local function EnsureSpecButton(weeklyRewardsFrame)
+    local button = weeklyRewardsFrame.bgvSpecButton
+    if button then
+        return button
+    end
+    button = CreateFrame("Button", nil, weeklyRewardsFrame, "UIPanelButtonTemplate")
+    button:SetSize(170, 20)
+    button:SetPoint("TOPLEFT", weeklyRewardsFrame, "TOPLEFT", 18, -34)
+    button:SetFrameLevel(weeklyRewardsFrame:GetFrameLevel() + 20)
+    button:SetScript("OnClick", function(self)
+        if not Utils.OpenLootSpecMenu(self) then
+            Utils.CycleLootSpec()
+        end
+    end)
+    weeklyRewardsFrame.bgvSpecButton = button
+    return button
+end
+
+local function RefreshSpecButton(weeklyRewardsFrame)
+    local button = EnsureSpecButton(weeklyRewardsFrame)
+    button:SetText("Loot Spec: " .. Utils.LootSpecLabel())
+    button:Show()
+end
+
+local function HideSpecButton(weeklyRewardsFrame)
+    local button = weeklyRewardsFrame and weeklyRewardsFrame.bgvSpecButton
+    if button then
+        button:Hide()
+    end
+end
+
 local function RestoreScene()
     local scene = WeeklyRewardsFrame and WeeklyRewardsFrame.ModelScene
     if scene then
@@ -1238,6 +1269,7 @@ end
 
 local function RestoreVault(weeklyRewardsFrame)
     RestoreScene()
+    HideSpecButton(weeklyRewardsFrame)
     local frames = weeklyRewardsFrame and weeklyRewardsFrame.Activities
     if type(frames) ~= "table" then
         return
@@ -1360,6 +1392,7 @@ function UI.Update(weeklyRewardsFrame)
     end
 
     weeklyRewardsFrame.bgvShellReady = true
+    RefreshSpecButton(weeklyRewardsFrame)
     BGV.GreatVault.Invalidate()
     local snapshot = BGV.GreatVault.GetSnapshot()
     local seen = {}
