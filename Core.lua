@@ -12,6 +12,7 @@ local function SavedDefaults()
     end
     BetterGreatVaultDB = Utils.CopyDefaults(BetterGreatVaultCharDB, {
         debug = false,
+        openLootTable = true,
         showMinimap = true,
         minimapAngle = 220,
         disableAnimations = false,
