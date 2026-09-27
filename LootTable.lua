@@ -111,13 +111,14 @@ end
 -- and spec, at the vault's item level for a chosen difficulty, keystone level or world tier.
 local mode = "vault"
 local DB_SOURCES = {
-    { id = "raid", title = "Raid", header = "Raid" },
-    { id = "mplus", title = "M+ keystones", header = "Mythic+" },
-    { id = "world", title = "World", header = "World" },
+    { id = "raid", title = "Raid", header = "Raid", order = 1 },
+    { id = "mplus", title = "M+ keystones", header = "Mythic+", order = 2 },
+    { id = "world", title = "World", header = "World", order = 3 },
 }
--- The database's choices, kept for the session: source, level per source, class and spec
--- (classID 0: all classes; specID 0: all of the class's specs).
-local db = { source = "raid", levels = {} }
+-- The database's choices, kept for the session: the sources listed (any number, never none;
+-- Raid and M+ to start with), the level per source, class and spec (classID 0: all classes;
+-- specID 0: all of the class's specs).
+local db = { sources = { raid = true, mplus = true }, levels = {} }
 local classButton
 local windowTitle
 local railTitle
@@ -399,14 +400,19 @@ local function SlotItems(slot)
     return list, false
 end
 
-local function DatabaseSource()
+-- The selected sources, in rail order (never none).
+local function SelectedSources()
+    local list = {}
     for _, source in ipairs(DB_SOURCES) do
-        if source.id == db.source then
-            return source
+        if db.sources[source.id] then
+            list[#list + 1] = source
         end
     end
-    db.source = DB_SOURCES[1].id
-    return DB_SOURCES[1]
+    if #list == 0 then
+        db.sources[DB_SOURCES[1].id] = true
+        list[1] = DB_SOURCES[1]
+    end
+    return list
 end
 
 -- The chosen level of a database source ({ level, label, itemLevel, ceiling }); the source's
@@ -443,11 +449,11 @@ local function ItemLevelText(info)
     return tostring(info.itemLevel)
 end
 
-local function DatabaseKey()
+local function DatabaseKey(sourceID)
     return table.concat({
         "database",
-        tostring(db.source),
-        tostring(db.levels[db.source]),
+        tostring(sourceID),
+        tostring(db.levels[sourceID]),
         tostring(db.classID),
         tostring(db.specID),
         tostring(filterID),
@@ -455,8 +461,9 @@ local function DatabaseKey()
     }, ":")
 end
 
-local function DatabaseItems()
-    local key = DatabaseKey()
+-- One source's list, filtered; entries carry the source's order so groups stay per source.
+local function DatabaseItems(source)
+    local key = DatabaseKey(source.id)
     local cached = itemCache[key]
     if cached then
         return cached, false
@@ -465,10 +472,13 @@ local function DatabaseItems()
     local pending = false
     if BGV.Rewards and type(BGV.Rewards.DatabaseItems) == "function" then
         local stillLoading
-        found, stillLoading = BGV.Rewards.DatabaseItems(db.source, db.levels[db.source], db.classID, db.specID)
+        found, stillLoading = BGV.Rewards.DatabaseItems(source.id, db.levels[source.id], db.classID, db.specID)
         pending = stillLoading == true
     end
     local list, statsPending = FilterEntries(found)
+    for _, entry in ipairs(list) do
+        entry.sourceOrder = source.order
+    end
     if pending or statsPending then
         return list, true
     end
@@ -1189,10 +1199,11 @@ local function GroupItems(items, slot)
     local byName = {}
     for _, entry in ipairs(items) do
         local name = entry.source or "Other"
-        local group = byName[name]
+        local key = tostring(entry.sourceOrder or 0) .. ":" .. name
+        local group = byName[key]
         if not group then
-            group = { name = name, entries = {} }
-            byName[name] = group
+            group = { name = name, entries = {}, sourceOrder = entry.sourceOrder or 0 }
+            byName[key] = group
             groups[#groups + 1] = group
         end
         local order = entry.encounterID and bossOrder[entry.encounterID] or entry.bossOrder
@@ -1203,6 +1214,9 @@ local function GroupItems(items, slot)
     end
 
     table.sort(groups, function(left, right)
+        if left.sourceOrder ~= right.sourceOrder then
+            return left.sourceOrder < right.sourceOrder
+        end
         if left.order and right.order and left.order ~= right.order then
             return left.order < right.order
         end
@@ -1239,6 +1253,25 @@ local function AddGroupHeader(group, rowWidth, y)
     row.name:SetFontObject(GameFontNormal)
     row.name:SetText(string.format("%s   |cff77777b%d|r", group.name, #group.entries))
     row.name:SetTextColor(0.96, 0.86, 0.6)
+end
+
+local SOURCE_H = 22
+
+-- Heads one source's groups when several sources are listed: "RAID · MYTHIC · 334/344".
+local function AddSourceHeader(text, rowWidth, y)
+    local row = Acquire()
+    row.hover:Hide()
+    row:SetHeight(SOURCE_H)
+    row:SetWidth(rowWidth)
+    row:ClearAllPoints()
+    row:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -y)
+    row.entry = nil
+    row.name:ClearAllPoints()
+    row.name:SetPoint("LEFT", row, "LEFT", 2, 0)
+    row.name:SetWidth(rowWidth - 8)
+    row.name:SetFontObject(GameFontNormalSmall)
+    row.name:SetText(text:upper())
+    row.name:SetTextColor(accentColor[1], accentColor[2], accentColor[3])
 end
 
 local function ShowMessage(text, rowWidth)
@@ -1284,25 +1317,62 @@ local function DatabaseRewardLine(info)
     return string.format("Vault reward: %d item level", info.itemLevel)
 end
 
--- The database mode's section: one source at its chosen level, for the chosen class and spec.
+-- A source with its chosen level: "Raid · Mythic", "Mythic +7" / "Mythic +10+", "World · Tier 8".
+local function SourceName(source, info)
+    if not info then
+        return source.header
+    end
+    if source.id == "mplus" then
+        return "Mythic " .. info.label
+    end
+    return source.header .. " · " .. info.label
+end
+
+-- The database mode's section: every selected source at its chosen level, for the chosen class
+-- and spec. A source whose item level isn't known yet lists nothing rather than items at a
+-- guessed one. With several sources, `parts` heads each source's groups in the list.
 local function DatabaseSection()
-    local source = DatabaseSource()
-    local info = DatabaseLevel(source.id)
+    local sources = SelectedSources()
+    local keys = { "database", tostring(db.classID), tostring(db.specID) }
+    local titles, rewards, parts = {}, {}, {}
+    local items, pending, known = {}, false, 0
+    for _, source in ipairs(sources) do
+        local info = DatabaseLevel(source.id)
+        local name = SourceName(source, info)
+        keys[#keys + 1] = source.id .. "=" .. tostring(info and info.level)
+        titles[#titles + 1] = name
+        parts[#parts + 1] = { order = source.order, text = name .. " · " .. (ItemLevelText(info) or "item level not known yet") }
+        if info and info.itemLevel then
+            known = known + 1
+            local list, sourcePending = DatabaseItems(source)
+            pending = pending or sourcePending
+            for _, entry in ipairs(list) do
+                items[#items + 1] = entry
+            end
+            if info.ceiling then
+                rewards[#rewards + 1] = string.format("%s %d (%d from the last two bosses)", source.header, info.itemLevel, info.ceiling)
+            else
+                rewards[#rewards + 1] = string.format("%s %d", source.header, info.itemLevel)
+            end
+        else
+            rewards[#rewards + 1] = source.header .. " not known yet"
+        end
+    end
     local section = {
-        key = table.concat({ "database", source.id, tostring(info and info.level), tostring(db.classID), tostring(db.specID) }, ":"),
-        title = source.header .. (info and (" · " .. info.label) or ""),
-        reward = DatabaseRewardLine(info),
-        items = {},
-        pending = false,
+        key = table.concat(keys, ":"),
+        title = table.concat(titles, "  +  "),
+        items = items,
+        pending = pending,
         locked = false,
         database = true,
+        unknownLevel = known == 0,
+        parts = #sources > 1 and parts or nil,
     }
-    -- No exact item level for this source yet: list nothing rather than items at a guessed one.
-    if not (info and info.itemLevel) then
-        section.unknownLevel = true
-        return section
+    if #sources == 1 then
+        section.reward = DatabaseRewardLine(DatabaseLevel(sources[1].id))
+    else
+        section.reward = "Vault reward: " .. table.concat(rewards, "  ·  ")
     end
-    section.items, section.pending = DatabaseItems()
     return section
 end
 
@@ -1314,12 +1384,16 @@ local function PaintDatabaseRail()
     for _, source in ipairs(DB_SOURCES) do
         local row = dbRows[source.id]
         if row then
-            local selected = db.source == source.id
+            local selected = db.sources[source.id] == true
             local info = DatabaseLevel(source.id)
             row:ClearAllPoints()
             row:SetPoint("TOPLEFT", rail, "TOPLEFT", 16, -y)
             row:SetPoint("TOPRIGHT", rail, "TOPRIGHT", -8, -y)
             row.bar:SetShown(selected)
+            row.fill:SetShown(selected)
+            -- The level picker only works for a listed source.
+            row.level:SetEnabled(selected)
+            row.level:SetAlpha(selected and 1 or 0.35)
             row.label:SetText(source.title)
             if selected then
                 row.label:SetTextColor(0.96, 0.96, 0.96)
@@ -1497,8 +1571,8 @@ function Layout()
 
     local tierSpecs = TierSpecs()
     local y = 2
-    for groupIndex, group in ipairs(GroupItems(items, section.slot)) do
-        if groupIndex > 1 then
+    local function RenderGroup(group, first)
+        if not first then
             y = y + 6
         end
         AddGroupHeader(group, rowWidth, y)
@@ -1553,6 +1627,28 @@ function Layout()
             row:SetHeight(height)
             row.stripe:SetShown(index % 2 == 0)
             y = y + height
+        end
+    end
+    local groups = GroupItems(items, section.slot)
+    if section.parts then
+        -- Several database sources: each source's groups under its own divider.
+        for partIndex, part in ipairs(section.parts) do
+            if partIndex > 1 then
+                y = y + 12
+            end
+            AddSourceHeader(part.text, rowWidth, y)
+            y = y + SOURCE_H
+            local first = true
+            for _, group in ipairs(groups) do
+                if group.sourceOrder == part.order then
+                    RenderGroup(group, first)
+                    first = false
+                end
+            end
+        end
+    else
+        for groupIndex, group in ipairs(groups) do
+            RenderGroup(group, groupIndex == 1)
         end
     end
     child:SetHeight(math.max(y + 8, 40))
@@ -1703,8 +1799,22 @@ local function ScrollTop()
     JumpScroll(0)
 end
 
-local function SelectDatabaseSource(sourceID)
-    db.source = sourceID
+-- Clicking a source toggles it; clicking the only selected one leaves it selected.
+local function ToggleDatabaseSource(sourceID)
+    if db.sources[sourceID] then
+        local selected = 0
+        for _, source in ipairs(DB_SOURCES) do
+            if db.sources[source.id] then
+                selected = selected + 1
+            end
+        end
+        if selected <= 1 then
+            return
+        end
+        db.sources[sourceID] = nil
+    else
+        db.sources[sourceID] = true
+    end
     ResetWatch()
     ScrollTop()
     Layout()
@@ -1724,7 +1834,9 @@ local function OpenLevelMenu(anchor, sourceID)
     local levels = BGV.Rewards and type(BGV.Rewards.DatabaseLevels) == "function" and BGV.Rewards.DatabaseLevels(sourceID) or {}
     local function Pick(level)
         db.levels[sourceID] = level
-        SelectDatabaseSource(sourceID)
+        ResetWatch()
+        ScrollTop()
+        Layout()
     end
     if not (MenuUtil and type(MenuUtil.CreateContextMenu) == "function") then
         -- No menu API: step to the next level with a known item level.
@@ -1948,8 +2060,17 @@ local function Build()
         row.bar:SetSize(2, 40)
         row.bar:SetPoint("LEFT", row, "LEFT", 0, 0)
         row.bar:Hide()
+        -- A checkbox like the settings panel's: sources can be listed together.
+        row.box = Pixel(row, "BACKGROUND", 0.16, 0.16, 0.17, 1)
+        row.box:SetSize(12, 12)
+        row.box:SetPoint("TOPLEFT", row, "TOPLEFT", 12, -8)
+        BGV.Utils.Border(row, 0.36, 0.36, 0.4, 1, row.box)
+        row.fill = Accent(Pixel(row, "ARTWORK", 1, 1, 1, 1))
+        row.fill:SetSize(6, 6)
+        row.fill:SetPoint("CENTER", row.box, "CENTER", 0, 0)
+        row.fill:Hide()
         row.label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        row.label:SetPoint("TOPLEFT", row, "TOPLEFT", 12, -6)
+        row.label:SetPoint("TOPLEFT", row, "TOPLEFT", 30, -6)
         row.label:SetPoint("RIGHT", row, "RIGHT", -8, 0)
         row.label:SetJustifyH("LEFT")
         row.label:SetWordWrap(false)
@@ -1958,7 +2079,7 @@ local function Build()
         row.level:SetPoint("RIGHT", row, "RIGHT", -8, 0)
         local sourceID = source.id
         row:SetScript("OnClick", function()
-            SelectDatabaseSource(sourceID)
+            ToggleDatabaseSource(sourceID)
         end)
         row.level:SetScript("OnClick", function(self)
             OpenLevelMenu(self, sourceID)

@@ -1802,6 +1802,30 @@ local function BaseItemLevel(steps, learned, tierID)
     end
 end
 
+-- This season's activity tiers (Midnight season 2, as the game's GetActivities reports them):
+-- the vault's upgrade steps are read from them even before this character has completed a slot
+-- of that kind, so the database doesn't depend on progress. A new season has other tiers; the
+-- game then has no data for these, and the levels come from this character's own vault (or stay
+-- unknown) until they're updated here.
+local SEASON_TIERS = { mplus = 256, world = 249 }
+
+-- The upgrade steps for a source, from the tier this character's vault reported, else the season's.
+local function SourceSteps(kind, data)
+    local learnedTier = data.tiers[kind]
+    local steps = ActivitySteps(learnedTier)
+    if #steps > 0 then
+        return steps, learnedTier
+    end
+    local seasonTier = SEASON_TIERS[kind]
+    if seasonTier and seasonTier ~= learnedTier then
+        steps = ActivitySteps(seasonTier)
+        if #steps > 0 then
+            return steps, seasonTier
+        end
+    end
+    return {}, nil
+end
+
 local function BuildDatabaseLevels(source)
     local data = LearnFromVault()
     local learned = type(data.levels[source]) == "table" and data.levels[source] or {}
@@ -1820,23 +1844,24 @@ local function BuildDatabaseLevels(source)
             end
         end
     elseif source == "mplus" then
-        local steps = ActivitySteps(data.tiers.mplus)
+        local steps, tierID = SourceSteps("mplus", data)
         if #steps == 0 then
             steps = KeystoneSteps()
         end
         -- (Not C_MythicPlus.GetRewardLevelForDifficultyLevel: it disagrees with the vault, e.g. +8.)
-        local base = BaseItemLevel(steps, learned, data.tiers.mplus)
+        local base = BaseItemLevel(steps, learned, tierID)
         local maxLevel = #steps > 0 and steps[#steps].level or DEFAULT_KEYSTONE_MAX
         for level = 2, maxLevel do
             local itemLevel = StepItemLevel(steps, level) or learned[level]
             if not itemLevel and steps[1] and level < steps[1].level then
                 itemLevel = base
             end
-            Add(level, "+" .. level, itemLevel)
+            -- The last step's key and every key above it give the same reward: "+10+".
+            Add(level, level == maxLevel and ("+" .. level .. "+") or ("+" .. level), itemLevel)
         end
     elseif source == "world" then
-        local steps = ActivitySteps(data.tiers.world)
-        local base = BaseItemLevel(steps, learned, data.tiers.world)
+        local steps, tierID = SourceSteps("world", data)
+        local base = BaseItemLevel(steps, learned, tierID)
         local maxLevel = #steps > 0 and steps[#steps].level or DEFAULT_WORLD_MAX
         for level = 1, maxLevel do
             local itemLevel = StepItemLevel(steps, level) or learned[level]
