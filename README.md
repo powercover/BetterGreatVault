@@ -33,8 +33,8 @@ Left-click an unlocked slot, or middle-click the minimap button, to list every r
 
 - grouped by raid boss or dungeon, with each item at the exact item level the slot awards;
 - columns for Best-in-Slot tier, item level, secondary stats, and slot with armor type;
-- filters for gear slot and secondary stats (one stat: items with it; two: items with both;
-  three or more: items with any of them);
+- a search box for item names, and filters for gear slot and secondary stats (one stat: items
+  with it; two: items with both; three or more: items with any of them);
 - a resizable window that follows your accent color.
 
 ### Loot database
@@ -58,13 +58,17 @@ database never guesses.
   weekly reset, and what each click does.
 - Listed in the minimap's addon compartment too (Blizzard's addon menu, the minimap button with a
   number), with the same clicks.
+- A data broker feed for data bars such as ElvUI's, Titan Panel or ChocolateBar: this week's
+  unlocked slots (`5/9`), with the same clicks and popup. It appears when another addon has loaded
+  LibDataBroker; nothing is bundled for it.
 - Options to lock or reset its position, fade it out until hovered, and keep it on the minimap when
   another addon gathers minimap buttons.
 
 ### And more
 
-- A reminder in chat at login when rewards are waiting.
+- A reminder in chat at login when rewards are waiting, and `/bgv status` for this week's vault in chat.
 - Text size from -5 to +5 for all of the addon's text.
+- Eleven languages, including Ukrainian (see [Languages](#languages)).
 - An accent color: your specialization's color, or one you pick.
 - Key bindings, with none bound by default.
 - Settings saved per character.
@@ -104,6 +108,7 @@ The entry in the minimap's addon compartment takes the same clicks.
 | Command | Action |
 | --- | --- |
 | `/bgv` | Version and the list of commands |
+| `/bgv status` | This week's Great Vault in chat: each slot's item level or progress |
 | `/bgv db` | Open or close the loot database |
 | `/bgv debug` | Turn debug mode on or off; turning it on prints the vault's slots |
 | `/bgv refresh` | Read the Great Vault again |
@@ -122,10 +127,23 @@ Right-click the minimap button, or open the game's **Options → AddOns → Bett
 | --- | --- |
 | Great Vault | Animated slots, Best-in-Slot tiers, open the loot table from a slot, loot spec button, reward reminder |
 | Minimap button | Addon compartment entry; show the button, with reset position, popup on mouseover (and its week's slots), lock position, unaffected by other addons, and fade out when not hovered |
-| Appearance | Text size, accent color |
+| Appearance | Text size, language, accent color |
 | Key bindings | The current keys, and a shortcut to the game's Key Bindings |
 | Tools | Open the Great Vault, loot table or loot database; debug mode; print or refresh vault data; reset settings; chat commands |
 | About | Version, author and links |
+
+## Languages
+
+English, Deutsch, Español (Spain and Latin America), Français, Italiano, Português, Русский,
+Українська, 한국어, 简体中文 and 繁體中文.
+
+The addon speaks the game's language unless you pick another under **Settings → Appearance →
+Language**; the game has no Ukrainian version, so that's where Ukrainian is chosen. A new language
+shows after the interface reloads. Names that only the game knows, such as items, bosses, dungeons,
+classes and specializations, stay in the game's language.
+
+Translations live in `Locales/`, one file per language, each line pairing the English text with its
+translation. Corrections are welcome.
 
 ## How item levels are worked out
 
@@ -192,6 +210,7 @@ The addon is plain Lua with no libraries.
 | `Utils.lua` | Shared helpers, fonts, accent colors and flat widgets |
 | `Bis.lua` | Best-in-Slot tiers per specialization |
 | `WorldLoot.lua` | The season's world gear: delves, prey and world bosses |
+| `Locales/` | Translations: the language system and one file per language |
 | `Bindings.xml` | Key bindings |
 | `Media/` | Minimap button art |
 

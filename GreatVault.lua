@@ -4,6 +4,7 @@ BGV.GreatVault = {}
 
 local GreatVault = BGV.GreatVault
 local Utils = BGV.Utils
+local L = BGV.L
 
 local cache
 local runCache
@@ -79,37 +80,37 @@ end
 
 function GreatVault.CategoryName(activityType)
     if Utils.SameType(activityType, Utils.ThresholdType("Raid")) then
-        return Utils.GlobalString("RAIDS", "Raid")
+        return Utils.GameText("RAIDS", "Raids")
     end
     if Utils.SameType(activityType, Utils.ThresholdType("Activities")) then
-        return Utils.GlobalString("DUNGEONS", "Dungeons")
+        return Utils.GameText("DUNGEONS", "Dungeons")
     end
     if Utils.SameType(activityType, Utils.ThresholdType("World")) then
-        return Utils.GlobalString("WORLD", "World")
+        return Utils.GameText("WORLD", "World")
     end
     if Utils.SameType(activityType, Utils.ThresholdType("RankedPvP")) then
-        return Utils.GlobalString("PVP", "PvP")
+        return Utils.GameText("PVP", "PvP")
     end
-    return "Great Vault"
+    return L["Great Vault"]
 end
 
 function GreatVault.UnitName(activity)
     if Utils.SameType(activity.type, Utils.ThresholdType("Raid")) then
-        return "Raid Bosses"
+        return L["Raid Bosses"]
     end
     if Utils.SameType(activity.type, Utils.ThresholdType("Activities")) then
         if Utils.IsHeroicDungeonTier(activity.activityTierID) then
-            return "Heroic"
+            return L["Heroic"]
         end
-        return "Mythic+"
+        return L["Mythic+"]
     end
     if Utils.SameType(activity.type, Utils.ThresholdType("World")) then
-        return "World"
+        return L["World"]
     end
     if Utils.SameType(activity.type, Utils.ThresholdType("RankedPvP")) then
-        return "PvP"
+        return L["PvP"]
     end
-    return "Activities"
+    return L["Activities"]
 end
 
 function GreatVault.QualifierText(activity)
@@ -123,20 +124,20 @@ function GreatVault.QualifierText(activity)
 
     if Utils.SameType(activity.type, Utils.ThresholdType("Activities")) then
         if Utils.IsHeroicDungeonTier(activity.activityTierID) then
-            return "Heroic"
+            return L["Heroic"]
         end
         if activity.level >= 1 then
             return "+" .. activity.level
         end
         if activity.level == 0 then
-            return "Mythic"
+            return L["Mythic"]
         end
         return nil
     end
 
     if Utils.SameType(activity.type, Utils.ThresholdType("World")) then
         if activity.level > 0 then
-            local pattern = Utils.GlobalString("GREAT_VAULT_WORLD_TIER", "Tier %d")
+            local pattern = Utils.GameText("GREAT_VAULT_WORLD_TIER", "Tier %d")
             return string.format(pattern, activity.level)
         end
         return nil
@@ -164,7 +165,7 @@ local function MapName(mapID)
         end
     end
 
-    return "Mythic+ " .. mapID
+    return string.format(L["Mythic+ %d"], mapID)
 end
 
 local function HistoryLength(history)
@@ -326,7 +327,7 @@ function GreatVault.DungeonRows(threshold)
             level = run.level,
             counts = counts,
             setsReward = run == rewardRun,
-            text = string.format("+%d %s%s", run.level, run.name or "Mythic+", run.completed and "" or " (incomplete)"),
+            text = string.format("+%d %s%s", run.level, run.name or L["Mythic+"], run.completed and "" or (" " .. L["(incomplete)"])),
         }
     end
 
@@ -339,11 +340,11 @@ function GreatVault.DungeonRows(threshold)
 
     while mythic > 0 and missing > 0 do
         rows[#rows + 1] = {
-            name = "Mythic dungeon",
+            name = L["Mythic dungeon"],
             level = 0,
             counts = true,
             setsReward = missing == 1,
-            text = "Mythic dungeon",
+            text = L["Mythic dungeon"],
         }
         mythic = mythic - 1
         missing = missing - 1
@@ -352,11 +353,11 @@ function GreatVault.DungeonRows(threshold)
 
     while heroic > 0 and missing > 0 do
         rows[#rows + 1] = {
-            name = "Heroic dungeon",
+            name = L["Heroic dungeon"],
             level = -1,
             counts = true,
             setsReward = missing == 1,
-            text = "Heroic dungeon",
+            text = L["Heroic dungeon"],
         }
         heroic = heroic - 1
         missing = missing - 1
@@ -442,7 +443,7 @@ function GreatVault.RaidRows(activityType, index, threshold)
         local difficultyName = Utils.DifficultyName(encounter.bestDifficulty)
         local killIndex = countedUntil[encounter]
         rows[#rows + 1] = {
-            name = name or ("Encounter " .. tostring(encounter.encounterID)),
+            name = name or string.format(L["Encounter %s"], tostring(encounter.encounterID)),
             instanceName = instanceName,
             journalInstanceID = Utils.IsUsableNumber(journalInstanceID) and journalInstanceID or nil,
             journalEncounterID = Utils.IsUsableNumber(journalEncounterID) and journalEncounterID or nil,
@@ -497,9 +498,9 @@ function GreatVault.WorldRows(threshold)
         local used = math.min(tier.count, math.max(remaining, 0))
         local text
         if tier.difficulty > 1 then
-            text = string.format("Delve tier %d x%d", tier.difficulty, tier.count)
+            text = string.format(L["Delve tier %d x%d"], tier.difficulty, tier.count)
         else
-            text = string.format("World activities x%d", tier.count)
+            text = string.format(L["World activities x%d"], tier.count)
         end
 
         rows[#rows + 1] = {
@@ -660,7 +661,7 @@ end
 function GreatVault.DetailText(slot)
     local lines = {}
     if type(slot.killSummary) == "string" and slot.killSummary ~= "" then
-        lines[#lines + 1] = "Kills: " .. slot.killSummary
+        lines[#lines + 1] = string.format(L["Kills: %s"], slot.killSummary)
     end
     local reward = GreatVault.RewardText(slot)
     if type(reward) == "string" and reward ~= "" then
@@ -678,7 +679,7 @@ function GreatVault.RewardText(slot)
         and Utils.IsUsableNumber(slot.upgradeMax)
         and Utils.IsUsableNumber(slot.itemLevel) then
         return string.format(
-            "Reward: %s %d/%d (%d ilvl)",
+            L["Reward: %s %d/%d (%d ilvl)"],
             slot.upgradeTrack,
             slot.upgradeLevel,
             slot.upgradeMax,
@@ -686,6 +687,6 @@ function GreatVault.RewardText(slot)
         )
     end
     if Utils.IsUsableNumber(slot.itemLevel) then
-        return string.format("%d ilvl", slot.itemLevel)
+        return string.format(L["%d ilvl"], slot.itemLevel)
     end
 end

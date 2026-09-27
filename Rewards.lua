@@ -1558,7 +1558,7 @@ local function SlotItems(slot)
             end
             if #batch > 0 then
                 groups[#groups + 1] = {
-                    name = challengeNames[instanceID] or JournalInstanceName(instanceID) or "Mythic+",
+                    name = challengeNames[instanceID] or JournalInstanceName(instanceID) or BGV.L["Mythic+"],
                     entries = batch,
                 }
             end
@@ -1868,7 +1868,7 @@ local function BuildDatabaseLevels(source)
             if not itemLevel and steps[1] and level < steps[1].level then
                 itemLevel = base
             end
-            Add(level, "Tier " .. level, itemLevel)
+            Add(level, string.format(BGV.L["Tier %d"], level), itemLevel)
         end
     end
 
@@ -2006,7 +2006,7 @@ local function DatabaseEntries(source, level, classID, specID)
             end
             if #batch > 0 then
                 groups[#groups + 1] = {
-                    name = challengeNames[instanceID] or JournalInstanceName(instanceID) or "Mythic+",
+                    name = challengeNames[instanceID] or JournalInstanceName(instanceID) or BGV.L["Mythic+"],
                     entries = batch,
                 }
             end

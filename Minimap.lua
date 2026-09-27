@@ -3,6 +3,7 @@ local addonName, BGV = ...
 BGV.Minimap = {}
 
 local Utils = BGV.Utils
+local L = BGV.L
 local MEDIA = "Interface\\AddOns\\BetterGreatVault\\Media\\"
 local RADIUS = 80
 local DEFAULT_ANGLE = 220
@@ -422,18 +423,18 @@ local function BuildPopup()
     popup.calloutBar:SetPoint("BOTTOMLEFT", popup.callout, "BOTTOMLEFT", 0, 0)
     popup.calloutTitle = Text("GameFontNormal", 0.96, 0.96, 0.96)
     popup.calloutTitle:SetPoint("TOPLEFT", popup.callout, "TOPLEFT", 12, -7)
-    popup.calloutTitle:SetText("Rewards are waiting")
+    popup.calloutTitle:SetText(L["Rewards are waiting"])
     popup.calloutText = Text("GameFontHighlightSmall", 0.7, 0.7, 0.74)
     popup.calloutText:SetPoint("TOPLEFT", popup.calloutTitle, "BOTTOMLEFT", 0, -3)
-    popup.calloutText:SetText("Choose one in the Great Vault")
+    popup.calloutText:SetText(L["Choose one in the Great Vault"])
 
     -- This week's slots: a heading, then a row of chips for each row of the vault.
     popup.heading = Text("GameFontNormalSmall", 0.66, 0.66, 0.7)
-    popup.heading:SetText("THIS WEEK")
+    popup.heading:SetText(Utils.Upper(L["This week"]))
     popup.count = Text("GameFontHighlightSmall", 0.55, 0.55, 0.58)
     popup.count:SetJustifyH("RIGHT")
     popup.note = Text("GameFontHighlightSmall", 0.55, 0.55, 0.58)
-    popup.note:SetText("Great Vault progress isn't available yet")
+    popup.note:SetText(L["Great Vault progress isn't available yet"])
     popup.rows = {}
     for index = 1, #ROW_TYPES do
         local row = { chips = {} }
@@ -463,30 +464,35 @@ local function BuildPopup()
     for index, action in ipairs(ACTIONS) do
         local line = {}
         line.text = Text("GameFontHighlightSmall", 0.9, 0.9, 0.92)
-        line.text:SetText(action.text or "")
+        line.text:SetText(action.text and L[action.text] or "")
         line.key = Text("GameFontNormalSmall", 1, 1, 1)
         line.key:SetJustifyH("RIGHT")
-        line.key:SetText(action.key)
+        line.key:SetText(L[action.key])
         popup.actions[index] = line
     end
 end
 
-local function ResetText()
+-- The time left to the weekly reset, or nil when the game doesn't say.
+local function ResetIn()
     local seconds = C_DateAndTime and type(C_DateAndTime.GetSecondsUntilWeeklyReset) == "function"
         and C_DateAndTime.GetSecondsUntilWeeklyReset()
     if not Utils.IsUsableNumber(seconds) or seconds <= 0 then
-        return "Your weekly Great Vault"
+        return nil
     end
     local days = math.floor(seconds / 86400)
     local hours = math.floor(seconds % 86400 / 3600)
     local minutes = math.floor(seconds % 3600 / 60)
     if days > 0 then
-        return string.format("Weekly reset in %dd %dh", days, hours)
+        return string.format(L["Weekly reset in %dd %dh"], days, hours)
     end
     if hours > 0 then
-        return string.format("Weekly reset in %dh %dm", hours, minutes)
+        return string.format(L["Weekly reset in %dh %dm"], hours, minutes)
     end
-    return string.format("Weekly reset in %dm", math.max(1, minutes))
+    return string.format(L["Weekly reset in %dm"], math.max(1, minutes))
+end
+
+local function ResetText()
+    return ResetIn() or L["Your weekly Great Vault"]
 end
 
 -- The vault shows this week's progress (not last week's rewards to claim); same test as the vault's.
@@ -567,7 +573,7 @@ local function PaintChip(chip, slot, accent)
         chip.bar:SetWidth(CHIP_W)
         chip.bar:Show()
         chip.text:SetTextColor(0.96, 0.96, 0.96)
-        chip.text:SetText(itemLevel and tostring(itemLevel) or slot.qualifier or "Unlocked")
+        chip.text:SetText(itemLevel and tostring(itemLevel) or slot.qualifier or L["Unlocked"])
         return
     end
     local progress = Utils.IsUsableNumber(slot.progress) and slot.progress or 0
@@ -598,7 +604,7 @@ local function LayoutWeek(y, accent)
     PlaceAt(popup.heading, PAD, y)
     popup.count:ClearAllPoints()
     popup.count:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -PAD, -y)
-    popup.count:SetText(string.format("%d of %d unlocked", unlocked, total))
+    popup.count:SetText(string.format(L["%d of %d unlocked"], unlocked, total))
     popup.count:SetShown(total > 0)
     y = y + 18
     popup.note:SetShown(total == 0)
@@ -612,7 +618,7 @@ local function LayoutWeek(y, accent)
         if slots then
             row.label:ClearAllPoints()
             row.label:SetPoint("LEFT", popup, "TOPLEFT", PAD, -(y + CHIP_H / 2))
-            row.label:SetText(BGV.GreatVault.CategoryName(slots[1].type):upper())
+            row.label:SetText(Utils.Upper(BGV.GreatVault.CategoryName(slots[1].type)))
         end
         for chipIndex, chip in ipairs(row.chips) do
             local slot = slots and slots[chipIndex]
@@ -678,7 +684,7 @@ function LayoutPopup()
     else
         y = HEADER_H + 10
     end
-    popup.actions[1].text:SetText(VaultShown() and "Close the Great Vault" or "Open the Great Vault")
+    popup.actions[1].text:SetText(VaultShown() and L["Close the Great Vault"] or L["Open the Great Vault"])
     for index, line in ipairs(popup.actions) do
         -- From the addon compartment there's no button to drag.
         local shown = not (popup.compartment and ACTIONS[index].buttonOnly)
@@ -693,6 +699,16 @@ function LayoutPopup()
         end
     end
     popup:SetHeight(y + PAD - 5)
+    -- Wide enough for the longest line, as translations run longer than English.
+    local width = POPUP_W
+    for _, line in ipairs(popup.actions) do
+        if line.text:IsShown() then
+            width = math.max(width, PAD * 2 + (line.text:GetStringWidth() or 0) + 16 + (line.key:GetStringWidth() or 0))
+        end
+    end
+    width = math.max(width, PAD * 2 + 24 + (popup.calloutText:GetStringWidth() or 0))
+    width = math.max(width, PAD * 2 + 38 + (popup.subtitle:GetStringWidth() or 0))
+    popup:SetWidth(math.ceil(width))
 end
 
 -- Beside the button, toward the middle of the screen.
@@ -755,6 +771,106 @@ end
 
 function BetterGreatVault_OnAddonCompartmentLeave()
     HidePopup()
+end
+
+local function WeekCounts(rows)
+    local unlocked, total = 0, 0
+    for _, slots in ipairs(rows) do
+        for _, slot in ipairs(slots) do
+            total = total + 1
+            unlocked = unlocked + (slot.unlocked and 1 or 0)
+        end
+    end
+    return unlocked, total
+end
+
+-- This week's vault as lines of chat text (`/bgv status`): each row's slots, with the reward's
+-- item level once unlocked and the progress until then, like the popup.
+function BGV.Minimap.StatusLines()
+    local lines = {}
+    if RewardsWaiting() then
+        lines[#lines + 1] = L["Rewards are waiting in your Great Vault."]
+    end
+    if ProgressWeek() == true then
+        local rows = WeekRows()
+        local unlocked, total = WeekCounts(rows)
+        if total == 0 then
+            lines[#lines + 1] = L["Great Vault progress isn't available yet"]
+        else
+            lines[#lines + 1] = string.format(L["This week: %d of %d unlocked"], unlocked, total)
+            local accent = Utils.AccentColor()
+            local color = string.format("|cff%02x%02x%02x", math.floor(accent[1] * 255 + 0.5),
+                math.floor(accent[2] * 255 + 0.5), math.floor(accent[3] * 255 + 0.5))
+            for _, slots in ipairs(rows) do
+                local parts = {}
+                for _, slot in ipairs(slots) do
+                    if slot.unlocked then
+                        local itemLevel = SlotItemLevel(slot)
+                        parts[#parts + 1] = color .. (itemLevel and tostring(itemLevel) or slot.qualifier or L["Unlocked"]) .. "|r"
+                    else
+                        parts[#parts + 1] = string.format("|cff8a8a8e%d/%d|r", slot.progress or 0, slot.threshold or 0)
+                    end
+                end
+                lines[#lines + 1] = BGV.GreatVault.CategoryName(slots[1].type) .. ":  " .. table.concat(parts, "   ")
+            end
+        end
+    end
+    lines[#lines + 1] = ResetIn()
+    return lines
+end
+
+-- A data broker feed (LibDataBroker), when another addon has loaded the library: the week's
+-- unlocked slots as text for data bars (ElvUI, Titan Panel, ChocolateBar and the like), with the
+-- minimap button's clicks and popup. Nothing is bundled for it.
+local broker
+
+local function BrokerText()
+    if RewardsWaiting() then
+        return L["Rewards waiting"]
+    end
+    if ProgressWeek() ~= true then
+        return "-"
+    end
+    local unlocked, total = WeekCounts(WeekRows())
+    if total == 0 then
+        return "-"
+    end
+    return string.format("%d/%d", unlocked, total)
+end
+
+function BGV.Minimap.RefreshBroker()
+    if broker then
+        broker.text = BrokerText()
+    end
+end
+
+function BGV.Minimap.RegisterBroker()
+    if broker then
+        return
+    end
+    local stub = _G.LibStub
+    local ldb = type(stub) == "table" and stub("LibDataBroker-1.1", true) or nil
+    if not ldb then
+        return
+    end
+    broker = ldb:NewDataObject(addonName, {
+        type = "data source",
+        label = L["Great Vault"],
+        text = BrokerText(),
+        icon = "Interface\\AddOns\\BetterGreatVault\\Icon",
+        OnClick = function(_, mouseButton)
+            HidePopup()
+            RunClick(mouseButton)
+        end,
+        OnEnter = function(frame)
+            if PopupOnHover() then
+                ShowPopup(frame, true)
+            end
+        end,
+        OnLeave = function()
+            HidePopup()
+        end,
+    })
 end
 
 -- The release that ends a drag isn't a click. Only a click from that same release is ignored: a
