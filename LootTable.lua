@@ -71,8 +71,8 @@ local scroll
 local child
 local headerTitle
 local headerReward
-local filterLabel
-local statLabel
+local gearFilterButton
+local statFilterButton
 local specButton
 local filterID = "ALL"
 -- Selected secondary stats (id -> true). None: no filter; one: items with it; two: items with
@@ -278,20 +278,28 @@ local function StatFilterKey()
     return table.concat(ids, "+")
 end
 
-local function StatFilterLabel()
+-- The first letter of the stat's (localized) name, for the header's filter button.
+local function StatLetter(stat)
+    local name = StatName(stat)
+    return name:match("^[\1-\127\194-\244][\128-\191]*") or stat.short:sub(1, 1)
+end
+
+-- What the stat filter shows, for the filter button's tooltip.
+local function StatFilterSummary()
     local selected = SelectedStats()
     if #selected == 0 then
-        return "All stats"
-    elseif #selected == 1 then
-        return StatName(selected[1])
-    elseif #selected == #SECONDARY_STATS then
-        return "Any secondary"
+        return "Showing all items"
     end
     local names = {}
     for _, stat in ipairs(selected) do
-        names[#names + 1] = stat.short
+        names[#names + 1] = StatName(stat)
     end
-    return table.concat(names, #selected == 2 and " + " or " / ")
+    if #selected == 1 then
+        return "Items with " .. names[1]
+    elseif #selected == 2 then
+        return "Items with both " .. names[1] .. " and " .. names[2]
+    end
+    return "Items with at least one of: " .. table.concat(names, ", ")
 end
 
 local function CacheKey(slot)
@@ -1494,11 +1502,44 @@ function Layout()
     Continue()
 end
 
-local function ApplyFilter(id, label)
-    filterID = id
-    if filterLabel then
-        filterLabel:SetText(label)
+-- The small filter buttons in the column header: "+" while nothing is picked, else a short
+-- summary of the pick on a gold fill, so an active filter stands out.
+local function PaintHeaderFilter(button, text, active)
+    if not button then
+        return
     end
+    button.text:SetText(text)
+    button:SetWidth(math.max(16, math.ceil(button.text:GetStringWidth() or 0) + 8))
+    if active then
+        button.back:SetVertexColor(0.85, 0.65, 0.2, 0.95)
+        button.text:SetTextColor(0.08, 0.08, 0.08)
+    else
+        button.back:SetVertexColor(0.24, 0.24, 0.26, 0.95)
+        button.text:SetTextColor(0.85, 0.65, 0.2)
+    end
+end
+
+local function GearFilterLabel()
+    for _, option in ipairs(FILTERS) do
+        if option.id == filterID then
+            return option.label
+        end
+    end
+    return FILTERS[1].label
+end
+
+local function RefreshHeaderFilters()
+    PaintHeaderFilter(gearFilterButton, filterID == "ALL" and "+" or GearFilterLabel(), filterID ~= "ALL")
+    local letters = {}
+    for _, stat in ipairs(SelectedStats()) do
+        letters[#letters + 1] = StatLetter(stat)
+    end
+    PaintHeaderFilter(statFilterButton, #letters > 0 and table.concat(letters) or "+", #letters > 0)
+end
+
+local function ApplyFilter(id)
+    filterID = id
+    RefreshHeaderFilters()
     if scroll then
         scroll:SetVerticalScroll(0)
     end
@@ -1506,13 +1547,103 @@ local function ApplyFilter(id, label)
 end
 
 local function ApplyStatFilter()
-    if statLabel then
-        statLabel:SetText(StatFilterLabel())
-    end
+    RefreshHeaderFilters()
     if scroll then
         scroll:SetVerticalScroll(0)
     end
     Layout()
+end
+
+local function OpenGearMenu(anchor)
+    if MenuUtil and type(MenuUtil.CreateContextMenu) == "function" then
+        MenuUtil.CreateContextMenu(anchor, function(_, root)
+            root:CreateTitle("Gear")
+            for _, option in ipairs(FILTERS) do
+                root:CreateRadio(option.label, function()
+                    return filterID == option.id
+                end, function()
+                    ApplyFilter(option.id)
+                end)
+            end
+        end)
+        return
+    end
+    -- No menu API: step to the next slot.
+    local nextIndex = 1
+    for index, option in ipairs(FILTERS) do
+        if option.id == filterID then
+            nextIndex = index % #FILTERS + 1
+        end
+    end
+    ApplyFilter(FILTERS[nextIndex].id)
+end
+
+-- Pick any number of stats: one shows items with it, two items with both, three or more items
+-- with at least one of them.
+local function OpenStatMenu(anchor)
+    if MenuUtil and type(MenuUtil.CreateContextMenu) == "function" then
+        MenuUtil.CreateContextMenu(anchor, function(_, root)
+            root:CreateTitle("Secondary stats")
+            for _, stat in ipairs(SECONDARY_STATS) do
+                local id = stat.id
+                root:CreateCheckbox(StatName(stat), function()
+                    return statFilter[id] == true
+                end, function()
+                    statFilter[id] = not statFilter[id] or nil
+                    ApplyStatFilter()
+                    -- Keep the menu open so several stats can be picked in one go.
+                    return MenuResponse and MenuResponse.Refresh or nil
+                end)
+            end
+            root:CreateDivider()
+            root:CreateButton("Clear", function()
+                statFilter = {}
+                ApplyStatFilter()
+            end)
+        end)
+        return
+    end
+    -- No menu API: cycle through no filter and each single stat.
+    local selected = SelectedStats()
+    local nextIndex = 1
+    if #selected == 1 then
+        for index, stat in ipairs(SECONDARY_STATS) do
+            if stat == selected[1] then
+                nextIndex = index + 1
+            end
+        end
+    end
+    statFilter = {}
+    if SECONDARY_STATS[nextIndex] then
+        statFilter[SECONDARY_STATS[nextIndex].id] = true
+    end
+    ApplyStatFilter()
+end
+
+local function CreateHeaderFilter(label, onClick, describe)
+    local button = CreateFrame("Button", nil, columnHeader)
+    button:SetHeight(16)
+    button:SetPoint("LEFT", label, "RIGHT", 5, 0)
+    button.back = Pixel(button, "BACKGROUND", 0.24, 0.24, 0.26, 0.95)
+    button.back:SetAllPoints()
+    local shine = Pixel(button, "HIGHLIGHT", 1, 1, 1, 0.18)
+    shine:SetAllPoints()
+    button.text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    button.text:SetPoint("CENTER", button, "CENTER", 0, 0)
+    button:SetScript("OnClick", onClick)
+    button:SetScript("OnEnter", function(self)
+        if GameTooltip then
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            describe(GameTooltip)
+            GameTooltip:Show()
+        end
+    end)
+    button:SetScript("OnLeave", function()
+        if GameTooltip then
+            GameTooltip:Hide()
+        end
+    end)
+    return button
 end
 
 local function ScrollTop()
@@ -1705,91 +1836,13 @@ local function Build()
         frame:Hide()
     end)
 
-    local filter = CreateFrame("Button", "BetterGreatVaultLootTableFilter", frame, "UIPanelButtonTemplate")
-    filter:SetSize(150, 22)
-    filter:SetPoint("TOPRIGHT", -46, -12)
-    filterLabel = filter.Text or _G[filter:GetName() .. "Text"]
-    if filterLabel then
-        filterLabel:SetText("All gear")
-    end
-    filter:SetScript("OnClick", function(self)
-        if MenuUtil and type(MenuUtil.CreateContextMenu) == "function" then
-            MenuUtil.CreateContextMenu(self, function(_, root)
-                for _, option in ipairs(FILTERS) do
-                    root:CreateRadio(option.label, function()
-                        return filterID == option.id
-                    end, function()
-                        ApplyFilter(option.id, option.label)
-                    end)
-                end
-            end)
-            return
-        end
-        local nextIndex = 1
-        for index, option in ipairs(FILTERS) do
-            if option.id == filterID then
-                nextIndex = index % #FILTERS + 1
-            end
-        end
-        ApplyFilter(FILTERS[nextIndex].id, FILTERS[nextIndex].label)
-    end)
-
-    -- Secondary stat filter: pick any number of stats. One shows items with it, two shows items
-    -- with both, three or more shows items with at least one of them.
-    local statButton = CreateFrame("Button", "BetterGreatVaultLootTableStats", frame, "UIPanelButtonTemplate")
-    statButton:SetSize(150, 22)
-    statButton:SetPoint("RIGHT", filter, "LEFT", -8, 0)
-    statLabel = statButton.Text or _G[statButton:GetName() .. "Text"]
-    if statLabel then
-        statLabel:SetText(StatFilterLabel())
-    end
-    statButton:SetScript("OnClick", function(self)
-        if MenuUtil and type(MenuUtil.CreateContextMenu) == "function" then
-            MenuUtil.CreateContextMenu(self, function(_, root)
-                root:CreateTitle("Secondary stats")
-                for _, stat in ipairs(SECONDARY_STATS) do
-                    local id = stat.id
-                    root:CreateCheckbox(StatName(stat), function()
-                        return statFilter[id] == true
-                    end, function()
-                        statFilter[id] = not statFilter[id] or nil
-                        ApplyStatFilter()
-                        -- Keep the menu open so several stats can be picked in one go.
-                        return MenuResponse and MenuResponse.Refresh or nil
-                    end)
-                end
-                root:CreateDivider()
-                root:CreateButton("Clear", function()
-                    statFilter = {}
-                    ApplyStatFilter()
-                end)
-            end)
-            return
-        end
-        -- No menu API: cycle through no filter and each single stat.
-        local selected = SelectedStats()
-        local nextIndex = 1
-        if #selected == 1 then
-            for index, stat in ipairs(SECONDARY_STATS) do
-                if stat == selected[1] then
-                    nextIndex = index + 1
-                end
-            end
-        end
-        statFilter = {}
-        if SECONDARY_STATS[nextIndex] then
-            statFilter[SECONDARY_STATS[nextIndex].id] = true
-        end
-        ApplyStatFilter()
-    end)
-
     specButton = BGV.Utils.CreateLootSpecButton(frame)
-    specButton:SetPoint("RIGHT", statButton, "LEFT", -8, 0)
+    specButton:SetPoint("TOPRIGHT", -46, -12)
 
     -- Database mode: the class and spec to list loot for, in the loot spec button's place.
     classButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     classButton:SetSize(200, 22)
-    classButton:SetPoint("RIGHT", statButton, "LEFT", -8, 0)
+    classButton:SetPoint("TOPRIGHT", -46, -12)
     classButton:SetScript("OnClick", function(self)
         OpenClassMenu(self)
     end)
@@ -1797,8 +1850,6 @@ local function Build()
 
     -- The drag strip spans most of the title bar; keep the header buttons above it so
     -- clicks reach them instead of starting a window drag.
-    filter:SetFrameLevel(drag:GetFrameLevel() + 2)
-    statButton:SetFrameLevel(drag:GetFrameLevel() + 2)
     specButton:SetFrameLevel(drag:GetFrameLevel() + 2)
     classButton:SetFrameLevel(drag:GetFrameLevel() + 2)
 
@@ -1883,6 +1934,21 @@ local function Build()
         label:SetJustifyH("LEFT")
         columnHeader.labels[column[1]] = label
     end
+    -- The gear and secondary stat filters, as small buttons after their columns' labels.
+    statFilterButton = CreateHeaderFilter(columnHeader.labels.stats, function(self)
+        OpenStatMenu(self)
+    end, function(tooltip)
+        tooltip:SetText("Secondary stats filter")
+        tooltip:AddLine(StatFilterSummary(), 1, 1, 1)
+        tooltip:AddLine("Pick one stat for items with it, two for items with both, three or more for items with any of them.", 0.7, 0.7, 0.72, true)
+    end)
+    gearFilterButton = CreateHeaderFilter(columnHeader.labels.slot, function(self)
+        OpenGearMenu(self)
+    end, function(tooltip)
+        tooltip:SetText("Gear filter")
+        tooltip:AddLine(filterID == "ALL" and "Showing all gear" or ("Showing: " .. GearFilterLabel()), 1, 1, 1)
+    end)
+    RefreshHeaderFilters()
     child = CreateFrame("Frame", nil, scroll)
     child:SetSize(520, 40)
     scroll:SetScrollChild(child)
