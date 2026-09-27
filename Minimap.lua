@@ -135,17 +135,40 @@ function BGV.Minimap.RefreshAttention()
     end
 end
 
+-- The button is ours to place while it sits on the minimap. A minimap button addon can move it
+-- into a frame of its own (EllesmereUI's button group), which places it from then on.
+local function OnMinimap()
+    return button:GetParent() == Minimap
+end
+
 local function Place()
+    if not OnMinimap() then
+        return
+    end
     local angle = BetterGreatVaultDB and BetterGreatVaultDB.minimapAngle or 220
     local rad = math.rad(angle)
     button:ClearAllPoints()
     button:SetPoint("CENTER", Minimap, "CENTER", math.cos(rad) * RADIUS, math.sin(rad) * RADIUS)
 end
 
-function BGV.Minimap.Apply()
+local placed = false
+
+-- Shows or hides the button as the settings say. It's placed the first time it's shown, and
+-- again with `reposition` (settings reset); turning it off and on leaves it where it is, which a
+-- minimap button addon may have chosen.
+function BGV.Minimap.Apply(reposition)
     if ShowMinimap() then
-        Place()
+        if not placed or reposition then
+            Place()
+            placed = true
+        end
+        -- Showing it must not leave it invisible: in its own frame, a minimap button addon's Show
+        -- hook can zero the alpha until that addon lays the frame out again (EllesmereUI's does).
+        local alpha = button:GetAlpha()
         button:Show()
+        if not OnMinimap() and button:GetAlpha() < alpha then
+            button:SetAlpha(alpha)
+        end
         BGV.Minimap.RefreshAttention()
     else
         button:Hide()
@@ -561,7 +584,7 @@ button:SetScript("OnDragStart", function(self)
         local mx, my = Minimap:GetCenter()
         local cx, cy = GetCursorPosition()
         local scale = Minimap:GetEffectiveScale()
-        if not mx or not scale or scale == 0 then
+        if not mx or not scale or scale == 0 or not OnMinimap() then
             return
         end
         local angle = math.deg(math.atan2(cy / scale - my, cx / scale - mx))
