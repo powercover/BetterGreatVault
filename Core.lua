@@ -17,6 +17,7 @@ local function SavedDefaults()
         showMinimap = true,
         useCompartment = true,
         minimapPopup = true,
+        popupWeek = true,
         independentMinimap = false,
         fadeMinimap = false,
         lockMinimap = false,
@@ -262,7 +263,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
         if BGV.LootTable and type(BGV.LootTable.OnCharacterChanged) == "function" then
             BGV.LootTable.OnCharacterChanged()
         end
-        -- The AddOns menu lists the addon on entering the world; then take it out if it's off.
+        -- The addon compartment lists the addon on entering the world; then take it out if it's off.
         if C_Timer and type(C_Timer.After) == "function" then
             C_Timer.After(0, BGV.Minimap.ApplyCompartment)
         end
