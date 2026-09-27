@@ -211,6 +211,9 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     end
 
     if event == "WEEKLY_REWARDS_UPDATE" then
+        if BGV.Minimap and type(BGV.Minimap.RefreshAttention) == "function" then
+            BGV.Minimap.RefreshAttention()
+        end
         RefreshLootLists()
         BGV.GreatVault.Invalidate()
         if WeeklyRewardsFrame and type(WeeklyRewardsFrame.IsShown) == "function" and WeeklyRewardsFrame:IsShown() then
