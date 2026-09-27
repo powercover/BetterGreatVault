@@ -393,8 +393,8 @@ local function BuildPopup()
     body:SetAllPoints()
     Utils.Border(popup, 0.24, 0.24, 0.27, 1)
 
-    -- Title band: the emblem, the addon's name and the time left to the weekly reset, over a
-    -- rule in the accent color.
+    -- Title band: the emblem (its handle spinning, Utils.CreateEmblem), the addon's name and the
+    -- time left to the weekly reset, over a rule in the accent color.
     local band = Pixel(popup, "BACKGROUND", 0.085, 0.085, 0.097, 1)
     band:SetPoint("TOPLEFT", 1, -1)
     band:SetPoint("TOPRIGHT", -1, -1)
@@ -403,10 +403,9 @@ local function BuildPopup()
     popup.rule:SetHeight(1)
     popup.rule:SetPoint("TOPLEFT", band, "BOTTOMLEFT", 0, 0)
     popup.rule:SetPoint("TOPRIGHT", band, "BOTTOMRIGHT", 0, 0)
-    local emblem = popup:CreateTexture(nil, "ARTWORK")
-    emblem:SetTexture("Interface\\AddOns\\BetterGreatVault\\Icon")
-    emblem:SetSize(30, 30)
+    local emblem = Utils.CreateEmblem(popup, 30)
     emblem:SetPoint("TOPLEFT", PAD - 2, -8)
+    popup.emblem = emblem
     popup.title = Text("GameFontNormal", 0.85, 0.65, 0.2)
     popup.title:SetPoint("TOPLEFT", emblem, "TOPRIGHT", 8, -2)
     popup.title:SetText("Better Great Vault")

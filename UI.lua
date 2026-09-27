@@ -142,11 +142,6 @@ local function EnsureFX(activityFrame)
             gate:SetPoint("BOTTOMRIGHT", fx, "BOTTOMRIGHT", 0, 0)
         end
 
-        local backing = gate:CreateTexture(nil, "BACKGROUND")
-        backing:SetAllPoints(gate)
-        ColorTexture(backing, 0.104, 0.083, 0.075, 1)
-        gate.backing = backing
-
         local face = gate:CreateTexture(nil, "ARTWORK")
         face:SetPoint("TOPLEFT", fx, "TOPLEFT", 0, 0)
         face:SetPoint("BOTTOMRIGHT", fx, "BOTTOMRIGHT", 0, 0)
@@ -637,16 +632,6 @@ local function StopFX(activityFrame)
     FadeCaption(activityFrame, 1)
 end
 
-local function PaintGateBacking(gate)
-    local backing = gate and gate.backing
-    if not backing then
-        return
-    end
-    backing:ClearAllPoints()
-    backing:SetAllPoints(gate)
-    ColorTexture(backing, 0.104, 0.083, 0.075, 1)
-end
-
 local function FitCase(activityFrame)
     local fx = activityFrame.bgvFX
     if not fx then
@@ -667,7 +652,6 @@ local function FitCase(activityFrame)
         if gate and gate.face and type(gate.face.SetAtlas) == "function" then
             gate.face:SetAtlas(atlas)
         end
-        PaintGateBacking(gate)
     end
 end
 
@@ -841,11 +825,6 @@ local function EnsureClosedGates(activityFrame)
             door:SetPoint("BOTTOMLEFT", closed, "BOTTOMLEFT", 0, 0)
             door:SetPoint("BOTTOMRIGHT", closed, "BOTTOMRIGHT", 0, 0)
         end
-        local backing = door:CreateTexture(nil, "BACKGROUND")
-        backing:SetAllPoints(door)
-        ColorTexture(backing, 0.104, 0.083, 0.075, 1)
-        door.backing = backing
-
         local face = door:CreateTexture(nil, "ARTWORK")
         face:SetPoint("TOPLEFT", closed, "TOPLEFT", 0, 0)
         face:SetPoint("BOTTOMRIGHT", closed, "BOTTOMRIGHT", 0, 0)
@@ -893,7 +872,6 @@ local function ShowClosedGates(activityFrame)
         if door.face and type(door.face.SetAtlas) == "function" then
             door.face:SetAtlas(atlas)
         end
-        PaintGateBacking(door)
         door:Show()
     end
     closed:SetFrameLevel(level)
@@ -1129,6 +1107,46 @@ local function ShowDefaultCaption(activityFrame)
     end
 end
 
+-- EllesmereUI's Great Vault skin gives each slot a square card (frames of the slot marked with
+-- _euiTileBg and _euiDarkOverlay, its border inside) and a progress bar along the bottom (marked
+-- with _euiFill and _euiTrack), green on a complete slot. On the addon's unlocked slots both
+-- showed around the gates (at their rounded corners and bottom edge), so there they're made
+-- transparent, and they're back wherever the vault is Blizzard's again. The skin shows its card
+-- on every refresh but never sets the alpha of either, so this holds.
+local function IsSkinPiece(frame)
+    return (frame._euiFill and frame._euiTrack) or frame._euiTileBg or frame._euiDarkOverlay
+end
+
+local function SyncSkin(activityFrame)
+    if not activityFrame or type(activityFrame.GetChildren) ~= "function" then
+        return
+    end
+    local slot = activityFrame.bgvSlot
+    local alpha = (slot and slot.unlocked) and 0 or 1
+    for _, child in ipairs({ activityFrame:GetChildren() }) do
+        if IsSkinPiece(child) and child:GetAlpha() ~= alpha then
+            child:SetAlpha(alpha)
+        end
+    end
+end
+
+-- The skin makes its card and bar a frame after the vault first shows, so the slots are synced
+-- again once that has run.
+local function SyncSkinSoon(weeklyRewardsFrame)
+    if not weeklyRewardsFrame or weeklyRewardsFrame.bgvSkinQueued or not (C_Timer and type(C_Timer.After) == "function") then
+        return
+    end
+    weeklyRewardsFrame.bgvSkinQueued = true
+    C_Timer.After(0, function()
+        C_Timer.After(0, function()
+            weeklyRewardsFrame.bgvSkinQueued = nil
+            for _, activityFrame in ipairs(type(weeklyRewardsFrame.Activities) == "table" and weeklyRewardsFrame.Activities or {}) do
+                SyncSkin(activityFrame)
+            end
+        end)
+    end)
+end
+
 local function ProgressWeek()
     return not (BGV.Rewards and BGV.Rewards.ShowingWeeklyProgress) or BGV.Rewards.ShowingWeeklyProgress()
 end
@@ -1139,7 +1157,9 @@ local function EnsureSpecButton(weeklyRewardsFrame)
         return button
     end
     button = Utils.CreateLootSpecButton(weeklyRewardsFrame, true)
-    button:SetPoint("TOPLEFT", weeklyRewardsFrame, "TOPLEFT", 18, -34)
+    -- In line with the rows' labels (Blizzard's RaidFrame and the rest sit at x 68), clear of the
+    -- vault border's corner bracket, which draws over everything in the frame's top-left.
+    button:SetPoint("TOPLEFT", weeklyRewardsFrame, "TOPLEFT", 68, -34)
     button:SetFrameLevel(weeklyRewardsFrame:GetFrameLevel() + 20)
     weeklyRewardsFrame.bgvSpecButton = button
     return button
@@ -1215,6 +1235,7 @@ local function RestoreVanilla(activityFrame)
     if activityFrame.bgvBaseLevel then
         activityFrame:SetFrameLevel(activityFrame.bgvBaseLevel)
     end
+    SyncSkin(activityFrame)
 end
 
 local function RestoreVault(weeklyRewardsFrame)
@@ -1243,6 +1264,7 @@ function UI.Clear(activityFrame)
     StopFX(activityFrame)
     HideClosedGates(activityFrame)
     ShowDefaultCaption(activityFrame)
+    SyncSkin(activityFrame)
 end
 
 local function ShowReward(activityFrame, slot, info)
@@ -1318,6 +1340,7 @@ function UI.Apply(activityFrame, slot)
     end
     LayoutLines(activityFrame)
     UpdateFX(activityFrame, slot)
+    SyncSkin(activityFrame)
 
     if Utils.IsUsableNumber(slot.itemLevel) or type(slot.itemQuality) == "string" or slot.rewardIcon then
         return
@@ -1529,6 +1552,7 @@ function UI.Hook()
             if shellApplying or not self:IsShown() then
                 return
             end
+            SyncSkinSoon(self)
             if self.bgvShellReady then
                 KeepShell(self)
                 return
@@ -1544,6 +1568,7 @@ function UI.Hook()
                 RestoreVault(self)
                 return
             end
+            SyncSkinSoon(self)
             if self.bgvShellReady then
                 KeepShell(self)
                 return
