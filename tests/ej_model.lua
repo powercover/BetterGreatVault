@@ -54,6 +54,9 @@
 --  * The list is the selected encounter's loot (or every boss's, in journal order, when none is
 --    selected) at the current difficulty, filtered by class/spec and slot filter. Class 0 = no filter;
 --    spec 0 = any spec of the class.
+--  * Rows carry handError / weaponTypeError for what the player's own class can't equip (Blizzard's
+--    item button reddens the slot / armor-type text with them), whatever the loot filter: a
+--    Druid browsing Warrior loot gets plate and swords flagged.
 --  * Items not in the item cache come back with name/icon/link nil (or the instance name and a
 --    placeholder icon with cfg.placeholderRows, the "cold journal" artifact the existing test models).
 --    Reading such a row, C_Item.GetItemInfo or RequestLoadItemDataByID queue a load that completes
@@ -72,6 +75,10 @@
 --  * At login the loot filter is the player's class and active spec, the slot filter NoFilter, the
 --    difficulty 14 and nothing is selected.
 --  * EJ_GetInstanceByIndex/tier/encounter-info reads fire nothing. OnOpen/OnClose do nothing.
+--  * EJ_GetInstanceInfo()'s link is the client's journal link, |Hjournal:0:instanceID:difficultyID|h,
+--    so the selected instance can be read back from it when the guide shows none.
+--  * Weekly rewards / Mythic+ reward data (tiers, upgrade steps, reward levels, activity rows) are the
+--    user's in-game values; see M.weekly and M.mythicPlus below.
 --  * Event delivery follows registration order; a frame unregistered mid-dispatch is skipped.
 --  * C_Timer.After(0) runs on the next frame. Each frame: client async work, OnUpdate, then timers.
 --  * debugprofilestop() = simulated wall clock plus a fixed CPU cost per EJ call (cfg.cost), so time
@@ -134,6 +141,10 @@ local function NewStats()
         agHijacks = 0,
         hijackLog = {},
         events = {},
+        -- C_WeeklyRewards calls by name (not journal calls; they show when cached data is rebuilt).
+        weekly = {},
+        -- GetItemSpecInfo calls (spec answers are cached by the addon).
+        specInfo = 0,
     }
 end
 M.stats = NewStats()
@@ -685,14 +696,28 @@ local NO_FILTER = Enum.ItemSlotFilterType.NoFilter
 M.CLASS_SPECS = {
     [11] = { 102, 103, 104, 105 },
     [1] = { 71, 72, 73 },
+    [2] = { 65, 66, 70 },
     [8] = { 62, 63, 64 },
     [5] = { 256, 257, 258 },
 }
 M.SPEC_NAMES = {
     [102] = "Balance", [103] = "Feral", [104] = "Guardian", [105] = "Restoration",
     [71] = "Arms", [72] = "Fury", [73] = "Protection",
+    [65] = "Holy", [66] = "Protection", [70] = "Retribution",
     [62] = "Arcane", [63] = "Fire", [64] = "Frost",
     [256] = "Discipline", [257] = "Holy", [258] = "Shadow",
+}
+
+-- What each class can equip, for the journal's per-row flags: rows the viewing character (the
+-- player) can't equip carry weaponTypeError (armor type or weapon type shown red) or handError
+-- (the slot shown red, here a shield), whatever the loot filter shows. Heaviest armor subclass,
+-- usable weapon subclasses, shields.
+M.PROFICIENCY = {
+    [11] = { armor = 2, weapons = { [10] = true, [15] = true, [4] = true, [13] = true, [6] = true } },
+    [1] = { armor = 4, weapons = { [7] = true, [10] = true, [0] = true, [4] = true, [15] = true, [13] = true, [6] = true }, shield = true },
+    [2] = { armor = 4, weapons = { [7] = true, [0] = true, [4] = true, [6] = true }, shield = true },
+    [8] = { armor = 1, weapons = { [10] = true, [7] = true, [15] = true, [19] = true } },
+    [5] = { armor = 1, weapons = { [10] = true, [15] = true, [4] = true, [19] = true } },
 }
 local ALL_SPECS = {}
 for _, specs in pairs(M.CLASS_SPECS) do
@@ -705,13 +730,15 @@ table.sort(ALL_SPECS)
 local SPECS = {
     INT_LEATHER = { 102, 105 },
     AGI_LEATHER = { 103, 104 },
-    PLATE = { 71, 72, 73 },
+    PLATE = { 71, 72, 73, 65, 66, 70 },
     CLOTH = { 62, 63, 64, 256, 257, 258 },
-    INT_TRINKET = { 102, 105, 62, 63, 64, 256, 257, 258 },
-    STR_TRINKET = { 71, 72, 73 },
+    INT_TRINKET = { 102, 105, 62, 63, 64, 256, 257, 258, 65 },
+    STR_TRINKET = { 71, 72, 73, 66, 70 },
     AGI_TRINKET = { 103, 104 },
     STAFF = { 102, 103, 104, 105, 62, 63, 64, 256, 257, 258 },
-    SWORD = { 71, 72 },
+    SWORD = { 71, 72, 70 },
+    INT_SWORD = { 62, 63, 64 },
+    SHIELD = { 73, 66, 65 },
 }
 
 local ARMOR_SLOTS = { "INVTYPE_HEAD", "INVTYPE_SHOULDER", "INVTYPE_CHEST", "INVTYPE_HAND", "INVTYPE_WAIST",
@@ -730,6 +757,7 @@ local EQUIP = {
     INVTYPE_FEET = { filter = 9, label = "Feet" },
     INVTYPE_2HWEAPON = { filter = 10, label = "Two-Hand", classID = 2, subClassID = 10 },
     INVTYPE_WEAPON = { filter = 10, label = "One-Hand", classID = 2, subClassID = 7 },
+    INVTYPE_SHIELD = { filter = 11, label = "Off Hand", classID = 4, subClassID = 6 },
     INVTYPE_FINGER = { filter = 12, label = "Finger", classID = 4, subClassID = 0 },
     INVTYPE_TRINKET = { filter = 13, label = "Trinket", classID = 4, subClassID = 0 },
     NONEQUIP = { filter = 14, label = "", classID = 15, subClassID = 0 },
@@ -934,6 +962,17 @@ function M.Build()
     local oldDungeon = BuildDungeon(10, 1272, "Old Ruins", { OLD }, { 1, 2, 23 }, false, nil)
     local oldRaid = BuildRaid(1273, "Old Citadel", { OLD }, 2950, 3950, 3, 2950, 2450)
 
+    -- Added after everything else so the items above keep their IDs: shields (Protection
+    -- Warrior/Paladin, Holy Paladin) and INT one-hand swords (Mage), gear a Druid can't equip.
+    for _, b in ipairs({ 2, 6 }) do
+        Drop(M.bosses[raid.bosses[b]], NewItem({ equip = "INVTYPE_SHIELD", specs = SPECS.SHIELD, name = string.format("Voidspire B%d Bulwark", b) }))
+    end
+    Drop(M.bosses[raid.bosses[4]], NewItem({ equip = "INVTYPE_WEAPON", specs = SPECS.INT_SWORD, name = "Voidspire B4 Spellblade" }))
+    for _, instanceID in ipairs(seasonDungeons) do
+        local instance = M.instances[instanceID]
+        Drop(M.bosses[instance.bosses[3]], NewItem({ equip = "INVTYPE_WEAPON", specs = SPECS.INT_SWORD, name = instance.name .. " B3 Spellblade" }))
+    end
+
     M.ids = {
         raid = raid.id,
         raidBosses = raid.bosses,
@@ -1060,12 +1099,103 @@ function SetLootSpecialization(specID)
     end)
 end
 
+-- Any class's specializations (the loot database lists loot for classes other than the player's).
+M.CLASS_INFO = {
+    [1] = { "Warrior", "WARRIOR" },
+    [2] = { "Paladin", "PALADIN" },
+    [5] = { "Priest", "PRIEST" },
+    [8] = { "Mage", "MAGE" },
+    [11] = { "Druid", "DRUID" },
+}
+
+function GetNumClasses()
+    return 13
+end
+
+function GetClassInfo(classIndex)
+    local info = M.CLASS_INFO[classIndex]
+    if not info then
+        return nil
+    end
+    return info[1], info[2], classIndex
+end
+
+function GetNumSpecializationsForClassID(classID)
+    return #(M.CLASS_SPECS[classID] or {})
+end
+
+function GetSpecializationInfoForClassID(classID, specIndex)
+    local specID = (M.CLASS_SPECS[classID] or {})[specIndex]
+    if not specID then
+        return nil
+    end
+    return specID, M.SPEC_NAMES[specID], "", 100000 + specID, "DAMAGER", false, true
+end
+
 C_SpecializationInfo = {
     GetSpecialization = GetSpecialization,
     GetSpecializationInfo = GetSpecializationInfo,
+    GetNumSpecializationsForClassID = GetNumSpecializationsForClassID,
 }
 
-M.weekly = { canClaim = false, generated = false, tierDifficulty = { [900] = 2, [901] = 8 } }
+-- Weekly rewards, from the user's own vault in game (12.x):
+--  * C_WeeklyRewards.GetActivities rows (type index level activityTierID progress/threshold):
+--    World 6 1 1 249 2/2, Raid 3 1 15 0 9/2, Mythic+ 1 1 15 256 1/1 and 1 2 13 256 4/4.
+--  * GetNextActivitiesIncrease(tier, level) walked up from level 0: Mythic+ tier 256 -> 4=308,
+--    6=311, 7=315, 10=318; World tier 249 -> 2=282, 3=285, 4=289, 5=292, 6=295, 7=298, 8=305.
+--    Raid activities have tier 0 and it returns false for them; past the last step it returns false.
+--    For a level below 0 it answers the first step above it (so no level-1 world value).
+--  * C_MythicPlus.GetRewardLevelForDifficultyLevel: 2=305, 3=305, 4=308, 5=308, 6=311, 7=315,
+--    8=305 (Blizzard's quirk: the vault's steps say +8 is 315), 9=315, 10=318.
+--  * GetActivityEncounterInfo(Raid, index) lists every raid boss, killed or not (encounterID is the
+--    journal encounter ID, instanceID the raid's game map).
+M.weekly = {
+    canClaim = false,
+    generated = false,
+    -- 900: the heroic-dungeon tier the harness's heroic slot uses; 256: the keystone tier.
+    tierDifficulty = { [900] = 2, [901] = 8, [256] = 8 },
+    activities = {
+        { type = 6, index = 1, level = 1, activityTierID = 249, progress = 2, threshold = 2, id = 1001 },
+        { type = 3, index = 1, level = 15, activityTierID = 0, progress = 9, threshold = 2, id = 1002 },
+        { type = 1, index = 1, level = 15, activityTierID = 256, progress = 1, threshold = 1, id = 1003 },
+        { type = 1, index = 2, level = 13, activityTierID = 256, progress = 4, threshold = 4, id = 1004 },
+    },
+    steps = {
+        [256] = { { 4, 308 }, { 6, 311 }, { 7, 315 }, { 10, 318 } },
+        [249] = { { 2, 282 }, { 3, 285 }, { 4, 289 }, { 5, 292 }, { 6, 295 }, { 7, 298 }, { 8, 305 } },
+    },
+    -- tier -> { level, itemLevel } GetNextActivitiesIncrease(tier, -1) answers (unknown in game;
+    -- unset, it answers the first step, so the levels under it have no step).
+    belowZero = {},
+    raidKills = { 16, 16, 15, 15, 14, 0, 16, 15 },
+    -- false: the raid's boss list hasn't arrived yet (GetActivityEncounterInfo returns {}).
+    encounterInfoReady = true,
+}
+
+local function NextStep(steps, level)
+    for _, step in ipairs(steps or {}) do
+        if step[1] > level then
+            return step
+        end
+    end
+end
+
+local function Weekly(name)
+    M.stats.weekly[name] = (M.stats.weekly[name] or 0) + 1
+end
+
+function M.WeeklyCount(name)
+    return M.stats.weekly[name] or 0
+end
+
+-- Adds a C_WeeklyRewards.GetActivities row.
+function M.AddActivity(activityType, index, level, tier, progress, threshold)
+    local rows = M.weekly.activities
+    rows[#rows + 1] = {
+        type = activityType, index = index, level = level, activityTierID = tier,
+        progress = progress, threshold = threshold, id = 1000 + #rows + 1,
+    }
+end
 
 C_WeeklyRewards = {
     CanClaimRewards = function()
@@ -1078,12 +1208,97 @@ C_WeeklyRewards = {
         return M.weekly.tierDifficulty[activityTierID]
     end,
     GetActivities = function()
-        return {}
+        Weekly("GetActivities")
+        local list = {}
+        for index, row in ipairs(M.weekly.activities) do
+            local copy = { rewards = {} }
+            for key, value in pairs(row) do
+                copy[key] = value
+            end
+            list[index] = copy
+        end
+        return list
     end,
-    GetNextActivitiesIncrease = function()
-        return false
+    -- hasSeasonData, nextActivityTierID, nextLevel, itemLevel. Below level 0 it answers
+    -- M.weekly.belowZero[tier] when set (what the vault reports under its first step), else the
+    -- first step, as from level 0.
+    GetNextActivitiesIncrease = function(activityTierID, level)
+        Weekly("GetNextActivitiesIncrease")
+        local below = (level or 0) < 0 and M.weekly.belowZero[activityTierID]
+        if below then
+            return true, activityTierID, below[1], below[2]
+        end
+        local step = NextStep(M.weekly.steps[activityTierID], level or 0)
+        if not step then
+            return false
+        end
+        return true, activityTierID, step[1], step[2]
+    end,
+    -- hasSeasonData, nextMythicPlusLevel, itemLevel
+    GetNextMythicPlusIncrease = function(level)
+        Weekly("GetNextMythicPlusIncrease")
+        local step = NextStep(M.weekly.steps[256], level or 0)
+        if not step then
+            return false
+        end
+        return true, step[1], step[2]
+    end,
+    GetActivityEncounterInfo = function(activityType, index)
+        Weekly("GetActivityEncounterInfo")
+        if activityType ~= 3 or not M.weekly.encounterInfoReady then
+            return {}
+        end
+        local list = {}
+        local raid = M.instances[M.ids.raid]
+        for b, bossID in ipairs(raid.bosses) do
+            list[#list + 1] = {
+                encounterID = bossID,
+                bestDifficulty = M.weekly.raidKills[b] or 0,
+                uiOrder = b,
+                instanceID = raid.gameMapID,
+            }
+        end
+        return list
     end,
 }
+
+M.mythicPlus = {
+    season = 15,
+    rewardLevels = { [2] = 305, [3] = 305, [4] = 308, [5] = 308, [6] = 311, [7] = 315, [8] = 305, [9] = 315, [10] = 318 },
+}
+
+C_MythicPlus = {
+    GetCurrentSeason = function()
+        return M.mythicPlus.season
+    end,
+    -- weeklyRewardLevel, endOfRunRewardLevel
+    GetRewardLevelForDifficultyLevel = function(level)
+        local weekly = M.mythicPlus.rewardLevels[level] or ((level or 0) > 10 and 318 or nil)
+        if not weekly then
+            return 0, 0
+        end
+        return weekly, weekly - 13
+    end,
+    RequestMapInfo = function() end,
+}
+
+-- Removes (present = false) or puts back a client API function, e.g. ("C_WeeklyRewards",
+-- "GetNextMythicPlusIncrease"), for scenarios on clients or states where it doesn't answer.
+M.removedApis = {}
+
+function M.SetApiPresent(tableName, key, present)
+    local target = _G[tableName]
+    local id = tableName .. "." .. key
+    if present then
+        if M.removedApis[id] then
+            target[key] = M.removedApis[id]
+            M.removedApis[id] = nil
+        end
+    elseif target[key] ~= nil then
+        M.removedApis[id] = target[key]
+        target[key] = nil
+    end
+end
 
 M.challenge = { ready = true }
 
@@ -1228,6 +1443,7 @@ function C_Item.IsItemKeystoneByID()
 end
 
 function GetItemSpecInfo(value)
+    M.stats.specInfo = M.stats.specInfo + 1
     local item = M.items[ItemIDFrom(value) or -1]
     if not item then
         return nil
@@ -1419,6 +1635,11 @@ local function InstancesInTier(isRaid)
     return list
 end
 
+-- The journal's instance link, as the client builds it: |Hjournal:0:instanceID:difficultyID|h.
+local function InstanceLink(instance)
+    return string.format("|cff66bbff|Hjournal:0:%d:%d|h[%s]|h|r", instance.id, M.ej.difficulty or 0, instance.name)
+end
+
 function EJ_GetInstanceByIndex(index, isRaid)
     Api("EJ_GetInstanceByIndex")
     local id = InstancesInTier(isRaid)[index]
@@ -1426,7 +1647,7 @@ function EJ_GetInstanceByIndex(index, isRaid)
     if not instance then
         return nil
     end
-    return instance.id, instance.name, "description", 1, 2, 3, 4, instance.uiMapID, "link", true, instance.gameMapID
+    return instance.id, instance.name, "description", 1, 2, 3, 4, instance.uiMapID, InstanceLink(instance), true, instance.gameMapID
 end
 
 function EJ_GetInstanceInfo(instanceID)
@@ -1435,7 +1656,7 @@ function EJ_GetInstanceInfo(instanceID)
     if not instance then
         return nil
     end
-    return instance.name, "description", 1, 2, 3, 4, instance.uiMapID, "link", true, instance.gameMapID, 0, instance.isRaid
+    return instance.name, "description", 1, 2, 3, 4, instance.uiMapID, InstanceLink(instance), true, instance.gameMapID, 0, instance.isRaid
 end
 
 function EJ_GetInstanceForMap(uiMapID)
@@ -1587,6 +1808,28 @@ function EJ_GetNumLoot()
     return #CurrentRows()
 end
 
+-- The row flags for the viewing character (the player), whatever the loot filter: handError (the
+-- slot, here a shield, can't be equipped), weaponTypeError (the armor or weapon type can't).
+function M.EquipErrors(item)
+    local skill = M.PROFICIENCY[M.player.classID]
+    if not skill or item.nonGear then
+        return false, false
+    end
+    if item.equipLoc == "INVTYPE_SHIELD" then
+        return not skill.shield, false
+    end
+    if item.classID == 2 then
+        return false, not skill.weapons[item.subClassID]
+    end
+    if item.classID == 4 and item.subClassID >= 1 and item.subClassID <= 4 then
+        return false, item.subClassID > skill.armor
+    end
+    return false, false
+end
+
+local ARMOR_NAMES = { [1] = "Cloth", [2] = "Leather", [3] = "Mail", [4] = "Plate", [6] = "Shield" }
+local WEAPON_NAMES = { [7] = "Sword", [10] = "Staff" }
+
 local function RowInfo(row)
     local item = M.items[row.itemID]
     local instance = M.instances[M.bosses[row.bossID].instance]
@@ -1595,6 +1838,7 @@ local function RowInfo(row)
         M.RequestItem(item.id, true)
     end
     local placeholder = M.cfg.placeholderRows
+    local handError, weaponTypeError = M.EquipErrors(item)
     return {
         itemID = item.id,
         encounterID = row.bossID,
@@ -1602,11 +1846,11 @@ local function RowInfo(row)
         icon = cached and item.icon or (placeholder and 136243 or nil),
         link = cached and ItemLink(item) or nil,
         slot = item.slotLabel,
-        armorType = item.classID == 4 and "Leather" or nil,
+        armorType = item.classID == 2 and WEAPON_NAMES[item.subClassID] or ARMOR_NAMES[item.subClassID],
         itemQuality = "ffa335ee",
         filterType = item.filterType,
-        handError = false,
-        weaponTypeError = false,
+        handError = handError,
+        weaponTypeError = weaponTypeError,
     }
 end
 

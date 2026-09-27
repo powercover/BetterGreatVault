@@ -73,6 +73,7 @@ end
 local function PrintHelp()
     Utils.Print(string.format("v%s by %s", BGV.VERSION, BGV.AUTHOR))
     Utils.Print("/bgv debug - toggle debug and print the current Great Vault")
+    Utils.Print("/bgv db - loot database: everything the vault can award, for any class")
     Utils.Print("/bgv refresh - refresh the open Great Vault")
     Utils.Print("/bgv reset - clear saved settings")
 end
@@ -119,6 +120,10 @@ local function HandleSlash(message)
         Utils.Print(BetterGreatVaultDB.debug and "Debug enabled." or "Debug disabled.")
         if BetterGreatVaultDB.debug then
             PrintDebug()
+        end
+    elseif command == "db" or command == "database" then
+        if BGV.LootTable and type(BGV.LootTable.ToggleDatabase) == "function" then
+            BGV.LootTable.ToggleDatabase()
         end
     elseif command == "refresh" then
         BGV.GreatVault.Invalidate()

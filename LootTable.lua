@@ -38,9 +38,10 @@ local LEFT_W = 188
 local LIST_TOP = 132
 local ROW_H = 30
 local NAME_X = 40
+local TIER_W = 44
 local LEVEL_W = 80
 local STATS_W = 150
-local SLOT_W = 120
+local SLOT_W = 130
 local GROUP_H = 26
 local STAT_LINE_H = 12
 
@@ -49,8 +50,19 @@ local function Columns(width)
     local slotX = width - SLOT_W - 8
     local statsX = slotX - STATS_W
     local levelX = statsX - LEVEL_W
-    return levelX, statsX, slotX
+    local tierX = levelX - TIER_W
+    return tierX, levelX, statsX, slotX
 end
+
+-- Best-in-Slot tier letters (Bis.lua), coloured like the reels' tier backgrounds.
+local TIER_RANK = { S = 5, A = 4, B = 3, C = 2, D = 1 }
+local TIER_TEXT = {
+    S = { 1, 0.78, 0.2 },
+    A = { 0.78, 0.45, 1 },
+    B = { 0.4, 0.62, 1 },
+    C = { 0.35, 0.85, 0.4 },
+    D = { 0.62, 0.62, 0.64 },
+}
 
 local frame
 local rail
@@ -78,6 +90,23 @@ local templateCache = {}
 local Layout
 local pendingWatch
 local chunkQueued
+
+-- "vault": the Great Vault's own slots. "database" (Shift+middle-click on the minimap button):
+-- everything the vault can award this season, as if everything were completed, for any class
+-- and spec, at the vault's item level for a chosen difficulty, keystone level or world tier.
+local mode = "vault"
+local DB_SOURCES = {
+    { id = "raid", title = "Raid", header = "Raid" },
+    { id = "mplus", title = "M+ keystones", header = "Mythic+" },
+    { id = "world", title = "World", header = "World" },
+}
+-- The database's choices, kept for the session: source, level per source, class and spec
+-- (classID 0: all classes; specID 0: all of the class's specs).
+local db = { source = "raid", levels = {} }
+local classButton
+local windowTitle
+local railTitle
+local dbRows = {}
 
 local Pixel = BGV.Utils.Pixel
 
@@ -151,6 +180,11 @@ end
 
 local NO_STATS = {}
 
+-- Tooltip reads for items whose stats aren't cached yet, per redraw (reset by Layout): a large
+-- list of uncached items fills in over a few redraws instead of stalling one frame.
+local STAT_LOOKUPS_PER_PASS = 40
+local statLookups = STAT_LOOKUPS_PER_PASS
+
 -- The item's secondary stats at the level the vault awards, read from the same tooltip the row
 -- shows (C_TooltipInfo.GetItemKey, the data behind GameTooltip:SetItemKey), highest amount
 -- first. Returns nil while the item's tooltip data hasn't loaded.
@@ -163,6 +197,10 @@ local function EntryStats(entry)
     if statCache[key] then
         return statCache[key]
     end
+    if statLookups <= 0 then
+        return nil
+    end
+    statLookups = statLookups - 1
     local data
     if BGV.Utils.IsUsableNumber(entry.itemLevel) then
         data = BGV.Utils.Call(info.GetItemKey, entry.itemID, entry.itemLevel, 0)
@@ -271,42 +309,160 @@ local function CacheKey(slot)
     }, ":")
 end
 
+-- The gear and stat filters. An item whose stats are still loading is listed (without stats)
+-- unless filtering by stat, and the list stays pending so it's redrawn once they arrive.
+local function FilterEntries(found)
+    local list = {}
+    local pending = false
+    local selected = SelectedStats()
+    for _, entry in ipairs(type(found) == "table" and found or {}) do
+        if filterID == "ALL" or entry.equipLabel == filterID then
+            local stats = EntryStats(entry)
+            if not stats then
+                pending = true
+                if #selected == 0 then
+                    list[#list + 1] = entry
+                end
+            elseif PassesStatFilter(stats, selected) then
+                list[#list + 1] = entry
+            end
+        end
+    end
+    return list, pending
+end
+
+local function FiltersActive()
+    return filterID ~= "ALL" or #SelectedStats() > 0
+end
+
 local function SlotItems(slot)
     local key = CacheKey(slot)
     local cached = itemCache[key]
     if cached then
         return cached, false
     end
-    local list = {}
+    local found
     local pending = false
-    local selected = SelectedStats()
     if slot.unlocked and BGV.Rewards and type(BGV.Rewards.ItemsForSlot) == "function" then
-        local found, stillLoading = BGV.Rewards.ItemsForSlot(slot)
+        local stillLoading
+        found, stillLoading = BGV.Rewards.ItemsForSlot(slot)
         pending = stillLoading == true
-        if type(found) == "table" then
-            for _, entry in ipairs(found) do
-                if filterID == "ALL" or entry.equipLabel == filterID then
-                    -- Stats still loading: list the item (without stats) unless filtering by
-                    -- stat, and keep the list pending so it's redrawn once they arrive.
-                    local stats = EntryStats(entry)
-                    if not stats then
-                        pending = true
-                        if #selected == 0 then
-                            list[#list + 1] = entry
-                        end
-                    elseif PassesStatFilter(stats, selected) then
-                        list[#list + 1] = entry
-                    end
-                end
-            end
-        end
     end
-    if pending then
+    local list, statsPending = FilterEntries(found)
+    if pending or statsPending then
         return list, true
     end
     itemCache[key] = list
     return list, false
 end
+
+local function DatabaseSource()
+    for _, source in ipairs(DB_SOURCES) do
+        if source.id == db.source then
+            return source
+        end
+    end
+    db.source = DB_SOURCES[1].id
+    return DB_SOURCES[1]
+end
+
+-- The chosen level of a database source ({ level, label, itemLevel, ceiling }); the source's
+-- default when none is chosen yet.
+local function DatabaseLevel(sourceID)
+    local levels = BGV.Rewards and type(BGV.Rewards.DatabaseLevels) == "function" and BGV.Rewards.DatabaseLevels(sourceID) or {}
+    local chosen, fallback
+    for _, info in ipairs(levels) do
+        if info.level == db.levels[sourceID] then
+            chosen = info
+        end
+        if info.level == levels.default then
+            fallback = info
+        end
+    end
+    if chosen and chosen.itemLevel then
+        return chosen
+    end
+    -- Nothing chosen yet, or its item level isn't known (any more): the default, a known one.
+    if fallback then
+        db.levels[sourceID] = fallback.level
+        return fallback
+    end
+    return chosen
+end
+
+local function ItemLevelText(info)
+    if not (info and info.itemLevel) then
+        return nil
+    end
+    if info.ceiling then
+        return string.format("%d/%d", info.itemLevel, info.ceiling)
+    end
+    return tostring(info.itemLevel)
+end
+
+local function DatabaseKey()
+    return table.concat({
+        "database",
+        tostring(db.source),
+        tostring(db.levels[db.source]),
+        tostring(db.classID),
+        tostring(db.specID),
+        tostring(filterID),
+        StatFilterKey(),
+    }, ":")
+end
+
+local function DatabaseItems()
+    local key = DatabaseKey()
+    local cached = itemCache[key]
+    if cached then
+        return cached, false
+    end
+    local found
+    local pending = false
+    if BGV.Rewards and type(BGV.Rewards.DatabaseItems) == "function" then
+        local stillLoading
+        found, stillLoading = BGV.Rewards.DatabaseItems(db.source, db.levels[db.source], db.classID, db.specID)
+        pending = stillLoading == true
+    end
+    local list, statsPending = FilterEntries(found)
+    if pending or statsPending then
+        return list, true
+    end
+    itemCache[key] = list
+    return list, false
+end
+
+local function ClassInfo(classID)
+    for _, class in ipairs(BGV.Utils.Classes()) do
+        if class.id == classID then
+            return class
+        end
+    end
+end
+
+local ALL_CLASSES_TEXT = BGV.Utils.GlobalString("ALL_CLASSES", "All classes")
+
+local function ClassSpecLabel()
+    if db.classID == 0 then
+        return ALL_CLASSES_TEXT
+    end
+    local class = ClassInfo(db.classID)
+    if not class then
+        return BGV.Utils.GlobalString("CLASS", "Class")
+    end
+    local specName = "All specs"
+    if BGV.Utils.IsUsableNumber(db.specID) and db.specID ~= 0 then
+        for _, spec in ipairs(BGV.Utils.ClassSpecs(db.classID)) do
+            if spec.id == db.specID then
+                specName = spec.name
+            end
+        end
+    end
+    return BGV.Utils.ClassColorText(class.file, class.name) .. ": " .. specName
+end
+
+local ALL_SPECS_SHORT = "All specs"
 
 function BGV.LootTable.ItemsFor(slot)
     return SlotItems(slot)
@@ -652,6 +808,9 @@ local function Acquire()
         row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         row.name:SetJustifyH("LEFT")
         row.name:SetWordWrap(false)
+        row.tier = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        row.tier:SetJustifyH("LEFT")
+        row.tier:SetWordWrap(false)
         row.level = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         row.level:SetJustifyH("LEFT")
         row.level:SetWordWrap(false)
@@ -687,6 +846,7 @@ local function Acquire()
     row.icon:SetTexture(nil)
     row.name:SetFontObject(GameFontHighlight)
     row.name:SetText("")
+    row.tier:SetText("")
     row.level:SetText("")
     row.slot:SetText("")
     row.slot:SetTextColor(0.7, 0.7, 0.72)
@@ -830,11 +990,90 @@ local function SlotName(entry)
     return entry.equipLabel or ""
 end
 
+-- Armor type (Cloth, Leather, Mail, Plate, or Shield) by itemID; false when the item has none
+-- that matters (jewelry, trinkets, cloaks, weapons).
+local armorTypes = {}
+local WEARABLE_ARMOR = { [1] = true, [2] = true, [3] = true, [4] = true }
+
+local function ArmorType(entry)
+    local itemID = entry.itemID
+    if not BGV.Utils.IsUsableNumber(itemID) or type(GetItemInfoInstant) ~= "function" then
+        return nil
+    end
+    local known = armorTypes[itemID]
+    if known ~= nil then
+        return known or nil
+    end
+    local _, _, subType, equipLoc, _, classID, subClassID = GetItemInfoInstant(itemID)
+    if not BGV.Utils.IsUsableNumber(classID) then
+        return nil
+    end
+    local armorClass = Enum and Enum.ItemClass and Enum.ItemClass.Armor or 4
+    local shield = Enum and Enum.ItemArmorSubclass and Enum.ItemArmorSubclass.Shield or 6
+    local text = false
+    if classID == armorClass then
+        if subClassID == shield then
+            text = "Shield"
+        elseif WEARABLE_ARMOR[subClassID] and equipLoc ~= "INVTYPE_CLOAK" and type(subType) == "string" and subType ~= "" then
+            text = subType
+        end
+    end
+    armorTypes[itemID] = text
+    return text or nil
+end
+
+-- The Slot column: the slot, with the armor type where it matters ("Head (Plate)").
+local function SlotText(entry)
+    local slot = SlotName(entry)
+    local armor = ArmorType(entry)
+    if armor then
+        return string.format("%s (%s)", slot, armor)
+    end
+    return slot
+end
+
+-- The highest Best-in-Slot tier the item has for any of `specs` (nil: none, or no specs).
+local function BestTier(itemID, specs)
+    if not (BGV.Bis and type(BGV.Bis.Tier) == "function") or not BGV.Utils.IsUsableNumber(itemID) then
+        return nil
+    end
+    local best
+    for _, specID in ipairs(specs) do
+        local tier = BGV.Bis.Tier(itemID, specID)
+        if tier and TIER_RANK[tier] and (not best or TIER_RANK[tier] > TIER_RANK[best]) then
+            best = tier
+        end
+    end
+    return best
+end
+
+-- Whose Best-in-Slot tier the Tier column shows: the loot spec (as the reels do), or in the
+-- database the chosen spec, the best among the chosen class's specs, or nobody for all classes.
+local function TierSpecs()
+    if mode ~= "database" then
+        local specID = BGV.Utils.LootSpecID()
+        return specID and { specID } or {}
+    end
+    if BGV.Utils.IsUsableNumber(db.specID) and db.specID > 0 then
+        return { db.specID }
+    end
+    local specs = {}
+    if BGV.Utils.IsUsableNumber(db.classID) and db.classID > 0 then
+        for _, spec in ipairs(BGV.Utils.ClassSpecs(db.classID)) do
+            specs[#specs + 1] = spec.id
+        end
+    end
+    return specs
+end
+
 local function PlaceColumns(row, rowWidth)
-    local levelX, statsX, slotX = Columns(rowWidth)
+    local tierX, levelX, statsX, slotX = Columns(rowWidth)
     row.name:ClearAllPoints()
     row.name:SetPoint("LEFT", row, "LEFT", NAME_X, 0)
-    row.name:SetWidth(math.max(40, levelX - NAME_X - 10))
+    row.name:SetWidth(math.max(40, tierX - NAME_X - 10))
+    row.tier:ClearAllPoints()
+    row.tier:SetPoint("LEFT", row, "LEFT", tierX, 0)
+    row.tier:SetWidth(TIER_W - 8)
     row.level:ClearAllPoints()
     row.level:SetPoint("LEFT", row, "LEFT", levelX, 0)
     row.level:SetWidth(LEVEL_W - 8)
@@ -868,9 +1107,10 @@ local function PlaceHeader(rowWidth)
     if not columnHeader then
         return
     end
-    local levelX, statsX, slotX = Columns(rowWidth)
+    local tierX, levelX, statsX, slotX = Columns(rowWidth)
     local labels = columnHeader.labels
     labels.item:SetPoint("LEFT", columnHeader, "LEFT", 4 + 9, 0)
+    labels.tier:SetPoint("LEFT", columnHeader, "LEFT", 4 + tierX, 0)
     labels.level:SetPoint("LEFT", columnHeader, "LEFT", 4 + levelX, 0)
     labels.stats:SetPoint("LEFT", columnHeader, "LEFT", 4 + statsX, 0)
     labels.slot:SetPoint("LEFT", columnHeader, "LEFT", 4 + slotX, 0)
@@ -903,7 +1143,7 @@ local function GroupItems(items, slot)
             byName[name] = group
             groups[#groups + 1] = group
         end
-        local order = entry.encounterID and bossOrder[entry.encounterID]
+        local order = entry.encounterID and bossOrder[entry.encounterID] or entry.bossOrder
         if order and (not group.order or order < group.order) then
             group.order = order
         end
@@ -964,47 +1204,168 @@ local function ShowMessage(text, rowWidth)
     row.name:SetTextColor(0.55, 0.55, 0.58)
 end
 
+-- The vault mode's section: one Great Vault slot.
+local function VaultSection(model)
+    local section = FindSection(model, selectedKey) or FirstSection(model, true)
+    if not section then
+        return nil
+    end
+    selectedKey = section.id
+    local items, pending = SlotItems(section.slot)
+    return {
+        key = section.id,
+        title = SlotTitle(section.slot),
+        reward = RewardLine(section.slot),
+        items = items,
+        pending = pending,
+        locked = not section.slot.unlocked,
+        slot = section.slot,
+    }
+end
+
+local function DatabaseRewardLine(info)
+    if not (info and info.itemLevel) then
+        return "Vault item level not known yet"
+    end
+    if info.ceiling then
+        return string.format("Vault reward: %d item level, %d from the raid's last two bosses", info.itemLevel, info.ceiling)
+    end
+    return string.format("Vault reward: %d item level", info.itemLevel)
+end
+
+-- The database mode's section: one source at its chosen level, for the chosen class and spec.
+local function DatabaseSection()
+    local source = DatabaseSource()
+    local info = DatabaseLevel(source.id)
+    local section = {
+        key = table.concat({ "database", source.id, tostring(info and info.level), tostring(db.classID), tostring(db.specID) }, ":"),
+        title = source.header .. (info and (" · " .. info.label) or ""),
+        reward = DatabaseRewardLine(info),
+        items = {},
+        pending = false,
+        locked = false,
+        database = true,
+    }
+    -- No exact item level for this source yet: list nothing rather than items at a guessed one.
+    if not (info and info.itemLevel) then
+        section.unknownLevel = true
+        return section
+    end
+    section.items, section.pending = DatabaseItems()
+    return section
+end
+
+local function PaintDatabaseRail()
+    for _, link in ipairs(linkRows) do
+        link:Hide()
+    end
+    local y = 36
+    for _, source in ipairs(DB_SOURCES) do
+        local row = dbRows[source.id]
+        if row then
+            local selected = db.source == source.id
+            local info = DatabaseLevel(source.id)
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", rail, "TOPLEFT", 16, -y)
+            row:SetPoint("TOPRIGHT", rail, "TOPRIGHT", -8, -y)
+            row.bar:SetShown(selected)
+            row.label:SetText(source.title)
+            if selected then
+                row.label:SetTextColor(0.96, 0.96, 0.96)
+            else
+                row.label:SetTextColor(0.46, 0.46, 0.48)
+            end
+            local levelText = info and info.label or "Item level unknown"
+            local itemLevel = ItemLevelText(info)
+            if itemLevel then
+                levelText = levelText .. " · " .. itemLevel
+            elseif info then
+                levelText = levelText .. " · unknown"
+            end
+            row.level:SetText(levelText)
+            row:Show()
+        end
+        y = y + 62
+    end
+end
+
+local function HideDatabaseRail()
+    for _, row in pairs(dbRows) do
+        row:Hide()
+    end
+end
+
+local function RefreshModeWidgets()
+    local database = mode == "database"
+    if windowTitle then
+        windowTitle:SetText(database and "Loot database" or "Great Vault loot")
+    end
+    if railTitle then
+        railTitle:SetText(database and "Loot sources" or "Contents")
+    end
+    if database then
+        if specButton then
+            specButton:Hide()
+        end
+        if classButton then
+            classButton:SetText(ClassSpecLabel())
+            classButton:Show()
+        end
+    else
+        if classButton then
+            classButton:Hide()
+        end
+        BGV.Utils.RefreshLootSpecButton(specButton)
+    end
+end
+
 function Layout()
     if not child or not scroll then
         return
     end
-    BGV.Utils.RefreshLootSpecButton(specButton)
+    local database = mode == "database"
+    statLookups = STAT_LOOKUPS_PER_PASS
+    RefreshModeWidgets()
     ReleaseRows()
-    local model = BuildModel()
-    local section = FindSection(model, selectedKey) or FirstSection(model, true)
-    if section then
-        selectedKey = section.id
+    local model, section
+    if database then
+        section = DatabaseSection()
+    else
+        model = BuildModel()
+        section = VaultSection(model)
     end
-    if scroll.bgvKey ~= selectedKey then
+    local key = section and section.key or selectedKey
+    if scroll.bgvKey ~= key then
         scroll:SetVerticalScroll(0)
-        scroll.bgvKey = selectedKey
+        scroll.bgvKey = key
     end
 
+    local showRail = database or not solo
     if rail then
-        rail:SetShown(not solo)
+        rail:SetShown(showRail)
     end
     scroll:ClearAllPoints()
-    scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", solo and 16 or (LEFT_W + 16), -LIST_TOP)
+    scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", showRail and (LEFT_W + 16) or 16, -LIST_TOP)
     scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 16)
-    if not solo then
-        PaintLinks(model)
-    end
-    if section then
-        local items, pending = SlotItems(section.slot)
-        section.items = items
-        section.pending = pending
+    if database then
+        PaintDatabaseRail()
+    else
+        HideDatabaseRail()
+        if not solo then
+            PaintLinks(model)
+        end
     end
 
     if headerTitle then
-        local titleWidth = (frame:GetWidth() or 960) - (solo and 36 or (LEFT_W + 40))
+        local titleWidth = (frame:GetWidth() or 1000) - (showRail and (LEFT_W + 40) or 36)
         if titleWidth < 180 then
             titleWidth = 180
         end
         headerTitle:SetWidth(titleWidth)
         headerReward:SetWidth(titleWidth)
         if section then
-            headerTitle:SetText(SlotTitle(section.slot))
-            headerReward:SetText(RewardLine(section.slot))
+            headerTitle:SetText(section.title)
+            headerReward:SetText(section.reward or "")
         else
             headerTitle:SetText("Great Vault loot")
             headerReward:SetText("")
@@ -1023,7 +1384,7 @@ function Layout()
             ResetWatch()
             return
         end
-        local mark = tostring(selectedKey) .. ":" .. tostring(#(section.items or {}))
+        local mark = tostring(key) .. ":" .. tostring(#(section.items or {}))
         if mark ~= pendingWatch then
             pendingWatch = mark
             stalls = 0
@@ -1037,7 +1398,7 @@ function Layout()
             BGV.LootTable.RefreshPending(POLL_DELAY)
         elseif stalls == MAX_STALLS + 1 and BetterGreatVaultDB and BetterGreatVaultDB.debug then
             BGV.Utils.Print(string.format("Loot table stopped waiting on %s (%d items so far): no new items for 10s.",
-                SlotTitle(section.slot), #(section.items or {})))
+                section.title, #(section.items or {})))
             local trace = BGV.Rewards and type(BGV.Rewards.LastLoadTrace) == "function" and BGV.Rewards.LastLoadTrace()
             if trace then
                 BGV.Utils.Print("Last load state: " .. trace)
@@ -1053,12 +1414,16 @@ function Layout()
 
     local items = section.items or {}
     if #items == 0 then
-        if not section.slot.unlocked then
+        if section.locked then
             ShowMessage("Locked.", rowWidth)
+        elseif section.unknownLevel then
+            ShowMessage("The vault hasn't shown item levels for this yet. Complete one of these in your Great Vault this season and they'll appear here.", rowWidth)
         elseif section.pending and stalls >= MAX_STALLS then
             ShowMessage("Loot didn't finish loading. Close and reopen this window to try again.", rowWidth)
         elseif section.pending then
             ShowMessage("Loading loot...", rowWidth)
+        elseif section.database and not FiltersActive() then
+            ShowMessage("No loot found here for this class.", rowWidth)
         else
             ShowMessage("No items for this filter.", rowWidth)
         end
@@ -1067,6 +1432,7 @@ function Layout()
         return
     end
 
+    local tierSpecs = TierSpecs()
     local y = 2
     for groupIndex, group in ipairs(GroupItems(items, section.slot)) do
         if groupIndex > 1 then
@@ -1087,16 +1453,31 @@ function Layout()
             row.iconBG:Show()
             row.name:SetText(entry.name or "Item")
             row.name:SetTextColor(r, g, b)
+            local tier = BestTier(entry.itemID, tierSpecs)
+            if tier then
+                local color = TIER_TEXT[tier]
+                row.tier:SetText(tier)
+                row.tier:SetTextColor(color[1], color[2], color[3])
+            else
+                row.tier:SetText("-")
+                row.tier:SetTextColor(0.45, 0.45, 0.48)
+            end
             row.level:SetText(BGV.Utils.IsUsableNumber(entry.itemLevel) and tostring(entry.itemLevel) or "-")
             row.level:SetTextColor(0.96, 0.96, 0.96)
-            row.slot:SetText(SlotName(entry))
+            row.slot:SetText(SlotText(entry))
             -- One stat per line, highest amount first; the row grows if there are more lines
             -- than fit.
             local stats = EntryStats(entry)
+            local exact = BGV.Utils.IsUsableNumber(entry.itemLevel)
             local lines = {}
             for _, stat in ipairs(stats or NO_STATS) do
-                local amount = type(BreakUpLargeNumbers) == "function" and BreakUpLargeNumbers(stat.amount) or tostring(stat.amount)
-                lines[#lines + 1] = string.format("+%s %s", amount, stat.name)
+                if exact then
+                    local amount = type(BreakUpLargeNumbers) == "function" and BreakUpLargeNumbers(stat.amount) or tostring(stat.amount)
+                    lines[#lines + 1] = string.format("+%s %s", amount, stat.name)
+                else
+                    -- The amounts depend on an item level that isn't known here.
+                    lines[#lines + 1] = stat.name
+                end
             end
             if #lines > 0 then
                 PaintStats(row, lines, 0.9, 0.9, 0.92)
@@ -1134,6 +1515,122 @@ local function ApplyStatFilter()
     Layout()
 end
 
+local function ScrollTop()
+    if scroll then
+        scroll:SetVerticalScroll(0)
+    end
+end
+
+local function SelectDatabaseSource(sourceID)
+    db.source = sourceID
+    ResetWatch()
+    ScrollTop()
+    Layout()
+end
+
+local function SetDatabaseClass(classID, specID)
+    db.classID = classID
+    db.specID = specID or 0
+    ResetWatch()
+    ScrollTop()
+    Layout()
+end
+
+-- The level picker next to each database source: every level with the vault's item level for
+-- it. Levels the game hasn't given an item level for can't be picked, so none is ever guessed.
+local function OpenLevelMenu(anchor, sourceID)
+    local levels = BGV.Rewards and type(BGV.Rewards.DatabaseLevels) == "function" and BGV.Rewards.DatabaseLevels(sourceID) or {}
+    local function Pick(level)
+        db.levels[sourceID] = level
+        SelectDatabaseSource(sourceID)
+    end
+    if not (MenuUtil and type(MenuUtil.CreateContextMenu) == "function") then
+        -- No menu API: step to the next level with a known item level.
+        local current = DatabaseLevel(sourceID)
+        local start = 0
+        for index, info in ipairs(levels) do
+            if info == current then
+                start = index
+            end
+        end
+        for offset = 1, #levels do
+            local info = levels[(start + offset - 1) % #levels + 1]
+            if info.itemLevel then
+                Pick(info.level)
+                return
+            end
+        end
+        return
+    end
+    MenuUtil.CreateContextMenu(anchor, function(_, root)
+        root:CreateTitle("Vault reward item level")
+        for _, info in ipairs(levels) do
+            local level = info.level
+            local itemLevel = ItemLevelText(info)
+            local text = info.label .. "  |cff8a8a8e" .. (itemLevel or "unknown") .. "|r"
+            local radio = root:CreateRadio(text, function()
+                return db.levels[sourceID] == level
+            end, function()
+                Pick(level)
+            end)
+            if not itemLevel and radio and type(radio.SetEnabled) == "function" then
+                radio:SetEnabled(false)
+            end
+        end
+    end)
+end
+
+-- Class (or all classes), then spec or all specs, laid out like the Adventure Guide's loot filter.
+local function OpenClassMenu(anchor)
+    if not (MenuUtil and type(MenuUtil.CreateContextMenu) == "function") then
+        -- No menu API: step through the class's specs and "All specs".
+        local specs = BGV.Utils.ClassSpecs(db.classID)
+        local nextSpec = specs[1] and specs[1].id or 0
+        for index, spec in ipairs(specs) do
+            if spec.id == db.specID then
+                nextSpec = specs[index + 1] and specs[index + 1].id or 0
+            end
+        end
+        SetDatabaseClass(db.classID, nextSpec)
+        return
+    end
+    MenuUtil.CreateContextMenu(anchor, function(_, root)
+        local classMenu = root:CreateButton(BGV.Utils.GlobalString("CLASS", "Class"))
+        classMenu:CreateRadio(ALL_CLASSES_TEXT, function()
+            return db.classID == 0
+        end, function()
+            SetDatabaseClass(0, 0)
+        end)
+        for _, class in ipairs(BGV.Utils.Classes()) do
+            local classID = class.id
+            classMenu:CreateRadio(BGV.Utils.ClassColorText(class.file, class.name), function()
+                return db.classID == classID
+            end, function()
+                SetDatabaseClass(classID, 0)
+            end)
+        end
+        -- Specs only for a chosen class; with all classes there's nothing to narrow down.
+        local class = ClassInfo(db.classID)
+        if not class then
+            return
+        end
+        root:CreateTitle(BGV.Utils.ClassColorText(class.file, class.name))
+        for _, spec in ipairs(BGV.Utils.ClassSpecs(db.classID)) do
+            local specID = spec.id
+            root:CreateRadio(spec.name, function()
+                return db.specID == specID
+            end, function()
+                SetDatabaseClass(db.classID, specID)
+            end)
+        end
+        root:CreateRadio(ALL_SPECS_SHORT, function()
+            return (db.specID or 0) == 0
+        end, function()
+            SetDatabaseClass(db.classID, 0)
+        end)
+    end)
+end
+
 -- ids: list of "CRIT", "HASTE", "MASTERY", "VERSATILITY" (empty clears the filter).
 function BGV.LootTable.SetStatFilter(ids)
     statFilter = {}
@@ -1148,7 +1645,7 @@ local function Build()
         return frame
     end
     frame = CreateFrame("Frame", "BetterGreatVaultLootTable", UIParent, "BackdropTemplate")
-    frame:SetSize(960, 560)
+    frame:SetSize(1000, 560)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("DIALOG")
     frame:SetToplevel(true)
@@ -1157,7 +1654,7 @@ local function Build()
     frame:EnableMouse(true)
     frame:SetResizable(true)
     if frame.SetResizeBounds then
-        frame:SetResizeBounds(760, 400, 1400, 900)
+        frame:SetResizeBounds(840, 400, 1400, 900)
     end
     frame:Hide()
     if frame.SetBackdrop then
@@ -1188,6 +1685,7 @@ local function Build()
     title:SetPoint("TOPLEFT", 16, -14)
     title:SetText("Great Vault loot")
     title:SetTextColor(0.85, 0.65, 0.2)
+    windowTitle = title
 
     local drag = CreateFrame("Button", nil, frame)
     drag:SetPoint("TOPLEFT")
@@ -1288,11 +1786,21 @@ local function Build()
     specButton = BGV.Utils.CreateLootSpecButton(frame)
     specButton:SetPoint("RIGHT", statButton, "LEFT", -8, 0)
 
+    -- Database mode: the class and spec to list loot for, in the loot spec button's place.
+    classButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    classButton:SetSize(200, 22)
+    classButton:SetPoint("RIGHT", statButton, "LEFT", -8, 0)
+    classButton:SetScript("OnClick", function(self)
+        OpenClassMenu(self)
+    end)
+    classButton:Hide()
+
     -- The drag strip spans most of the title bar; keep the header buttons above it so
     -- clicks reach them instead of starting a window drag.
     filter:SetFrameLevel(drag:GetFrameLevel() + 2)
     statButton:SetFrameLevel(drag:GetFrameLevel() + 2)
     specButton:SetFrameLevel(drag:GetFrameLevel() + 2)
+    classButton:SetFrameLevel(drag:GetFrameLevel() + 2)
 
     rail = CreateFrame("Frame", nil, frame)
     rail:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -40)
@@ -1303,6 +1811,36 @@ local function Build()
     contents:SetPoint("TOPLEFT", rail, "TOPLEFT", 16, -12)
     contents:SetText("Contents")
     contents:SetTextColor(0.85, 0.65, 0.2)
+    railTitle = contents
+
+    -- Database mode's sources, each with its level picker (difficulty, keystone level or tier).
+    for _, source in ipairs(DB_SOURCES) do
+        local row = CreateFrame("Button", nil, rail)
+        row:SetHeight(54)
+        row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestLogTitleHighlight", "ADD")
+        row.bar = Pixel(row, "ARTWORK", 0.85, 0.65, 0.2, 1)
+        row.bar:SetSize(2, 40)
+        row.bar:SetPoint("LEFT", row, "LEFT", 0, 0)
+        row.bar:Hide()
+        row.label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        row.label:SetPoint("TOPLEFT", row, "TOPLEFT", 12, -6)
+        row.label:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+        row.label:SetJustifyH("LEFT")
+        row.label:SetWordWrap(false)
+        row.level = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+        row.level:SetHeight(20)
+        row.level:SetPoint("TOPLEFT", row, "TOPLEFT", 12, -26)
+        row.level:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+        local sourceID = source.id
+        row:SetScript("OnClick", function()
+            SelectDatabaseSource(sourceID)
+        end)
+        row.level:SetScript("OnClick", function(self)
+            OpenLevelMenu(self, sourceID)
+        end)
+        row:Hide()
+        dbRows[sourceID] = row
+    end
     local divider = Pixel(frame, "BORDER", 0.22, 0.22, 0.24, 1)
     divider:SetWidth(1)
     divider:SetPoint("TOPLEFT", rail, "TOPRIGHT", 0, 0)
@@ -1338,7 +1876,7 @@ local function Build()
     headerRule:SetPoint("BOTTOMLEFT")
     headerRule:SetPoint("BOTTOMRIGHT")
     columnHeader.labels = {}
-    for _, column in ipairs({ { "item", "Item" }, { "level", "Item Level" }, { "stats", "Secondary stats" }, { "slot", "Slot" } }) do
+    for _, column in ipairs({ { "item", "Item" }, { "tier", "Tier" }, { "level", "Item Level" }, { "stats", "Secondary stats" }, { "slot", "Slot" } }) do
         local label = columnHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         label:SetText(column[2]:upper())
         label:SetTextColor(0.85, 0.65, 0.2)
@@ -1377,6 +1915,15 @@ local function Build()
 
     frame:SetScript("OnShow", function()
         Layout()
+    end)
+    -- The database's reads are only kept while it's open.
+    frame:HookScript("OnHide", function()
+        if mode == "database" then
+            itemCache = {}
+            if BGV.Rewards and type(BGV.Rewards.ClearDatabase) == "function" then
+                BGV.Rewards.ClearDatabase()
+            end
+        end
     end)
     frame:RegisterEvent("CHALLENGE_MODE_MAPS_UPDATE")
     frame:RegisterEvent("EJ_LOOT_DATA_RECIEVED")
@@ -1446,6 +1993,10 @@ end
 
 function BGV.LootTable.Show(slot)
     local window = Build()
+    if mode == "database" and BGV.Rewards and type(BGV.Rewards.ClearDatabase) == "function" then
+        BGV.Rewards.ClearDatabase()
+    end
+    mode = "vault"
     itemCache = {}
     templateCache = {}
     ResetWatch()
@@ -1474,9 +2025,36 @@ end
 
 function BGV.LootTable.Toggle()
     local window = Build()
-    if window:IsShown() and not solo then
+    if window:IsShown() and mode == "vault" and not solo then
         window:Hide()
         return
     end
     BGV.LootTable.Show(nil)
+end
+
+function BGV.LootTable.ShowDatabase()
+    local window = Build()
+    mode = "database"
+    solo = false
+    itemCache = {}
+    templateCache = {}
+    ResetWatch()
+    if not BGV.Utils.IsUsableNumber(db.classID) then
+        db.classID = BGV.Utils.PlayerClassID()
+        db.specID = BGV.Utils.LootSpecID() or 0
+    end
+    PlaceHeaders()
+    window:Show()
+    window:Raise()
+    ScrollTop()
+    Layout()
+end
+
+function BGV.LootTable.ToggleDatabase()
+    local window = Build()
+    if window:IsShown() and mode == "database" then
+        window:Hide()
+        return
+    end
+    BGV.LootTable.ShowDatabase()
 end

@@ -230,6 +230,60 @@ function Utils.CycleLootSpec()
     Utils.SetLootSpec(specs[nextIndex].id)
 end
 
+function Utils.PlayerClassID()
+    if type(UnitClass) ~= "function" then
+        return nil
+    end
+    local _, _, classID = UnitClass("player")
+    return Utils.IsUsableNumber(classID) and classID or nil
+end
+
+-- Every playable class: { id, name, file } in the game's class order.
+function Utils.Classes()
+    local list = {}
+    if type(GetNumClasses) ~= "function" or type(GetClassInfo) ~= "function" then
+        return list
+    end
+    for index = 1, Utils.Call(GetNumClasses) or 0 do
+        local name, file, id = Utils.Call(GetClassInfo, index)
+        if Utils.IsUsableNumber(id) and Utils.IsUsableString(name) then
+            list[#list + 1] = { id = id, name = name, file = file }
+        end
+    end
+    return list
+end
+
+-- The specializations of any class: { id, name }.
+function Utils.ClassSpecs(classID)
+    local list = {}
+    -- Class 0 isn't a class: the game answers it with the hunter pet specs (Ferocity, ...).
+    if not Utils.IsUsableNumber(classID) or classID <= 0 or type(GetSpecializationInfoForClassID) ~= "function" then
+        return list
+    end
+    local count
+    if C_SpecializationInfo and type(C_SpecializationInfo.GetNumSpecializationsForClassID) == "function" then
+        count = Utils.Call(C_SpecializationInfo.GetNumSpecializationsForClassID, classID)
+    elseif type(GetNumSpecializationsForClassID) == "function" then
+        count = Utils.Call(GetNumSpecializationsForClassID, classID)
+    end
+    for index = 1, Utils.IsUsableNumber(count) and count or 5 do
+        local id, name = Utils.Call(GetSpecializationInfoForClassID, classID, index)
+        if Utils.IsUsableNumber(id) and Utils.IsUsableString(name) then
+            list[#list + 1] = { id = id, name = name }
+        end
+    end
+    return list
+end
+
+-- `text` in the class's color (for class names in menus and buttons).
+function Utils.ClassColorText(classFile, text)
+    local colors = RAID_CLASS_COLORS and type(classFile) == "string" and RAID_CLASS_COLORS[classFile]
+    if colors and type(colors.colorStr) == "string" then
+        return "|c" .. colors.colorStr .. text .. "|r"
+    end
+    return text
+end
+
 function Utils.LootSpecButtonEnabled()
     return not BetterGreatVaultDB or BetterGreatVaultDB.showLootSpecButton ~= false
 end

@@ -75,7 +75,12 @@ button:SetScript("OnClick", function(self, mouseButton)
     if mouseButton == "RightButton" then
         BGV.Minimap.ToggleSettings()
     elseif mouseButton == "MiddleButton" then
-        if BGV.LootTable and type(BGV.LootTable.Toggle) == "function" then
+        if not BGV.LootTable then
+            return
+        end
+        if IsShiftKeyDown() and type(BGV.LootTable.ToggleDatabase) == "function" then
+            BGV.LootTable.ToggleDatabase()
+        elseif type(BGV.LootTable.Toggle) == "function" then
             BGV.LootTable.Toggle()
         end
     else
@@ -113,6 +118,7 @@ button:SetScript("OnEnter", function(self)
     GameTooltip:SetText("Better Great Vault")
     GameTooltip:AddLine("Left-click: Toggle the Great Vault", 1, 1, 1)
     GameTooltip:AddLine("Middle-click: Possible loot", 1, 1, 1)
+    GameTooltip:AddLine("Shift+middle-click: Loot database (any class)", 1, 1, 1)
     GameTooltip:AddLine("Right-click: Toggle addon settings", 1, 1, 1)
     GameTooltip:Show()
 end)
