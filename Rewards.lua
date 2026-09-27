@@ -297,6 +297,12 @@ local DB_PREFIX = "db:"
 local dbBatches = {}
 local dbLevels = {}
 local dbRaid
+-- Database lists already stamped (see DatabaseEntries), and a count that moves whenever a
+-- database batch is kept or dropped: a call that reads nothing new returns the list stamped last
+-- time instead of copying every entry again.
+local dbStamped = {}
+local dbCopies = {}
+local dbGeneration = 0
 
 local mythicMaps
 
@@ -334,6 +340,8 @@ function Rewards.InvalidateIcons()
     specAnswers = DatabaseKeysOnly(specAnswers, "class")
     mythicMaps = nil
     dbLevels = {}
+    dbStamped = {}
+    dbCopies = {}
 end
 
 -- The journal's state (selected instance and boss, difficulty, loot and slot filters) is global
@@ -504,30 +512,44 @@ local function CloseScan()
 end
 
 -- Time a pass may spend reading uncached instances. At least one is always read, so every list
--- keeps making progress; the rest wait for the next pass.
-local SCAN_BUDGET_MS = 8
+-- keeps making progress; the rest wait for the next pass. The vault's reels load in passes 0.05s
+-- apart, so a small share each keeps the frames smooth while the vault opens.
+local SCAN_BUDGET_MS = 4
 
-local function NewBudget()
-    return { reads = 0, start = type(debugprofilestop) == "function" and debugprofilestop() or nil }
+local function NewBudget(limit)
+    return { reads = 0, limit = limit or SCAN_BUDGET_MS, start = type(debugprofilestop) == "function" and debugprofilestop() or nil }
 end
 
 local function AllowRead(budget)
-    if budget.reads > 0 and budget.start and debugprofilestop() - budget.start >= SCAN_BUDGET_MS then
+    if budget.reads > 0 and budget.start and debugprofilestop() - budget.start >= budget.limit then
         return false
     end
     budget.reads = budget.reads + 1
     return true
 end
 
+-- A reading budget several calls can share (Rewards.DatabaseItems' `budget`): together they
+-- spend at most about `limit` ms reading the journal, and always read at least one instance.
+function Rewards.NewReadBudget(limit)
+    return NewBudget(limit)
+end
+
+-- Boss pools (encounterSet tables, never changed once made) as text, by pool.
+local encounterKeys = setmetatable({}, { __mode = "k" })
+
 local function JournalBatchKey(difficultyID, instanceID, encounterSet, classID, specID)
     local encounterKey = ""
     if type(encounterSet) == "table" then
-        local ids = {}
-        for encounterID in pairs(encounterSet) do
-            ids[#ids + 1] = tostring(encounterID)
+        encounterKey = encounterKeys[encounterSet]
+        if not encounterKey then
+            local ids = {}
+            for encounterID in pairs(encounterSet) do
+                ids[#ids + 1] = tostring(encounterID)
+            end
+            table.sort(ids)
+            encounterKey = table.concat(ids, ",")
+            encounterKeys[encounterSet] = encounterKey
         end
-        table.sort(ids)
-        encounterKey = table.concat(ids, ",")
     end
     return table.concat({
         tostring(difficultyID),
@@ -1056,6 +1078,38 @@ local function GiveUp(batchKey, tries, seconds)
     return attempt.tries >= tries and waited >= seconds
 end
 
+-- A read that found items whose info hasn't loaded yet is read again once they all have, or as
+-- soon as one has while it has nothing to show yet, then every ITEM_REREAD_SECONDS while more
+-- load, or when it's time to give up on them; not on every pass: the journal would list the same,
+-- and every read selects the instance, the difficulty and each boss again. Its list so far
+-- stands in meanwhile.
+local ITEM_REREAD_SECONDS = 0.5
+
+local function StillWaiting(attempt)
+    local waiting = attempt and attempt.waiting
+    if not waiting or not (C_Item and type(C_Item.IsItemDataCachedByID) == "function") then
+        return false
+    end
+    local now = type(GetTime) == "function" and GetTime() or nil
+    if not (now and attempt.since) or now - attempt.since >= ITEM_WAIT_SECONDS then
+        return false
+    end
+    local loaded, total = 0, 0
+    for itemID in pairs(waiting.items) do
+        total = total + 1
+        if C_Item.IsItemDataCachedByID(itemID) then
+            loaded = loaded + 1
+        end
+    end
+    if loaded == 0 then
+        return true
+    end
+    if loaded == total or #waiting.entries == 0 then
+        return false
+    end
+    return now - waiting.readAt < ITEM_REREAD_SECONDS
+end
+
 local function BossList(instanceID)
     local bosses = {}
     for bossIndex = 1, 40 do
@@ -1279,9 +1333,16 @@ local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, bu
         if Utils.IsUsableNumber(instanceID) then
             local batchKey = prefix .. JournalBatchKey(difficultyID, instanceID, encounterSet, classID, specID)
             local batch = cache[batchKey]
+            local attempt = readAttempts[batchKey]
             if batch then
                 if loadTrace then
                     loadTrace[instanceID] = "cached(" .. #batch .. ")"
+                end
+            elseif StillWaiting(attempt) then
+                batch = attempt.waiting.entries
+                pending = true
+                if loadTrace then
+                    loadTrace[instanceID] = "waiting for item info"
                 end
             elseif not AllowRead(budget) then
                 pending = true
@@ -1309,6 +1370,9 @@ local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, bu
                 end
                 if settled then
                     cache[batchKey] = batch
+                    if cache == dbBatches then
+                        dbGeneration = dbGeneration + 1
+                    end
                     readAttempts[batchKey] = nil
                     if read.problem or read.missing > 0 then
                         givenUp[batchKey] = {
@@ -1322,6 +1386,14 @@ local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, bu
                     end
                 else
                     pending = true
+                    attempt = readAttempts[batchKey]
+                    if attempt then
+                        attempt.waiting = not read.problem and read.missing > 0 and {
+                            items = read.missingItems,
+                            entries = batch,
+                            readAt = type(GetTime) == "function" and GetTime() or 0,
+                        } or nil
+                    end
                 end
                 if loadTrace then
                     loadTrace[instanceID] = status
@@ -1356,6 +1428,9 @@ function Rewards.RetryGivenUp(itemID)
         if (itemID and why.items and why.items[itemID]) or (not itemID and why.stale) then
             local cache = why.cache or journalBatches
             cache[batchKey] = nil
+            if cache == dbBatches then
+                dbGeneration = dbGeneration + 1
+            end
             readAttempts[batchKey] = nil
             givenUp[batchKey] = nil
             dropped = true
@@ -1945,24 +2020,32 @@ end
 
 -- Copies with the vault's item level for the chosen level (the ceiling for raid Mythic's last two
 -- bosses); unknown item levels stay nil. Vault rewards are always epic.
-local function StampDatabase(entries, info, scope, sources)
+-- `copies` (optional): the copies made for this list before, by the entry copied, reused so a
+-- list stamped again after a new read only copies what's new.
+local function StampDatabase(entries, info, scope, sources, copies)
     local stamped = {}
     for index, source in ipairs(entries) do
-        local entry = {}
-        for key, value in pairs(source) do
-            entry[key] = value
-        end
-        local itemLevel = info and info.itemLevel or nil
-        if info and info.ceiling and scope and AtCeiling(entry, scope.ceiling) then
-            itemLevel = info.ceiling
-        end
-        entry.itemLevel = itemLevel
-        entry.quality = EPIC_QUALITY
-        if scope and entry.encounterID then
-            entry.bossOrder = scope.order[entry.encounterID]
-        end
-        if sources then
-            entry.source = sources[index]
+        local entry = copies and copies[source]
+        if not entry then
+            entry = {}
+            for key, value in pairs(source) do
+                entry[key] = value
+            end
+            local itemLevel = info and info.itemLevel or nil
+            if info and info.ceiling and scope and AtCeiling(entry, scope.ceiling) then
+                itemLevel = info.ceiling
+            end
+            entry.itemLevel = itemLevel
+            entry.quality = EPIC_QUALITY
+            if scope and entry.encounterID then
+                entry.bossOrder = scope.order[entry.encounterID]
+            end
+            if sources then
+                entry.source = sources[index]
+            end
+            if copies then
+                copies[source] = entry
+            end
         end
         stamped[index] = entry
     end
@@ -1977,18 +2060,68 @@ local function DatabaseLevel(source, level)
     end
 end
 
-local function DatabaseEntries(source, level, classID, specID)
+-- The list stamped for this call: the one from last time when this call read nothing from the
+-- journal and no database batch was kept or dropped since (the same batches make the same list),
+-- else a fresh one from `Stamp`, kept for next time if nothing was read.
+local function Stamped(key, readNothing, pending, Stamp, ...)
+    local kept = dbStamped[key]
+    if readNothing and kept and kept.generation == dbGeneration and kept.pending == pending then
+        return kept.list
+    end
+    local list = Stamp(...)
+    if readNothing then
+        dbStamped[key] = { generation = dbGeneration, pending = pending, list = list }
+    end
+    return list
+end
+
+-- The finished list kept for this call when every batch it's made of is cached, so it would read
+-- nothing and come out the same: then nothing needs collecting or sorting again.
+local function KeptWhole(key, difficultyID, instanceIDs, encounterSet, filter)
+    local kept = dbStamped[key]
+    if not kept or kept.pending or kept.generation ~= dbGeneration then
+        return nil
+    end
+    for _, instanceID in ipairs(instanceIDs) do
+        if Utils.IsUsableNumber(instanceID) and not filter.cache[filter.prefix
+            .. JournalBatchKey(difficultyID, instanceID, encounterSet, filter.classID, filter.specID)] then
+            return nil
+        end
+    end
+    return kept.list
+end
+
+-- The copies StampDatabase made per list (see its `copies`).
+local function CopiesFor(key)
+    local copies = dbCopies[key]
+    if not copies then
+        copies = setmetatable({}, { __mode = "k" })
+        dbCopies[key] = copies
+    end
+    return copies
+end
+
+local function DatabaseEntries(source, level, classID, specID, budget)
     Rewards.EnsureJournal()
     local filter = { classID = classID, specID = specID or 0, cache = dbBatches, prefix = DB_PREFIX }
     local info = DatabaseLevel(source, level)
+    local key = table.concat({ source, tostring(level), tostring(classID), tostring(specID or 0),
+        tostring(info and info.itemLevel), tostring(info and info.ceiling) }, ":")
 
     if source == "raid" then
         local scope = SeasonRaidScope()
         if #scope.instanceIDs == 0 then
             return {}, true
         end
-        local entries, pending = CollectEntries(level, scope.instanceIDs, scope.encounterSet, scope.names, nil, filter)
-        return StampDatabase(entries, info, scope), pending
+        local whole = KeptWhole(key, level, scope.instanceIDs, scope.encounterSet, filter)
+        if whole then
+            return whole, false
+        end
+        budget = budget or NewBudget()
+        local reads = budget.reads
+        local entries, pending = CollectEntries(level, scope.instanceIDs, scope.encounterSet, scope.names, budget, filter)
+        pending = pending == true
+        return Stamped(key, budget.reads == reads, pending, StampDatabase, entries, info, scope, nil, CopiesFor(key)), pending
     end
 
     if source == "mplus" then
@@ -1996,9 +2129,14 @@ local function DatabaseEntries(source, level, classID, specID)
         if #instanceIDs == 0 then
             return {}, seasonMaps == 0
         end
+        local whole = KeptWhole(key, KEYSTONE_DIFFICULTY, instanceIDs, nil, filter)
+        if whole then
+            return whole, false
+        end
         local groups = {}
         local pending = false
-        local budget = NewBudget()
+        budget = budget or NewBudget()
+        local reads = budget.reads
         for _, instanceID in ipairs(instanceIDs) do
             local batch, batchPending = CollectEntries(KEYSTONE_DIFFICULTY, { instanceID }, nil, nil, budget, filter)
             if batchPending then
@@ -2022,7 +2160,7 @@ local function DatabaseEntries(source, level, classID, specID)
                 sources[#entries] = group.name
             end
         end
-        return StampDatabase(entries, info, nil, sources), pending
+        return Stamped(key, budget.reads == reads, pending, StampDatabase, entries, info, nil, sources, CopiesFor(key)), pending
     end
 
     if source == "world" then
@@ -2044,12 +2182,14 @@ end
 
 -- Items the vault can award from `source` ("raid", "mplus", "world") at `level` (difficulty ID,
 -- keystone level or world tier) for any class and spec (classID 0: all classes, the journal's own
--- "All classes" filter; specID 0: all of the class's specs).
-function Rewards.DatabaseItems(source, level, classID, specID)
+-- "All classes" filter; specID 0: all of the class's specs). `budget` (optional, from
+-- Rewards.NewReadBudget) caps the journal reading this call shares with others. The list and
+-- its entries may be the same tables as last time's.
+function Rewards.DatabaseItems(source, level, classID, specID, budget)
     if not Utils.IsUsableNumber(classID) then
         return {}, false
     end
-    return WithScan(DatabaseEntries, source, level, classID, specID)
+    return WithScan(DatabaseEntries, source, level, classID, specID, budget)
 end
 
 -- Drops everything the database read, when it closes.
@@ -2057,6 +2197,8 @@ function Rewards.ClearDatabase()
     dbBatches = {}
     dbLevels = {}
     dbRaid = nil
+    dbStamped = {}
+    dbCopies = {}
     for _, byKey in ipairs({ readAttempts, givenUp, staleRetries }) do
         for batchKey in pairs(byKey) do
             if type(batchKey) == "string" and batchKey:sub(1, #DB_PREFIX) == DB_PREFIX then

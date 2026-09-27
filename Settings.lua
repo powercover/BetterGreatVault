@@ -644,16 +644,70 @@ local function Launch(open)
     open()
 end
 
+local function AnimatedSlots()
+    local saved = DB()
+    return not (saved and saved.disableAnimations == true)
+end
+
+-- How an unlocked slot opens (Case.lua): the specialization's style, one style, or a random one.
+local function StyleLabel()
+    local Case = BGV.Case
+    local choice = Case.Choice()
+    local name = Case.StyleName(choice)
+    if choice == Case.SPEC then
+        name = string.format(L["Match specialization (%s)"], Case.StyleName(Case.SpecStyle()))
+    end
+    return string.format(L["Opening style: %s"], name)
+end
+
+local function OpenStyleMenu(anchor, onPick)
+    if not (MenuUtil and type(MenuUtil.CreateContextMenu) == "function") then
+        return
+    end
+    local Case = BGV.Case
+    MenuUtil.CreateContextMenu(anchor, function(_, root)
+        local function Radio(text, value)
+            root:CreateRadio(text, function()
+                return Case.Choice() == value
+            end, function()
+                onPick(value)
+            end)
+        end
+        Radio(string.format(L["Match specialization (%s)"], Case.StyleName(Case.SpecStyle())), Case.SPEC)
+        root:CreateDivider()
+        for _, style in ipairs(Case.STYLES) do
+            Radio(L[style.name], style.id)
+        end
+        root:CreateDivider()
+        Radio(L["Random"], Case.RANDOM)
+    end)
+end
+
 local function BuildGreatVault()
     MakeHeader(child, L["Great Vault"], 1)
-    MakeCheckbox(child, L["Animated slots"], function()
-        local saved = DB()
-        return not (saved and saved.disableAnimations == true)
-    end, function(value)
+    MakeCheckbox(child, L["Animated slots"], AnimatedSlots, function(value)
         DB().disableAnimations = not value
         RefreshAccent()
+        BGV.Settings.Refresh()
     end)
     MakeNote(child, L["Hovering an unlocked slot opens its gates and spins a reel of the loot it can give. Off: the gates stay closed and the slot shows its caption."])
+    local styleRow
+    styleRow = MakeButtons(child, {
+        { text = StyleLabel(), width = 240, onClick = function(self)
+            OpenStyleMenu(self, function(value)
+                DB().vaultStyle = value
+                styleRow.buttons[1]:SetText(StyleLabel())
+                BGV.Settings.Relayout()
+            end)
+        end },
+    }, { indent = 1, requires = AnimatedSlots })
+    -- The label names the specialization's style, which follows a spec change.
+    local refresh = styleRow.Refresh
+    function styleRow:Refresh()
+        refresh(self)
+        self.buttons[1]:SetText(StyleLabel())
+    end
+    MakeNote(child, L["How an unlocked slot opens when you point at it. Match specialization gives some specializations a style of their own, such as Frost Shatter for frost mages and frost death knights, and Vault Door to the rest. Random picks a different style each time."], 2)
     MakeCheckbox(child, L["Best-in-Slot tiers"], function()
         return BGV.Utils.ShowBisTiers()
     end, function(value)
@@ -968,6 +1022,12 @@ local function BuildTools()
         end },
     })
     MakeNote(child, L["Print lists each Great Vault slot in chat, with its progress and reward item level. Refresh reads the Great Vault again."], true)
+    MakeButtons(child, {
+        { text = L["Print performance"], width = 140, onClick = function()
+            Call(BGV.PrintPerformance)
+        end },
+    })
+    MakeNote(child, L["Prints what the addon costs in chat: its CPU time a frame (from the game's addon profiler), its memory, how long it took to load, and its last slot animation and loot table load."], true)
 
     MakeGap(10)
     MakeSubheader(child, L["Reset"])
@@ -985,6 +1045,7 @@ local function BuildTools()
         "|cffe6e6e6/bgv db|r   " .. L["loot database"],
         "|cffe6e6e6/bgv debug|r   " .. L["debug mode, and print the Great Vault's slots"],
         "|cffe6e6e6/bgv refresh|r   " .. L["read the Great Vault again"],
+        "|cffe6e6e6/bgv perf|r   " .. L["what the addon costs: CPU, memory and animations"],
         "|cffe6e6e6/bgv reset|r   " .. L["reset settings"],
     }, "\n"), true)
 end

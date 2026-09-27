@@ -18,6 +18,13 @@ this season, for any class, so you can plan what to run next.
   and, once unlocked, the reward's upgrade track and exact item level.
 - **Loot reels.** Hovering an unlocked slot opens its gates and spins a reel of every item that
   slot can give you.
+- **Opening styles.** How a slot opens: Vault Door (heavy doors that unlatch and slide apart),
+  Classic, One-Armed Bandit (a slot machine whose reels stop on the payline), Arcane Portal, Frost
+  Shatter, Fel Fire and Old Cartoon. By default the style matches your specialization (Frost
+  Shatter for frost mages and frost death knights, Fel Fire for demon hunters and warlocks, Arcane
+  Portal for arcane mages and Devourer demon hunters, One-Armed Bandit for outlaw rogues, Old
+  Cartoon for brewmasters, Vault Door for everyone else); you can also pick one, or a random one
+  each time.
 - **Detailed tooltips.** A slot's tooltip lists what counts toward it (bosses killed, Mythic+ runs,
   world activity tiers), what the next slot needs, and the next step up in reward.
 - **Best-in-Slot tiers.** Reel items are colored by their Best-in-Slot tier for your loot
@@ -35,6 +42,8 @@ Left-click an unlocked slot, or middle-click the minimap button, to list every r
 - columns for Best-in-Slot tier, item level, secondary stats, and slot with armor type;
 - a search box for item names, and filters for gear slot and secondary stats (one stat: items
   with it; two: items with both; three or more: items with any of them);
+- item tooltips at that item level, compared with your gear while you hold Shift (or always, with
+  the game's **Always compare items** option), as in the Great Vault;
 - a resizable window that follows your accent color.
 
 ### Loot database
@@ -112,6 +121,7 @@ The entry in the minimap's addon compartment takes the same clicks.
 | `/bgv db` | Open or close the loot database |
 | `/bgv debug` | Turn debug mode on or off; turning it on prints the vault's slots |
 | `/bgv refresh` | Read the Great Vault again |
+| `/bgv perf` | What the addon costs: CPU time a frame and slow frames (from the game's addon profiler, counted since the game started), memory, how long it took to load, and the last slot animation and loot table load |
 | `/bgv reset` | Reset settings, keeping what the addon learned about this season's rewards |
 
 ### Key bindings
@@ -125,11 +135,11 @@ Right-click the minimap button, or open the game's **Options → AddOns → Bett
 
 | Section | Options |
 | --- | --- |
-| Great Vault | Animated slots, Best-in-Slot tiers, open the loot table from a slot, loot spec button, reward reminder |
+| Great Vault | Animated slots (with the opening style: your specialization's, one you pick, or random), Best-in-Slot tiers, open the loot table from a slot, loot spec button, reward reminder |
 | Minimap button | Addon compartment entry; show the button, with reset position, popup on mouseover (and its week's slots), lock position, unaffected by other addons, and fade out when not hovered |
 | Appearance | Text size, language, accent color |
 | Key bindings | The current keys, and a shortcut to the game's Key Bindings |
-| Tools | Open the Great Vault, loot table or loot database; debug mode; print or refresh vault data; reset settings; chat commands |
+| Tools | Open the Great Vault, loot table or loot database; debug mode; print or refresh vault data; print performance; reset settings; chat commands |
 | About | Version, author and links |
 
 ## Languages
@@ -191,6 +201,7 @@ and include:
 - your game version (`/dump GetBuildInfo()`);
 - the output of **Tools → Print vault data**, or `/bgv debug`;
 - whether the slot was locked, unlocked, or ready to claim;
+- for slowdowns, the output of `/bgv perf` right after they happen;
 - a screenshot, if the problem is visual.
 
 ## Development
@@ -202,7 +213,8 @@ The addon is plain Lua with no libraries.
 | `Core.lua` | Events, saved settings, chat commands, key bindings, the login reminder |
 | `GreatVault.lua` | Reads the vault's slots, progress and rewards |
 | `Rewards.lua` | Loot lists and item levels from the Encounter Journal; the loot database |
-| `UI.lua` | The Great Vault overlay: slot text, gates and reels |
+| `UI.lua` | The Great Vault overlay: each slot's text and hover, and the slot art it replaces |
+| `Case.lua` | What an unlocked slot shows when hovered: its gates, the loot reel and the opening styles |
 | `Tooltip.lua` | The slot tooltip |
 | `LootTable.lua` | The loot table and loot database window |
 | `Minimap.lua` | The minimap button, its popup, and the addon compartment entry |
@@ -212,7 +224,7 @@ The addon is plain Lua with no libraries.
 | `WorldLoot.lua` | The season's world gear: delves, prey and world bosses |
 | `Locales/` | Translations: the language system and one file per language |
 | `Bindings.xml` | Key bindings |
-| `Media/` | Minimap button art |
+| `Media/` | The icon's layers (minimap button, emblem) and the opening styles' art |
 
 ### Tests
 

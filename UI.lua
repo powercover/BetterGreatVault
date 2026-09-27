@@ -4,6 +4,7 @@ BGV.UI = {}
 
 local UI = BGV.UI
 local Utils = BGV.Utils
+local Case = BGV.Case
 
 local function AnimationsDisabled()
     return BetterGreatVaultDB and BetterGreatVaultDB.disableAnimations == true
@@ -56,161 +57,9 @@ local function LayoutLines(activityFrame)
     reward:SetPoint("TOPRIGHT", progress, "BOTTOMRIGHT", 0, -2)
 end
 
-local CASE_ICON = 40
-local CASE_STRIDE = 56
-local CASE_SLOTS = 12
-local GATE_CORNER = 16
-local REEL_LEFT = 2
-local REEL_RIGHT = 4
-local REEL_TICK = 1 / 60
-local REEL_SPEED = 100
-local REEL_REFRESH = 0.25
-local REEL_REFRESH_EMPTY = 0.1
 local PUMP_STALL_DELAY = 0.25
 -- Retries cover the ~10s Rewards may wait on item data before settling a list.
 local PUMP_STALL_RETRIES = 40
-
-local function ColorTexture(texture, r, g, b, a)
-    if texture.SetColorTexture then
-        texture:SetColorTexture(r, g, b, a or 1)
-    else
-        texture:SetTexture("Interface\\Buttons\\WHITE8X8")
-        texture:SetVertexColor(r, g, b, a or 1)
-    end
-end
-
-local function EnsureFX(activityFrame)
-    if activityFrame.bgvFX then
-        return
-    end
-
-    local fx = CreateFrame("Frame", nil, activityFrame)
-    fx:SetPoint("TOPLEFT", activityFrame, "TOPLEFT", 0, 0)
-    fx:SetPoint("BOTTOMRIGHT", activityFrame, "BOTTOMRIGHT", 0, 0)
-    fx:EnableMouse(false)
-    if fx.SetClipsChildren then
-        fx:SetClipsChildren(true)
-    end
-
-    local window = CreateFrame("Frame", nil, fx)
-    window:SetPoint("TOPLEFT", fx, "TOPLEFT", REEL_LEFT, -GATE_CORNER)
-    window:SetPoint("BOTTOMRIGHT", fx, "BOTTOMRIGHT", -REEL_RIGHT, GATE_CORNER)
-    window:EnableMouse(false)
-    if window.SetClipsChildren then
-        window:SetClipsChildren(true)
-    end
-    fx.window = window
-
-    local shade = window:CreateTexture(nil, "BACKGROUND")
-    shade:SetAllPoints()
-    ColorTexture(shade, 0.02, 0.015, 0.01, 1)
-
-    local reel = CreateFrame("Frame", nil, window)
-    reel:SetWidth(CASE_STRIDE * CASE_SLOTS)
-    reel:SetPoint("TOPLEFT", window, "TOPLEFT", 0, 0)
-    reel:SetPoint("BOTTOMLEFT", window, "BOTTOMLEFT", 0, 0)
-    fx.reel = reel
-    fx.cells = {}
-    for index = 1, CASE_SLOTS do
-        local holder = CreateFrame("Frame", nil, reel)
-        holder:SetWidth(CASE_STRIDE)
-        holder:SetPoint("TOPLEFT", reel, "TOPLEFT", (index - 1) * CASE_STRIDE, 0)
-        holder:SetPoint("BOTTOMLEFT", reel, "BOTTOMLEFT", (index - 1) * CASE_STRIDE, 0)
-        local back = holder:CreateTexture(nil, "BORDER")
-        back:SetAllPoints()
-        back:Hide()
-        holder.back = back
-        local icon = holder:CreateTexture(nil, "ARTWORK")
-        icon:SetSize(CASE_ICON, CASE_ICON)
-        icon:SetPoint("CENTER", holder, "CENTER", 0, 0)
-        holder.icon = icon
-        fx.cells[index] = holder
-    end
-
-    local function MakeGate(anchor)
-        local gate = CreateFrame("Frame", nil, activityFrame)
-        gate:SetFrameLevel(activityFrame:GetFrameLevel() + 8)
-        gate:EnableMouse(false)
-        if gate.SetClipsChildren then
-            gate:SetClipsChildren(true)
-        end
-        if anchor == "TOP" then
-            gate:SetPoint("TOPLEFT", fx, "TOPLEFT", 0, 0)
-            gate:SetPoint("TOPRIGHT", fx, "TOPRIGHT", 0, 0)
-        else
-            gate:SetPoint("BOTTOMLEFT", fx, "BOTTOMLEFT", 0, 0)
-            gate:SetPoint("BOTTOMRIGHT", fx, "BOTTOMRIGHT", 0, 0)
-        end
-
-        local face = gate:CreateTexture(nil, "ARTWORK")
-        face:SetPoint("TOPLEFT", fx, "TOPLEFT", 0, 0)
-        face:SetPoint("BOTTOMRIGHT", fx, "BOTTOMRIGHT", 0, 0)
-        face:SetAlpha(1)
-        if face.SetAtlas then
-            face:SetAtlas("evergreen-weeklyrewards-reward-unlocked")
-        else
-            ColorTexture(face, 0.12, 0.10, 0.08, 1)
-        end
-        gate.face = face
-        gate:SetAlpha(1)
-        gate:Hide()
-        return gate
-    end
-
-    fx.topDoor = MakeGate("TOP")
-    fx.bottomDoor = MakeGate("BOTTOM")
-
-    local marker = CreateFrame("Frame", nil, activityFrame)
-    marker:SetFrameLevel(activityFrame:GetFrameLevel() + 5)
-    marker:SetPoint("TOP", fx, "TOP", 0, -GATE_CORNER)
-    marker:SetPoint("BOTTOM", fx, "BOTTOM", 0, GATE_CORNER)
-    marker:SetWidth(2)
-    marker:EnableMouse(false)
-    local markerLine = marker:CreateTexture(nil, "OVERLAY")
-    markerLine:SetAllPoints()
-    marker.line = markerLine
-    marker:Hide()
-    fx.marker = marker
-    fx.markerLine = markerLine
-
-    local function MakeSeam()
-        local seam = CreateFrame("Frame", nil, activityFrame)
-        seam:SetFrameLevel(activityFrame:GetFrameLevel() + 9)
-        seam:SetHeight(2)
-        seam:EnableMouse(false)
-        local seamLine = seam:CreateTexture(nil, "OVERLAY")
-        seamLine:SetAllPoints()
-        seam.line = seamLine
-        seam:Hide()
-        return seam
-    end
-
-    fx.topSeam = MakeSeam()
-    fx.bottomSeam = MakeSeam()
-
-    fx.offset = 0
-    fx.cursor = 1
-    fx.reveal = 0
-    fx.owner = activityFrame
-    fx:Hide()
-    activityFrame.bgvFX = fx
-end
-
-local AccentColor = Utils.AccentColor
-
-local function ColorMarker(fx)
-    local line = fx and fx.markerLine
-    if not line then
-        return
-    end
-    local color = AccentColor()
-    ColorTexture(line, color[1], color[2], color[3], 0.95)
-    for _, seam in ipairs({ fx.topSeam, fx.bottomSeam }) do
-        if seam and seam.line then
-            ColorTexture(seam.line, 0.62, 0.48, 0.28, 1)
-        end
-    end
-end
 
 local function PaintReward(activityFrame)
     local reward = activityFrame and activityFrame.bgvReward
@@ -233,252 +82,8 @@ function UI.RepaintAccent()
     end
     for _, activityFrame in ipairs(activities) do
         PaintReward(activityFrame)
-        if activityFrame.bgvFX then
-            ColorMarker(activityFrame.bgvFX)
-        end
+        Case.RepaintAccent(activityFrame)
     end
-end
-
-local TIER_BACK = {
-    D = { 0.45, 0.45, 0.45 },
-    C = { 0.12, 0.55, 0.18 },
-    B = { 0.15, 0.35, 0.85 },
-    A = { 0.55, 0.22, 0.78 },
-    S = { 0.85, 0.62, 0.08 },
-}
-
-local function LayoutDoors(fx)
-    local height = fx:GetHeight()
-    if height and height >= 4 then
-        fx.slotHeight = height
-    else
-        height = fx.slotHeight or 64
-    end
-    local half = height * 0.5
-    local travel = math.max(0, half - GATE_CORNER)
-    local covered = GATE_CORNER + travel * (1 - (fx.reveal or 0))
-    if covered > half then
-        covered = half
-    end
-    fx:SetAlpha(1)
-    local level = fx:GetFrameLevel()
-    if fx.window then
-        fx.window:SetFrameLevel(level + 1)
-    end
-    if fx.reel then
-        fx.reel:SetFrameLevel(level + 1)
-        for _, cell in ipairs(fx.cells or {}) do
-            cell:SetFrameLevel(level + 1)
-        end
-    end
-    if fx.marker then
-        fx.marker:SetFrameLevel(level + 2)
-    end
-    if fx.topDoor then
-        fx.topDoor:SetFrameLevel(level + 8)
-        fx.bottomDoor:SetFrameLevel(level + 8)
-    end
-    for _, gate in ipairs({ fx.topDoor, fx.bottomDoor }) do
-        gate:SetHeight(covered)
-        gate:Show()
-    end
-    if fx.topSeam then
-        fx.topSeam:SetFrameLevel(level + 9)
-        fx.topSeam:ClearAllPoints()
-        fx.topSeam:SetPoint("LEFT", fx, "TOPLEFT", REEL_LEFT, -covered)
-        fx.topSeam:SetPoint("RIGHT", fx, "TOPRIGHT", -REEL_RIGHT, -covered)
-    end
-    if fx.bottomSeam then
-        fx.bottomSeam:SetFrameLevel(level + 9)
-        fx.bottomSeam:ClearAllPoints()
-        fx.bottomSeam:SetPoint("LEFT", fx, "BOTTOMLEFT", REEL_LEFT, covered)
-        fx.bottomSeam:SetPoint("RIGHT", fx, "BOTTOMRIGHT", -REEL_RIGHT, covered)
-    end
-end
-
-local function FadeCaption(activityFrame, alpha)
-    local text = activityFrame and activityFrame.bgvText
-    if not text then
-        return
-    end
-    text.bgvFadeTarget = alpha
-    if text.bgvFade then
-        text.bgvFade:Stop()
-    end
-    local from = text:GetAlpha() or 1
-    local function Lock()
-        text:SetAlpha(text.bgvFadeTarget or alpha)
-        if activityFrame.bgvProgress then
-            activityFrame.bgvProgress:SetAlpha(1)
-        end
-        if activityFrame.bgvReward then
-            activityFrame.bgvReward:SetAlpha(1)
-        end
-    end
-    if math.abs(from - alpha) < 0.02 then
-        Lock()
-        return
-    end
-    if not text.bgvFade then
-        local group = text:CreateAnimationGroup()
-        local anim = group:CreateAnimation("Alpha")
-        if anim.SetSmoothing then
-            anim:SetSmoothing("NONE")
-        end
-        group.anim = anim
-        group:SetScript("OnFinished", Lock)
-        text.bgvFade = group
-    end
-    local anim = text.bgvFade.anim
-    anim:SetDuration(0.1)
-    if anim.SetFromAlpha then
-        anim:SetFromAlpha(from)
-        anim:SetToAlpha(alpha)
-    else
-        anim:SetChange(alpha - from)
-    end
-    text.bgvFade:Play()
-end
-
-local function StopReel(fx)
-    if fx.ticker then
-        fx.ticker:Cancel()
-        fx.ticker = nil
-    end
-end
-
-local PaintReel, PlaceReel, RestClosed, ShutGates, VaultIsOpen, CloseCase
-
--- No upvalues over hit/activityFrame so this can be a module-level function instead of a
--- closure re-allocated on every PointerOnSlot call (which runs every reel tick, up to 60/sec).
-local function FrameOwnsTarget(target, hit, activityFrame)
-    if target == GameTooltip then
-        local owner = GameTooltip.GetOwner and GameTooltip:GetOwner()
-        return owner == hit or owner == activityFrame
-    end
-    while target do
-        if target == hit or target == activityFrame then
-            return true
-        end
-        if not target.GetParent then
-            return false
-        end
-        target = target:GetParent()
-    end
-    return false
-end
-
-local function PointerOnSlot(activityFrame)
-    local hit = activityFrame and activityFrame.bgvHit
-    if not hit then
-        return false
-    end
-    if type(GetMouseFoci) == "function" then
-        local foci = GetMouseFoci()
-        local top = type(foci) == "table" and foci[1] or nil
-        if top then
-            return FrameOwnsTarget(top, hit, activityFrame)
-        end
-    elseif type(GetMouseFocus) == "function" then
-        local focus = GetMouseFocus()
-        if focus then
-            return FrameOwnsTarget(focus, hit, activityFrame)
-        end
-    end
-    return hit:IsMouseOver()
-end
-
-local function EnsureReel(fx)
-    if fx.ticker or not (C_Timer and type(C_Timer.NewTicker) == "function") then
-        return
-    end
-    fx.ticker = C_Timer.NewTicker(REEL_TICK, function()
-        if not VaultIsOpen() then
-            if fx.owner then
-                ShutGates(fx.owner)
-            end
-            return
-        end
-        if (fx.revealTarget or 0) > 0 and fx.owner and not PointerOnSlot(fx.owner) then
-            CloseCase(fx.owner)
-        end
-        if (fx.revealTarget or 0) ~= fx.revealAim then
-            fx.revealAim = fx.revealTarget or 0
-            fx.revealFrom = fx.reveal or 0
-            fx.revealClock = 0
-        end
-        fx.revealClock = (fx.revealClock or 0) + REEL_TICK
-        local delta = (fx.revealAim or 0) - (fx.revealFrom or 0)
-        local duration = math.max(0.16, 0.5 * math.abs(delta))
-        local progress = math.min(1, fx.revealClock / duration)
-        local eased = progress * progress * (3 - 2 * progress)
-        fx.reveal = (fx.revealFrom or 0) + delta * eased
-        if progress >= 1 then
-            fx.reveal = fx.revealAim or 0
-        end
-        LayoutDoors(fx)
-        -- The list was still loading when the case opened (a loot spec change clears it); keep
-        -- asking while the case is open, so the reel fills in and scrolls without re-hovering.
-        if fx.iconsPending and (fx.revealTarget or 0) > 0 and fx.owner and fx.owner.bgvSlot then
-            fx.refreshClock = (fx.refreshClock or 0) + REEL_TICK
-            -- Nothing to show yet: check more often, so items appear soon after they load.
-            if fx.refreshClock >= ((fx.iconCount or 0) == 0 and REEL_REFRESH_EMPTY or REEL_REFRESH) then
-                fx.refreshClock = 0
-                local icons, pending = BGV.Rewards.PossibleIcons(fx.owner.bgvSlot)
-                fx.iconsPending = pending == true
-                if type(icons) == "table" and (icons ~= fx.iconKey or #icons ~= fx.iconCount) then
-                    fx.icons = icons
-                    fx.iconKey = icons
-                    fx.iconCount = #icons
-                    if #icons > 0 and not fx.reelReady then
-                        fx.cursor = math.random(#icons)
-                        fx.offset = 0
-                        fx.reelReady = true
-                    end
-                    PaintReel(fx)
-                    PlaceReel(fx)
-                end
-            end
-        end
-        if (fx.reveal or 0) > 0 and fx.owner and fx.owner.bgvText then
-            local text = fx.owner.bgvText
-            if text.bgvFadeTarget ~= 0 then
-                FadeCaption(fx.owner, 0)
-            elseif text:GetAlpha() > 0.02 and not (text.bgvFade and text.bgvFade:IsPlaying()) then
-                text:SetAlpha(0)
-            end
-        end
-        if type(fx.icons) == "table" and #fx.icons > 0 then
-            fx.offset = (fx.offset or 0) - REEL_SPEED * REEL_TICK
-            if fx.offset <= -CASE_STRIDE then
-                fx.offset = fx.offset + CASE_STRIDE
-                fx.cursor = (fx.cursor or 1) + 1
-                PaintReel(fx)
-            end
-            PlaceReel(fx)
-        end
-        if fx.revealTarget == 0 and fx.reveal <= 0 then
-            StopReel(fx)
-            fx:Hide()
-            if fx.marker then
-                fx.marker:Hide()
-            end
-            if fx.topSeam then
-                fx.topSeam:Hide()
-                fx.bottomSeam:Hide()
-            end
-            LayoutDoors(fx)
-            FadeCaption(fx.owner, 1)
-        end
-    end)
-end
-
-function PlaceReel(fx)
-    local window = fx.window or fx
-    fx.reel:SetWidth(CASE_STRIDE * CASE_SLOTS)
-    fx.reel:ClearAllPoints()
-    fx.reel:SetPoint("TOPLEFT", window, "TOPLEFT", fx.offset or 0, 0)
-    fx.reel:SetPoint("BOTTOMLEFT", window, "BOTTOMLEFT", fx.offset or 0, 0)
 end
 
 local function BuryShownRegion(region)
@@ -577,223 +182,6 @@ local function HideDefaultShine(activityFrame)
     end
 end
 
-function PaintReel(fx)
-    local icons = fx.icons
-    if type(icons) ~= "table" or #icons == 0 then
-        -- Nothing loaded yet (e.g. right after a loot spec change): show an empty reel rather
-        -- than the previous list's icons.
-        for _, cell in ipairs(fx.cells or {}) do
-            cell.icon:SetTexture(nil)
-            cell.back:Hide()
-        end
-        return
-    end
-    local showTiers = BGV.Bis and Utils.ShowBisTiers()
-    local specID = showTiers and Utils.LootSpecID() or nil
-    for index, cell in ipairs(fx.cells) do
-        local entry = icons[((fx.cursor + index - 2) % #icons) + 1]
-        local itemID = type(entry) == "table" and entry.itemID or nil
-        local icon = type(entry) == "table" and entry.icon or entry
-        cell.icon:SetTexture(icon)
-        cell.icon:SetSize(CASE_ICON, CASE_ICON)
-        local tier = itemID and showTiers and BGV.Bis.Tier(itemID, specID) or nil
-        local color = tier and TIER_BACK[tier] or nil
-        if color then
-            ColorTexture(cell.back, color[1], color[2], color[3], 1)
-            cell.back:Show()
-        else
-            cell.back:Hide()
-        end
-    end
-end
-
-local function StopFX(activityFrame)
-    local fx = activityFrame and activityFrame.bgvFX
-    if not fx then
-        return
-    end
-    StopReel(fx)
-    fx.reveal = 0
-    fx.revealTarget = 0
-    fx:Hide()
-    if fx.marker then
-        fx.marker:Hide()
-    end
-    if fx.topSeam then
-        fx.topSeam:Hide()
-        fx.bottomSeam:Hide()
-    end
-    if fx.topDoor then
-        fx.topDoor:Hide()
-    end
-    if fx.bottomDoor then
-        fx.bottomDoor:Hide()
-    end
-    FadeCaption(activityFrame, 1)
-end
-
-local function FitCase(activityFrame)
-    local fx = activityFrame.bgvFX
-    if not fx then
-        return
-    end
-    fx:ClearAllPoints()
-    fx:SetPoint("TOPLEFT", activityFrame, "TOPLEFT", 0, 0)
-    fx:SetPoint("BOTTOMRIGHT", activityFrame, "BOTTOMRIGHT", 0, 0)
-    local atlas = "evergreen-weeklyrewards-reward-unlocked"
-    local bg = activityFrame.Background
-    if bg and type(bg.GetAtlas) == "function" then
-        local current = bg:GetAtlas()
-        if type(current) == "string" and current ~= "" then
-            atlas = current
-        end
-    end
-    for _, gate in ipairs({ fx.topDoor, fx.bottomDoor }) do
-        if gate and gate.face and type(gate.face.SetAtlas) == "function" then
-            gate.face:SetAtlas(atlas)
-        end
-    end
-end
-
-local function PlaceCase(activityFrame)
-    local fx = activityFrame.bgvFX
-    if not fx then
-        return
-    end
-    FitCase(activityFrame)
-    local level = activityFrame:GetFrameLevel() + 2
-    if activityFrame.ItemFrame and type(activityFrame.ItemFrame.GetFrameLevel) == "function" then
-        level = math.max(level, activityFrame.ItemFrame:GetFrameLevel() + 1)
-    end
-    fx:SetFrameLevel(level)
-    if fx.window then
-        fx.window:SetFrameLevel(level + 1)
-    end
-    if fx.reel then
-        fx.reel:SetFrameLevel(level + 1)
-    end
-    if fx.marker then
-        fx.marker:SetFrameLevel(level + 2)
-    end
-    if fx.topDoor then
-        fx.topDoor:SetFrameLevel(level + 8)
-        fx.bottomDoor:SetFrameLevel(level + 8)
-    end
-    if activityFrame.bgvText then
-        activityFrame.bgvText:SetFrameLevel(level + 8)
-    end
-    if activityFrame.bgvHit then
-        activityFrame.bgvHit:SetFrameLevel(level + 10)
-    end
-end
-
-local function StartCase(activityFrame)
-    if AnimationsDisabled() then
-        return
-    end
-    if not activityFrame or not activityFrame.IsShown or not activityFrame:IsShown() then
-        return
-    end
-    local fx = activityFrame and activityFrame.bgvFX
-    if not fx then
-        return
-    end
-    local icons = fx.icons
-
-    PlaceCase(activityFrame)
-    fx.revealTarget = 1
-    if type(icons) == "table" and #icons > 0 and not fx.reelReady then
-        fx.cursor = math.random(#icons)
-        fx.offset = 0
-        PaintReel(fx)
-        PlaceReel(fx)
-        fx.reelReady = true
-    end
-    fx:Show()
-    if fx.marker then
-        ColorMarker(fx)
-        fx.marker:Show()
-    end
-    if fx.topSeam then
-        fx.topSeam:Show()
-        fx.bottomSeam:Show()
-    end
-    LayoutDoors(fx)
-    EnsureReel(fx)
-    FadeCaption(activityFrame, 0)
-end
-
-function CloseCase(activityFrame)
-    if AnimationsDisabled() then
-        return
-    end
-    local fx = activityFrame and activityFrame.bgvFX
-    if not fx or not fx:IsShown() then
-        return
-    end
-    fx.revealTarget = 0
-    EnsureReel(fx)
-end
-
-function VaultIsOpen()
-    return WeeklyRewardsFrame and type(WeeklyRewardsFrame.IsShown) == "function" and WeeklyRewardsFrame:IsShown()
-end
-
-function ShutGates(activityFrame)
-    local fx = activityFrame and activityFrame.bgvFX
-    if not fx then
-        return
-    end
-    StopReel(fx)
-    local wasOpen = (fx.reveal or 0) > 0
-    fx.reveal = 0
-    fx.revealTarget = 0
-    fx.revealAim = 0
-    if fx.marker then
-        fx.marker:Hide()
-    end
-    if fx.topSeam then
-        fx.topSeam:Hide()
-        fx.bottomSeam:Hide()
-    end
-    if wasOpen and activityFrame.bgvSlot and activityFrame.bgvSlot.unlocked and fx.topDoor then
-        local height = fx.slotHeight
-        if not height or height < 4 then
-            height = fx:GetHeight()
-        end
-        if height and height >= 4 then
-            local half = height * 0.5
-            fx.topDoor:SetHeight(half)
-            fx.bottomDoor:SetHeight(half)
-            fx.topDoor:Show()
-            fx.bottomDoor:Show()
-        end
-    end
-    fx:Hide()
-    local text = activityFrame.bgvText
-    if text then
-        if text.bgvFade then
-            text.bgvFade:Stop()
-        end
-        text.bgvFadeTarget = 1
-        text:SetAlpha(1)
-    end
-end
-
-local function RaiseAboveGlow(activityFrame)
-    local scene = WeeklyRewardsFrame and WeeklyRewardsFrame.ModelScene
-    local sceneLevel = scene and scene.GetFrameLevel and scene:GetFrameLevel() or 300
-    local parent = activityFrame:GetParent()
-    if scene and parent and scene.GetParent and scene:GetParent() == parent then
-        if not activityFrame.bgvBaseLevel then
-            activityFrame.bgvBaseLevel = activityFrame:GetFrameLevel()
-        end
-        if activityFrame:GetFrameLevel() <= sceneLevel then
-            activityFrame:SetFrameLevel(sceneLevel + 20)
-        end
-    end
-end
-
 local function HideClosedGates(activityFrame)
     local closed = activityFrame and activityFrame.bgvClosed
     if closed then
@@ -843,10 +231,8 @@ local function EnsureClosedGates(activityFrame)
 end
 
 local function ShowClosedGates(activityFrame)
-    if activityFrame.bgvFX then
-        StopFX(activityFrame)
-    end
-    RaiseAboveGlow(activityFrame)
+    Case.Stop(activityFrame)
+    Case.RaiseAboveGlow(activityFrame)
     EnsureClosedGates(activityFrame)
     local closed = activityFrame.bgvClosed
     local slot = activityFrame:GetHeight()
@@ -854,14 +240,7 @@ local function ShowClosedGates(activityFrame)
         slot = 126
     end
     local half = slot * 0.5
-    local atlas = "evergreen-weeklyrewards-reward-unlocked"
-    local bg = activityFrame.Background
-    if bg and type(bg.GetAtlas) == "function" then
-        local current = bg:GetAtlas()
-        if type(current) == "string" and current ~= "" then
-            atlas = current
-        end
-    end
+    local atlas = Case.FaceAtlas(activityFrame)
     local level = activityFrame:GetFrameLevel() + 2
     if activityFrame.ItemFrame and type(activityFrame.ItemFrame.GetFrameLevel) == "function" then
         level = math.max(level, activityFrame.ItemFrame:GetFrameLevel() + 1)
@@ -882,50 +261,20 @@ local function ShowClosedGates(activityFrame)
     closed:Show()
 end
 
-function RestClosed(activityFrame)
-    local fx = activityFrame and activityFrame.bgvFX
-    if not fx then
-        return
-    end
-    StopReel(fx)
-    fx.reveal = 0
-    fx.revealTarget = 0
-    fx.revealAim = 0
-    if fx.marker then
-        fx.marker:Hide()
-    end
-    if fx.topSeam then
-        fx.topSeam:Hide()
-        fx.bottomSeam:Hide()
-    end
-    PlaceCase(activityFrame)
-    LayoutDoors(fx)
-    RaiseAboveGlow(activityFrame)
-    if fx.topDoor then
-        fx.topDoor:SetFrameLevel(activityFrame:GetFrameLevel() + 8)
-        fx.bottomDoor:SetFrameLevel(activityFrame:GetFrameLevel() + 8)
-    end
-    fx:Hide()
-    FadeCaption(activityFrame, 1)
-end
-
 local function UpdateFX(activityFrame, slot, fromEnter)
     if AnimationsDisabled() then
         if slot and slot.unlocked then
             ShowClosedGates(activityFrame)
         else
             HideClosedGates(activityFrame)
-            if activityFrame.bgvFX then
-                StopFX(activityFrame)
-            end
+            Case.Stop(activityFrame)
         end
         return
     end
     HideClosedGates(activityFrame)
-    EnsureFX(activityFrame)
-    local fx = activityFrame.bgvFX
+    local fx = Case.Ensure(activityFrame)
     local hovering = fromEnter or (activityFrame.bgvHit and activityFrame.bgvHit:IsMouseOver())
-    if hovering and slot and slot.unlocked and VaultIsOpen() then
+    if hovering and slot and slot.unlocked and Case.VaultIsOpen() then
         local icons, pending = BGV.Rewards.PossibleIcons(slot)
         if fx.iconKey ~= icons or (type(icons) == "table" and #icons ~= fx.iconCount) then
             fx.reelReady = nil
@@ -935,18 +284,18 @@ local function UpdateFX(activityFrame, slot, fromEnter)
         fx.iconCount = type(icons) == "table" and #icons or 0
         fx.iconsPending = pending == true
         fx.refreshClock = 0
-        StartCase(activityFrame)
+        Case.Open(activityFrame)
         if not fx.reelReady then
-            PaintReel(fx)
+            Case.PaintReel(fx)
         end
         return
     end
     if slot and slot.unlocked then
-        if not fx.ticker and (fx.reveal or 0) <= 0 then
-            RestClosed(activityFrame)
+        if not Case.IsAnimating(activityFrame) then
+            Case.Rest(activityFrame)
         end
     else
-        StopFX(activityFrame)
+        Case.Stop(activityFrame)
     end
 end
 
@@ -976,17 +325,17 @@ local function EnsureHit(activityFrame)
         end
         local generation = activityFrame.bgvHoverGen or 0
         if not (C_Timer and type(C_Timer.After) == "function") then
-            CloseCase(activityFrame)
+            Case.Close(activityFrame)
             return
         end
         C_Timer.After(0.05, function()
             if not activityFrame:IsShown() or (activityFrame.bgvHoverGen or 0) ~= generation then
                 return
             end
-            if PointerOnSlot(activityFrame) then
+            if Case.PointerOnSlot(activityFrame) then
                 return
             end
-            CloseCase(activityFrame)
+            Case.Close(activityFrame)
         end)
     end)
     hit:SetScript("OnClick", function(_, button)
@@ -1216,7 +565,7 @@ local function RestoreVanilla(activityFrame)
     if activityFrame.bgvHit then
         activityFrame.bgvHit:Hide()
     end
-    StopFX(activityFrame)
+    Case.Stop(activityFrame)
     HideClosedGates(activityFrame)
     ShowDefaultCaption(activityFrame)
     if activityFrame.Threshold then
@@ -1261,7 +610,7 @@ function UI.Clear(activityFrame)
         activityFrame.bgvProgress:Hide()
         activityFrame.bgvReward:Hide()
     end
-    StopFX(activityFrame)
+    Case.Stop(activityFrame)
     HideClosedGates(activityFrame)
     ShowDefaultCaption(activityFrame)
     SyncSkin(activityFrame)
@@ -1315,7 +664,7 @@ function UI.Apply(activityFrame, slot)
     end
 
     EnsureLines(activityFrame)
-    RaiseAboveGlow(activityFrame)
+    Case.RaiseAboveGlow(activityFrame)
     activityFrame.bgvToken = (activityFrame.bgvToken or 0) + 1
     local token = activityFrame.bgvToken
     activityFrame.bgvSlot = slot
@@ -1422,7 +771,7 @@ function UI.ScheduleContent(weeklyRewardsFrame)
     if not ProgressWeek() then
         return
     end
-    if not weeklyRewardsFrame or not VaultIsOpen() or weeklyRewardsFrame.bgvContentQueued then
+    if not weeklyRewardsFrame or not Case.VaultIsOpen() or weeklyRewardsFrame.bgvContentQueued then
         return
     end
     weeklyRewardsFrame.bgvContentQueued = true
@@ -1433,7 +782,7 @@ function UI.ScheduleContent(weeklyRewardsFrame)
     end
     C_Timer.After(0, function()
         weeklyRewardsFrame.bgvContentQueued = nil
-        if not VaultIsOpen() then
+        if not Case.VaultIsOpen() then
             return
         end
         if weeklyRewardsFrame.bgvPumping then
@@ -1449,7 +798,7 @@ function UI.ScheduleContent(weeklyRewardsFrame)
             if weeklyRewardsFrame.bgvPumpGen ~= generation then
                 return
             end
-            if not VaultIsOpen() then
+            if not Case.VaultIsOpen() then
                 weeklyRewardsFrame.bgvPumping = nil
                 return
             end
@@ -1517,7 +866,7 @@ local function CloseOpenGates(weeklyRewardsFrame)
     for _, activityFrame in ipairs(frames) do
         activityFrame.bgvHoverGen = (activityFrame.bgvHoverGen or 0) + 1
         HideDefaultShine(activityFrame)
-        ShutGates(activityFrame)
+        Case.Shut(activityFrame)
     end
 end
 
