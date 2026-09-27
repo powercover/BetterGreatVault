@@ -747,25 +747,27 @@ def db_levels_raid_slots(t):
 
 
 def db_levels_no_tiers(t):
-    """No keystone or world tier learned (GetActivities lists none), no GetNextMythicPlusIncrease,
-    no resolved keystone or world slot: every M+ and World level is unknown and there's no default,
-    nothing is guessed; items still come back, with no item level. Once the keystone fallback API
-    answers, the keystone steps come from it."""
+    """No tier learned from this character's vault (GetActivities lists none, nothing resolved):
+    the season's own tiers (256 keystone, 249 world, stored in the addon) still give the vault's
+    upgrade steps, so M+ and World work without a completed slot. Once the game no longer knows
+    those tiers (a new season) and GetNextMythicPlusIncrease is absent, every M+ and World level
+    is unknown and there's no default: nothing is guessed."""
     t.M.weekly.activities = t.lua.table()
-    t.M.SetApiPresent("C_WeeklyRewards", "GetNextMythicPlusIncrease", False)
     t.boot_db()
     t.slot("M1", "itemLevel", None)
     t.slot("W1", "itemLevel", None)
-    t.H.DbExpectSteps("mplus", False)
-    t.H.DbExpectSteps("world", False)
+    t.H.DbExpectSteps("mplus", True)
+    t.H.DbExpectSteps("world", True)
     t.levels("mplus", "world")
     t.db_start("mplus/8/1/73,world/8/11/0")
     t.db_settle()
     t.db_items()
-    t.M.SetApiPresent("C_WeeklyRewards", "GetNextMythicPlusIncrease", True)
+    t.M.weekly.steps = t.lua.table()
+    t.M.SetApiPresent("C_WeeklyRewards", "GetNextMythicPlusIncrease", False)
     t.H.ClearDatabase()
-    t.H.DbExpectSteps("mplus", True)
-    t.levels("mplus")
+    t.H.DbExpectSteps("mplus", False)
+    t.H.DbExpectSteps("world", False)
+    t.levels("mplus", "world")
     t.db_report()
 
 
@@ -781,7 +783,7 @@ def db_levels_claim_week(t):
 
 def db_levels_persisted(t):
     """Tiers and levels learned this season are kept (saved variables) when the vault stops listing
-    them; a new season drops them."""
+    them; a new season (whose game data no longer knows this season's tiers) drops them."""
     t.boot_db()
     t.levels("mplus")
     rows = t.lua.table(t.lua.table_from({"type": 3, "index": 1, "level": 15, "activityTierID": 0,
@@ -792,6 +794,7 @@ def db_levels_persisted(t):
     t.H.ClearDatabase()
     t.levels("mplus")
     t.M.mythicPlus.season = 16
+    t.M.weekly.steps = t.lua.table()
     t.H.ClearDatabase()
     t.H.DbExpectSteps("mplus", False)
     t.levels("mplus")

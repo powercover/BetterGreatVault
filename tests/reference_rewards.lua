@@ -537,8 +537,18 @@ local function BuildLevels(source)
             end
         end
     else
+        -- The tier this character's vault reported, else the season's (256 keystone, 249 world).
         local tier = data.tiers[source]
         local steps = TierSteps(tier)
+        if #steps == 0 then
+            local seasonTier = ({ mplus = 256, world = 249 })[source]
+            if seasonTier ~= tier then
+                local seasonSteps = TierSteps(seasonTier)
+                if #seasonSteps > 0 then
+                    tier, steps = seasonTier, seasonSteps
+                end
+            end
+        end
         if source == "mplus" and #steps == 0 then
             steps = KeystoneSteps()
         end
