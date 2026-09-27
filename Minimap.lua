@@ -23,6 +23,11 @@ local function PopupOnHover()
     return not BetterGreatVaultDB or BetterGreatVaultDB.minimapPopup ~= false
 end
 
+-- The popup's grid of this week's slots (settings).
+local function PopupWeek()
+    return not BetterGreatVaultDB or BetterGreatVaultDB.popupWeek ~= false
+end
+
 local function LoadVaultUI()
     BGV.Utils.LoadAddon("Blizzard_WeeklyRewards")
 end
@@ -286,7 +291,7 @@ end
 
 BGV.Minimap.UpdateFade = UpdateFade
 
--- "Add to the AddOns menu" (settings). The menu lists the addon from its .toc; turning this off
+-- "Add to the addon compartment" (settings). It lists the addon from the .toc; turning this off
 -- takes the entry out of the menu's list, and turning it on puts it back (as Narcissus does).
 local compartmentEntry
 
@@ -647,8 +652,8 @@ function LayoutPopup()
         y = y + CALLOUT_H + 12
     end
 
-    -- Like the vault, the week's slots only while it shows the week's progress.
-    local week = ProgressWeek() == true
+    -- Like the vault, the week's slots only while it shows the week's progress; and only if wanted.
+    local week = ProgressWeek() == true and PopupWeek()
     popup.heading:SetShown(week)
     if week then
         y = LayoutWeek(y, accent)
@@ -675,7 +680,7 @@ function LayoutPopup()
     end
     popup.actions[1].text:SetText(VaultShown() and "Close the Great Vault" or "Open the Great Vault")
     for index, line in ipairs(popup.actions) do
-        -- From the AddOns menu there's no button to drag.
+        -- From the addon compartment there's no button to drag.
         local shown = not (popup.compartment and ACTIONS[index].buttonOnly)
         line.text:SetShown(shown)
         line.key:SetShown(shown)
@@ -701,7 +706,7 @@ local function AnchorPopup(owner)
     popup:SetPoint(vertical .. (right and "RIGHT" or "LEFT"), owner, vertical .. (right and "LEFT" or "RIGHT"), right and -8 or 8, 0)
 end
 
--- `compartment`: shown for the minimap's AddOns menu rather than the button.
+-- `compartment`: shown for the minimap's addon compartment rather than the button.
 local function ShowPopup(owner, compartment)
     BuildPopup()
     popup.owner = owner
@@ -735,7 +740,7 @@ local function RunClick(mouseButton)
     end
 end
 
--- The minimap's AddOns menu (the addon compartment; the .toc names these functions): the same
+-- The minimap's addon compartment (Blizzard's addon menu; the .toc names these functions): the same
 -- clicks and hover popup as the minimap button.
 function BetterGreatVault_OnAddonCompartmentClick(_, mouseButton)
     HidePopup()

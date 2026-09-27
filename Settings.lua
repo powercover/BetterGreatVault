@@ -388,7 +388,7 @@ local THUMB_W = 10
 
 local function MakeSlider(parent, spec)
     local row = CreateFrame("Frame", nil, parent)
-    row:SetHeight(28)
+    row:SetSize(TEXT_W, 28)
     local slider = CreateFrame("Slider", nil, row)
     slider:SetOrientation("HORIZONTAL")
     slider:SetSize(SLIDER_W, 20)
@@ -398,11 +398,12 @@ local function MakeSlider(parent, spec)
     if slider.SetObeyStepOnDrag then
         slider:SetObeyStepOnDrag(true)
     end
+    slider:EnableMouse(true)
     slider:EnableMouseWheel(true)
     local function X(value)
         return THUMB_W / 2 + (value - spec.min) / (spec.max - spec.min) * (SLIDER_W - THUMB_W)
     end
-    local track = Pixel(slider, "BACKGROUND", 0.16, 0.16, 0.17, 1)
+    local track = Pixel(slider, "BACKGROUND", 0.26, 0.26, 0.28, 1)
     track:SetHeight(4)
     track:SetPoint("LEFT", slider, "LEFT", 0, 0)
     track:SetPoint("RIGHT", slider, "RIGHT", 0, 0)
@@ -449,7 +450,7 @@ local function MakeSlider(parent, spec)
         Paint(spec.getter())
     end
     widgets[#widgets + 1] = row
-    layout[#layout + 1] = { widget = row, x = PAD + 4, height = 30 }
+    layout[#layout + 1] = { widget = row, x = PAD + 4, height = 30, stretch = true }
     return row
 end
 
@@ -691,14 +692,14 @@ end
 
 local function BuildMinimap()
     MakeHeader(child, "Minimap button", 2)
-    MakeCheckbox(child, "Add to the AddOns menu", function()
+    MakeCheckbox(child, "Add to the addon compartment", function()
         local saved = DB()
         return not saved or saved.useCompartment ~= false
     end, function(value)
         DB().useCompartment = value and true or false
         Call(BGV.Minimap and BGV.Minimap.ApplyCompartment)
     end)
-    MakeNote(child, "Lists Better Great Vault in the minimap's AddOns menu, with the same clicks as the button.")
+    MakeNote(child, "The addon compartment is Blizzard's addon menu on the minimap: the small button with a number. Better Great Vault is listed there with the same clicks as its minimap button. Needs a game restart after installing or updating the addon.")
     MakeCheckbox(child, "Show minimap button", ButtonShown, function(value)
         DB().showMinimap = value and true or false
         BGV.Minimap.Apply()
@@ -716,7 +717,18 @@ local function BuildMinimap()
         return not saved or saved.minimapPopup ~= false
     end, function(value)
         DB().minimapPopup = value and true or false
+        BGV.Settings.Refresh()
     end, nested)
+    MakeCheckbox(child, "Show this week's slots", function()
+        local saved = DB()
+        return not saved or saved.popupWeek ~= false
+    end, function(value)
+        DB().popupWeek = value and true or false
+    end, { indent = 2, requires = function()
+        local saved = DB()
+        return ButtonShown() and (not saved or saved.minimapPopup ~= false)
+    end })
+    MakeNote(child, "The popup's mini vault: each slot's item level, or its progress while locked.", 3)
     MakeCheckbox(child, "Lock position", function()
         local saved = DB()
         return saved and saved.lockMinimap == true
