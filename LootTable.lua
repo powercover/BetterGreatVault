@@ -115,12 +115,30 @@ local RefreshHeaderFilters
 local pendingWatch
 local chunkQueued
 
+-- The list as lines, top to bottom (Layout): a source's divider, a group's header, an item or a
+-- message, each with its place (y) and height. Only the lines in view get a row (PaintVisible),
+-- so a long list costs no more to draw than a short one, and scrolling paints the rows that come
+-- into view. `painted` maps a line's index to its row.
+local lines, lineCount = {}, 0
+local painted = {}
+local paintedFirst, paintedLast
+local listWidth
+local paintTiers, paintSpecs
+-- When the list was last laid out (GetTime), to pace the redraws while it loads.
+local lastLayoutAt
+-- The loot table's own timing for /bgv perf (BGV.LootTable.lastLoad): the redraws from opening
+-- or changing the list until it has loaded, their time in all and the longest.
+local loading
+
 -- Smooth scrolling (like the settings panel): the mouse wheel sets a target the list eases to.
+-- `tipWaiting`: a row came under the pointer while the list moved (see ListMoving).
 local scrollTarget
+local tipWaiting = false
 local UpdateScrollThumb
 
 local function JumpScroll(offset)
     scrollTarget = nil
+    tipWaiting = false
     if scroll then
         scroll:SetVerticalScroll(offset or 0)
     end
@@ -239,32 +257,67 @@ end
 
 local NO_STATS = {}
 
--- Tooltip reads for items whose stats aren't cached yet, per redraw (reset by Layout): a large
--- list of uncached items fills in over a few redraws instead of stalling one frame.
+-- Tooltip reads for items whose stats aren't cached yet, per redraw (reset by Layout): at most
+-- this many, and no more once they've taken STAT_BUDGET_MS, so a large list of uncached items
+-- fills in over a few redraws instead of stalling one frame.
 local STAT_LOOKUPS_PER_PASS = 40
+local STAT_BUDGET_MS = 2
 local statLookups = STAT_LOOKUPS_PER_PASS
+local statSpent = 0
+-- Whether the redraw left stats unread because it had read its share, so the next redraw can
+-- come as soon as it may (see Layout's Continue).
+local statsCut = false
+
+-- The stat cache's key for an entry, kept on it: every redraw looks up every entry's stats.
+local function StatKey(entry)
+    local key = entry.bgvStatKey
+    if not key then
+        key = tostring(entry.itemID) .. ":" .. tostring(entry.itemLevel)
+        entry.bgvStatKey = key
+    end
+    return key
+end
+
+-- The item's stats if already read (see EntryStats), without reading them. Once known they're
+-- kept on the entry too: every redraw asks for every entry's.
+local function CachedStats(entry)
+    local known = entry.bgvStats
+    if known then
+        return known
+    end
+    local info = C_TooltipInfo
+    if not (info and type(info.GetItemKey) == "function") or not BGV.Utils.IsUsableNumber(entry.itemID) then
+        return NO_STATS
+    end
+    known = statCache[StatKey(entry)]
+    entry.bgvStats = known
+    return known
+end
 
 -- The item's secondary stats at the level the vault awards, read from the same tooltip the row
 -- shows (C_TooltipInfo.GetItemKey, the data behind GameTooltip:SetItemKey), highest amount
 -- first. Returns nil while the item's tooltip data hasn't loaded.
 local function EntryStats(entry)
+    local known = CachedStats(entry)
+    if known then
+        return known
+    end
     local info = C_TooltipInfo
-    if not (info and type(info.GetItemKey) == "function") or not BGV.Utils.IsUsableNumber(entry.itemID) then
-        return NO_STATS
-    end
-    local key = tostring(entry.itemID) .. ":" .. tostring(entry.itemLevel)
-    if statCache[key] then
-        return statCache[key]
-    end
-    if statLookups <= 0 then
+    local key = StatKey(entry)
+    if statLookups <= 0 or statSpent >= STAT_BUDGET_MS then
+        statsCut = true
         return nil
     end
     statLookups = statLookups - 1
+    local started = type(debugprofilestop) == "function" and debugprofilestop() or nil
     local data
     if BGV.Utils.IsUsableNumber(entry.itemLevel) then
         data = BGV.Utils.Call(info.GetItemKey, entry.itemID, entry.itemLevel, 0)
     elseif type(info.GetItemByID) == "function" then
         data = BGV.Utils.Call(info.GetItemByID, entry.itemID)
+    end
+    if started then
+        statSpent = statSpent + (debugprofilestop() - started)
     end
     local lines = type(data) == "table" and data.lines
     if type(lines) ~= "table" or #lines < 3 then
@@ -292,6 +345,7 @@ local function EntryStats(entry)
         return left.name < right.name
     end)
     statCache[key] = stats
+    entry.bgvStats = stats
     return stats
 end
 
@@ -392,14 +446,17 @@ local function FilterEntries(found)
     local selected = SelectedStats()
     for _, entry in ipairs(type(found) == "table" and found or {}) do
         if (filterID == "ALL" or entry.equipLabel == filterID) and MatchesSearch(entry) then
-            local stats = EntryStats(entry)
-            if not stats then
-                pending = true
-                if #selected == 0 then
+            if #selected == 0 then
+                -- Stats only show here: Layout reads them in the order the list shows them.
+                list[#list + 1] = entry
+                pending = pending or CachedStats(entry) == nil
+            else
+                local stats = EntryStats(entry)
+                if not stats then
+                    pending = true
+                elseif PassesStatFilter(stats, selected) then
                     list[#list + 1] = entry
                 end
-            elseif PassesStatFilter(stats, selected) then
-                list[#list + 1] = entry
             end
         end
     end
@@ -494,7 +551,8 @@ local function DatabaseKey(sourceID)
 end
 
 -- One source's list, filtered; entries carry the source's order so groups stay per source.
-local function DatabaseItems(source)
+-- `budget` (Rewards.NewReadBudget) is the journal reading time the sources share in one redraw.
+local function DatabaseItems(source, budget)
     local key = DatabaseKey(source.id)
     local cached = itemCache[key]
     if cached then
@@ -504,8 +562,13 @@ local function DatabaseItems(source)
     local pending = false
     if BGV.Rewards and type(BGV.Rewards.DatabaseItems) == "function" then
         local stillLoading
-        found, stillLoading = BGV.Rewards.DatabaseItems(source.id, db.levels[source.id], db.classID, db.specID)
+        found, stillLoading = BGV.Rewards.DatabaseItems(source.id, db.levels[source.id], db.classID, db.specID, budget)
         pending = stillLoading == true
+        -- A redraw that read the journal leaves the item stats to the next one, so no redraw does
+        -- both of the heavy jobs.
+        if budget and budget.reads > 0 then
+            statLookups = 0
+        end
     end
     local list, statsPending = FilterEntries(found)
     for _, entry in ipairs(list) do
@@ -560,6 +623,9 @@ end
 local POLL_DELAY = 0.25
 local MAX_STALLS = 40
 local stalls = 0
+-- While a list loads, it's redrawn at most this often (seconds): item data arrives in bursts of
+-- events, and each redraw reads the journal again.
+local PASS_GAP = 0.1
 
 local function ResetWatch()
     pendingWatch = nil
@@ -579,14 +645,13 @@ function BGV.LootTable.Invalidate()
 end
 
 -- Rebuilds the shown lists from Rewards' caches, keeping them (unlike Invalidate): used when
--- Rewards dropped just the batches that can now complete (Rewards.RetryGivenUp).
+-- Rewards dropped just the batches that can now complete (Rewards.RetryGivenUp). Items load in
+-- bursts, so the redraw waits for the next loading pass rather than coming once per item.
 function BGV.LootTable.Reload()
     itemCache = {}
     templateCache = {}
     ResetWatch()
-    if frame and type(frame.IsShown) == "function" and frame:IsShown() then
-        Layout()
-    end
+    BGV.LootTable.RefreshPending()
 end
 
 function BGV.LootTable.RefreshPending(delay)
@@ -596,11 +661,15 @@ function BGV.LootTable.RefreshPending(delay)
     if not (C_Timer and type(C_Timer.After) == "function") then
         return
     end
+    local wait = delay or 0
+    if lastLayoutAt and type(GetTime) == "function" then
+        wait = math.max(wait, PASS_GAP - (GetTime() - lastLayoutAt))
+    end
     chunkQueued = true
-    C_Timer.After(delay or 0, function()
+    C_Timer.After(wait, function()
         chunkQueued = false
         if frame and frame:IsShown() then
-            Layout()
+            Layout(true)
         end
     end)
 end
@@ -816,9 +885,14 @@ local function FillTooltip(entry)
             GameTooltip:SetItemByID(entry.itemID)
         end
     end
-    if type(GameTooltip_ShowCompareItem) == "function" then
-        BGV.Utils.Call(GameTooltip_ShowCompareItem, GameTooltip)
-    end
+end
+
+-- Comparisons with the equipped items follow the game, as over the vault's own items: while the
+-- compare key (Shift) is held, or always with "Always compare items". The game's tooltip rules
+-- add them to the tooltip FillTooltip sets.
+local function ShouldCompare()
+    return TooltipUtil and type(TooltipUtil.ShouldDoItemComparison) == "function"
+        and TooltipUtil.ShouldDoItemComparison(GameTooltip) == true or false
 end
 
 -- SetItemKey draws the item's base quality, but the vault can award it higher (Mythic+
@@ -850,6 +924,7 @@ local function ShowItemTooltip(owner, entry)
     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
     FillTooltip(entry)
     PaintTitle(GameTooltip, entry)
+    owner.bgvCompare = ShouldCompare()
     if Item and type(Item.CreateFromItemID) == "function" then
         local item = BGV.Utils.Call(Item.CreateFromItemID, Item, entry.itemID)
         if item and type(item.IsItemDataCached) == "function" and not item:IsItemDataCached() and type(item.ContinueOnLoad) == "function" then
@@ -858,8 +933,62 @@ local function ShowItemTooltip(owner, entry)
                     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
                     FillTooltip(entry)
                     PaintTitle(GameTooltip, entry)
+                    owner.bgvCompare = ShouldCompare()
                 end
             end)
+        end
+    end
+end
+
+-- The game calls this every 0.2s while a row owns the tooltip (GameTooltip_OnUpdate): pressing
+-- or letting go of the compare key shows or hides the comparisons. It stands in for the game's
+-- own refresh of changed tooltip data, so that's passed on.
+local function UpdateRowTooltip(row)
+    if GameTooltip.shouldRefreshData and type(GameTooltip.RefreshData) == "function" then
+        GameTooltip:RefreshData()
+        row.bgvCompare = ShouldCompare()
+        return
+    end
+    local compare = ShouldCompare()
+    if compare == row.bgvCompare then
+        return
+    end
+    row.bgvCompare = compare
+    if compare and type(GameTooltip_ShowCompareItem) == "function" then
+        GameTooltip_ShowCompareItem(GameTooltip)
+    elseif not compare and type(GameTooltip_HideShoppingTooltips) == "function" then
+        GameTooltip_HideShoppingTooltips(GameTooltip)
+    end
+end
+
+-- While the list scrolls, rows slide under the pointer one after another, and each would build
+-- an item tooltip (with its comparisons, the costliest thing the loot table does). Their
+-- tooltips wait instead, and the row under the pointer gets its tooltip once the list has
+-- nearly stopped (the scroll's OnUpdate).
+local SETTLING_PX = 8
+
+local function ListMoving()
+    return scrollTarget ~= nil and math.abs(scrollTarget - (scroll:GetVerticalScroll() or 0)) > SETTLING_PX
+end
+
+-- The row the pointer is on: the one that gets mouse events there (not one merely beneath a
+-- menu covering the list).
+local function UnderPointer(row)
+    if row.IsMouseMotionFocus then
+        return row:IsMouseMotionFocus()
+    end
+    return row:IsMouseOver()
+end
+
+local function ShowTipUnderPointer()
+    tipWaiting = false
+    if not scroll:IsMouseOver() then
+        return
+    end
+    for _, row in pairs(painted) do
+        if row.entry and UnderPointer(row) then
+            ShowItemTooltip(row, row.entry)
+            return
         end
     end
 end
@@ -917,10 +1046,15 @@ local function Acquire()
         row.hover = Pixel(row, "HIGHLIGHT", 1, 1, 1, 0.12)
         row.hover:SetAllPoints()
         row:SetScript("OnEnter", function(self)
+            if ListMoving() then
+                tipWaiting = true
+                return
+            end
             ShowItemTooltip(self, self.entry)
         end)
-        row:SetScript("OnLeave", function()
-            if GameTooltip then
+        row.UpdateTooltip = UpdateRowTooltip
+        row:SetScript("OnLeave", function(self)
+            if GameTooltip and GameTooltip:GetOwner() == self then
                 GameTooltip:Hide()
             end
         end)
@@ -957,19 +1091,21 @@ local function Acquire()
     return row
 end
 
+-- Puts a painted row back in the pool. A row is either painted (in `painted`) or pooled, never
+-- both, so none is handed out twice.
+local function ReleaseRow(index)
+    local row = painted[index]
+    painted[index] = nil
+    row:Hide()
+    row.entry = nil
+    pool[#pool + 1] = row
+end
+
 local function ReleaseRows()
-    if not child then
-        return
+    for index in pairs(painted) do
+        ReleaseRow(index)
     end
-    -- Every row is a child of `child`, so rebuild the pool from scratch. Appending would
-    -- re-add rows still sitting in the pool from the last layout, and a duplicated row gets
-    -- positioned twice, leaving an empty gap where it was first placed.
-    pool = {}
-    for _, row in ipairs({ child:GetChildren() }) do
-        row:Hide()
-        row.entry = nil
-        pool[#pool + 1] = row
-    end
+    paintedFirst, paintedLast = nil, nil
 end
 
 local function QualityColor(entry)
@@ -1076,12 +1212,17 @@ local function PaintLinks(model)
     end
 end
 
+-- The slot's name in the game's language, kept on the entry: sorting a list asks for it on
+-- every comparison.
 local function SlotName(entry)
-    local label = type(entry.equipLoc) == "string" and _G[entry.equipLoc]
-    if type(label) == "string" and label ~= "" then
-        return label
+    local name = entry.bgvSlotName
+    if name then
+        return name
     end
-    return entry.equipLabel or ""
+    local label = type(entry.equipLoc) == "string" and _G[entry.equipLoc]
+    name = type(label) == "string" and label ~= "" and label or entry.equipLabel or ""
+    entry.bgvSlotName = name
+    return name
 end
 
 -- Armor type (Cloth, Leather, Mail, Plate, or Shield) by itemID; false when the item has none
@@ -1314,6 +1455,30 @@ local function GroupItems(items, slot)
     return groups
 end
 
+-- The last grouping, reused while a redraw lists the very same entries in the same order (one
+-- that only brought stats, say): grouping sorts the whole list.
+local grouped = {}
+
+local function SameEntries(list, other)
+    if not other or #list ~= #other then
+        return false
+    end
+    for index = 1, #list do
+        if list[index] ~= other[index] then
+            return false
+        end
+    end
+    return true
+end
+
+local function Groups(items, slot)
+    if grouped.groups and grouped.slot == slot and SameEntries(items, grouped.items) then
+        return grouped.groups
+    end
+    grouped.items, grouped.slot, grouped.groups = items, slot, GroupItems(items, slot)
+    return grouped.groups
+end
+
 local function AddGroupHeader(group, rowWidth, y)
     local row = Acquire()
     row:SetHeight(GROUP_H)
@@ -1330,6 +1495,7 @@ local function AddGroupHeader(group, rowWidth, y)
     row.name:SetFontObject(BGV.Utils.Font("Normal"))
     row.name:SetText(string.format("%s   |cff77777b%d|r", group.name, #group.entries))
     row.name:SetTextColor(0.96, 0.86, 0.6)
+    return row
 end
 
 
@@ -1348,13 +1514,14 @@ local function AddSourceHeader(text, rowWidth, y)
     row.name:SetFontObject(BGV.Utils.Font("NormalSmall"))
     row.name:SetText(BGV.Utils.Upper(text))
     row.name:SetTextColor(accentColor[1], accentColor[2], accentColor[3])
+    return row
 end
 
-local function ShowMessage(text, rowWidth)
+local function ShowMessage(text, rowWidth, y)
     local row = Acquire()
     row.hover:Hide()
     row:ClearAllPoints()
-    row:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -8)
+    row:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -y)
     row:SetWidth(rowWidth)
     row.entry = nil
     row.name:ClearAllPoints()
@@ -1362,6 +1529,171 @@ local function ShowMessage(text, rowWidth)
     row.name:SetWidth(rowWidth - 24)
     row.name:SetText(text)
     row.name:SetTextColor(0.55, 0.55, 0.58)
+    return row
+end
+
+-- One item's row: icon, name, tier, item level, secondary stats (one a line, highest amount
+-- first) and slot. The row is as tall as its stats need (see Layout).
+local function PaintItem(line)
+    local entry = line.entry
+    local row = Acquire()
+    row:SetWidth(listWidth)
+    row:ClearAllPoints()
+    row:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -line.y)
+    PlaceColumns(row, listWidth)
+    row.entry = entry
+    row.icon:SetTexture(entry.icon)
+    local r, g, b = QualityColor(entry)
+    row.iconBG:SetVertexColor(r, g, b, 0.9)
+    row.iconBG:Show()
+    row.name:SetText(entry.name or L["Item"])
+    row.name:SetTextColor(r, g, b)
+    local tier = paintTiers and BestTier(entry.itemID, paintSpecs) or nil
+    if tier then
+        local color = TIER_TEXT[tier]
+        row.tierBadge:SetVertexColor(color[1], color[2], color[3], 0.95)
+        row.tierBadge:Show()
+        row.tier:SetText(tier)
+        row.tier:SetTextColor(0.07, 0.07, 0.08)
+    else
+        row.tier:SetText(paintTiers and "-" or "")
+        row.tier:SetTextColor(0.45, 0.45, 0.48)
+    end
+    row.level:SetText(BGV.Utils.IsUsableNumber(entry.itemLevel) and tostring(entry.itemLevel) or "-")
+    row.level:SetTextColor(0.96, 0.96, 0.96)
+    row.slot:SetText(SlotText(entry))
+    local stats = line.stats
+    local exact = BGV.Utils.IsUsableNumber(entry.itemLevel)
+    local texts = {}
+    for _, stat in ipairs(stats or NO_STATS) do
+        if exact then
+            local amount = type(BreakUpLargeNumbers) == "function" and BreakUpLargeNumbers(stat.amount) or tostring(stat.amount)
+            texts[#texts + 1] = string.format("+%s %s", amount, stat.name)
+        else
+            -- The amounts depend on an item level that isn't known here.
+            texts[#texts + 1] = stat.name
+        end
+    end
+    if #texts > 0 then
+        PaintStats(row, texts, 0.9, 0.9, 0.92)
+    else
+        PaintStats(row, { stats and "-" or "..." }, 0.55, 0.55, 0.58)
+    end
+    row:SetHeight(line.height)
+    row.stripe:SetShown(line.index % 2 == 0)
+    return row
+end
+
+local function PaintLine(line)
+    if line.kind == "item" then
+        return PaintItem(line)
+    elseif line.kind == "group" then
+        return AddGroupHeader(line.group, listWidth, line.y)
+    elseif line.kind == "source" then
+        return AddSourceHeader(line.text, listWidth, line.y)
+    end
+    return ShowMessage(line.text, listWidth, line.y)
+end
+
+-- What a row shows, so a redraw while the list loads can keep a row that would look the same.
+local function Remember(row, line)
+    local entry, group = line.entry, line.group
+    row.bgvKind, row.bgvY, row.bgvHeight, row.bgvText, row.bgvStats = line.kind, line.y, line.height, line.text, line.stats
+    row.bgvWidth = listWidth
+    row.bgvItem = entry and entry.itemID
+    row.bgvItemLevel = entry and entry.itemLevel
+    row.bgvName = entry and entry.name
+    row.bgvIcon = entry and entry.icon
+    row.bgvQuality = entry and entry.quality
+    row.bgvStripe = line.index and line.index % 2 == 0
+    row.bgvGroup = group and group.name
+    row.bgvCount = group and #group.entries
+end
+
+local function StillShows(row, line)
+    local entry, group = line.entry, line.group
+    return row.bgvKind == line.kind and row.bgvY == line.y and row.bgvHeight == line.height
+        and row.bgvText == line.text and row.bgvStats == line.stats and row.bgvWidth == listWidth
+        and row.bgvItem == (entry and entry.itemID) and row.bgvItemLevel == (entry and entry.itemLevel)
+        and row.bgvName == (entry and entry.name) and row.bgvIcon == (entry and entry.icon)
+        and row.bgvQuality == (entry and entry.quality) and row.bgvStripe == (line.index and line.index % 2 == 0)
+        and row.bgvGroup == (group and group.name) and row.bgvCount == (group and #group.entries)
+end
+
+-- Adds a line below the others; the line tables are reused from one layout to the next.
+local function AddLine(kind, y, height)
+    lineCount = lineCount + 1
+    local line = lines[lineCount]
+    if not line then
+        line = {}
+        lines[lineCount] = line
+    end
+    line.kind, line.y, line.height = kind, y, height
+    line.entry, line.index, line.stats, line.group, line.text = nil, nil, nil, nil, nil
+    return line
+end
+
+-- Painted beyond the visible area, so rows are ready before they scroll into view.
+local OVERSCAN = 64
+
+local function ViewHeight()
+    local height = scroll:GetHeight()
+    if type(height) ~= "number" or height < 40 then
+        -- Not laid out yet: the list's place in the window (see Layout).
+        height = (frame and frame:GetHeight() or 560) - LIST_TOP - 16
+    end
+    return height
+end
+
+-- Gives the lines in view a row, and takes rows back from lines scrolled out of view. Called by
+-- Layout and whenever the list scrolls or resizes. `recheck`: the lines are new but rows were
+-- kept (a redraw while loading), so repaint only the rows that no longer show their line.
+local function PaintVisible(recheck)
+    -- A hidden window paints nothing; showing it lays it out (OnShow).
+    if not (scroll and child and listWidth and frame:IsVisible()) then
+        return
+    end
+    if lineCount == 0 then
+        ReleaseRows()
+        return
+    end
+    local top = scroll:GetVerticalScroll() or 0
+    local from, to = top - OVERSCAN, top + ViewHeight() + OVERSCAN
+    -- The first line reaching below `from` (lines are in order, top to bottom), then every line
+    -- starting above `to`.
+    local low, high = 1, lineCount
+    while low < high do
+        local middle = math.floor((low + high) / 2)
+        local line = lines[middle]
+        if line.y + line.height <= from then
+            low = middle + 1
+        else
+            high = middle
+        end
+    end
+    local first, last = low, low
+    while last < lineCount and lines[last + 1].y < to do
+        last = last + 1
+    end
+    if not recheck and first == paintedFirst and last == paintedLast then
+        return
+    end
+    for index, row in pairs(painted) do
+        if index < first or index > last or (recheck and not StillShows(row, lines[index])) then
+            ReleaseRow(index)
+        elseif recheck then
+            -- The same item, maybe in a new copy: tooltips and clicks use the current one.
+            row.entry = lines[index].entry
+        end
+    end
+    for index = first, last do
+        if not painted[index] then
+            local row = PaintLine(lines[index])
+            Remember(row, lines[index])
+            painted[index] = row
+        end
+    end
+    paintedFirst, paintedLast = first, last
 end
 
 -- The vault mode's section: one Great Vault slot.
@@ -1404,10 +1736,17 @@ local function SourceName(source, info)
     return L[source.header] .. " • " .. info.label
 end
 
+-- The journal reading time (ms) all the database's sources share in one redraw: a source still
+-- loading reads the rest on the next redraws, so opening the database doesn't stall a frame.
+-- `passReads`: how many instances the last redraw read.
+local DB_READ_MS = 3
+local passReads = 0
+
 -- The database mode's section: every selected source at its chosen level, for the chosen class
 -- and spec. A source whose item level isn't known yet lists nothing rather than items at a
 -- guessed one. With several sources, `parts` heads each source's groups in the list.
 local function DatabaseSection()
+    local budget = BGV.Rewards and type(BGV.Rewards.NewReadBudget) == "function" and BGV.Rewards.NewReadBudget(DB_READ_MS) or nil
     local sources = SelectedSources()
     local keys = { "database", tostring(db.classID), tostring(db.specID) }
     local titles, rewards, parts = {}, {}, {}
@@ -1420,7 +1759,7 @@ local function DatabaseSection()
         parts[#parts + 1] = { order = source.order, text = name .. " • " .. (ItemLevelText(info) or L["item level not known yet"]) }
         if info and info.itemLevel then
             known = known + 1
-            local list, sourcePending = DatabaseItems(source)
+            local list, sourcePending = DatabaseItems(source, budget)
             pending = pending or sourcePending
             for _, entry in ipairs(list) do
                 items[#items + 1] = entry
@@ -1434,6 +1773,7 @@ local function DatabaseSection()
             rewards[#rewards + 1] = string.format(L["%s not known yet"], L[source.header])
         end
     end
+    passReads = budget and budget.reads or 0
     local section = {
         key = table.concat(keys, ":"),
         title = table.concat(titles, "  +  "),
@@ -1536,16 +1876,46 @@ local function RefreshModeWidgets()
     end
 end
 
-function Layout()
+-- Adds a redraw that took from `started` until now to the load it's part of: a redraw while
+-- loading (`keepRows`) continues the load, any other starts a new one.
+local function NoteRedraw(started, keepRows, pending)
+    if not started then
+        return
+    end
+    local spent = debugprofilestop() - started
+    if not (keepRows and loading) then
+        loading = { redraws = 0, time = 0, peak = 0 }
+    end
+    loading.redraws = loading.redraws + 1
+    loading.time = loading.time + spent
+    loading.peak = math.max(loading.peak, spent)
+    if not pending then
+        BGV.LootTable.lastLoad = loading
+        loading = nil
+    end
+end
+
+-- `keepRows`: a redraw while the list loads (RefreshPending), which keeps the rows that would
+-- look the same; any other redraw paints every row in view anew.
+function Layout(keepRows)
     if not child or not scroll then
         return
     end
+    local started = type(debugprofilestop) == "function" and debugprofilestop() or nil
+    lastLayoutAt = type(GetTime) == "function" and GetTime() or nil
     local database = mode == "database"
     statLookups = STAT_LOOKUPS_PER_PASS
+    statSpent = 0
+    statsCut = false
+    passReads = 0
     UpdateMetrics()
     PaintAccent()
     RefreshModeWidgets()
-    ReleaseRows()
+    -- The old lines go first, so scrolling back to the top below paints none of them.
+    lineCount = 0
+    if not keepRows then
+        ReleaseRows()
+    end
     local model, section
     if database then
         section = DatabaseSection()
@@ -1600,14 +1970,18 @@ function Layout()
     end
     child:SetWidth(width)
     local rowWidth = width - 8
+    listWidth = rowWidth
     PlaceHeader(rowWidth)
     local function Continue()
+        NoteRedraw(started, keepRows, section and section.pending)
         if not section or not section.pending then
             ResetWatch()
             return
         end
+        -- Progress: new items, or a redraw that stopped reading (the journal or stats) because it
+        -- had read its share.
         local mark = tostring(key) .. ":" .. tostring(#(section.items or {}))
-        if mark ~= pendingWatch then
+        if mark ~= pendingWatch or statsCut or passReads > 0 then
             pendingWatch = mark
             stalls = 0
             BGV.LootTable.RefreshPending()
@@ -1627,117 +2001,77 @@ function Layout()
             end
         end
     end
-    if not section then
-        ShowMessage(L["No Great Vault progress to list yet."], rowWidth)
+    local function Message(text)
+        AddLine("message", 8, ROW_H).text = text
         child:SetHeight(48)
+        PaintVisible(keepRows)
         Continue()
+    end
+    if not section then
+        Message(L["No Great Vault progress to list yet."])
         return
     end
 
     local items = section.items or {}
     if #items == 0 then
         if section.locked then
-            ShowMessage(L["Locked."], rowWidth)
+            Message(L["Locked."])
         elseif section.unknownLevel then
-            ShowMessage(L["The vault hasn't shown item levels for this yet. Complete one of these in your Great Vault this season and they'll appear here."], rowWidth)
+            Message(L["The vault hasn't shown item levels for this yet. Complete one of these in your Great Vault this season and they'll appear here."])
         elseif section.pending and stalls >= MAX_STALLS then
-            ShowMessage(L["Loot didn't finish loading. Close and reopen this window to try again."], rowWidth)
+            Message(L["Loot didn't finish loading. Close and reopen this window to try again."])
         elseif section.pending then
-            ShowMessage(L["Loading loot..."], rowWidth)
+            Message(L["Loading loot..."])
         elseif section.database and not FiltersActive() then
-            ShowMessage(L["No loot found here for this class."], rowWidth)
+            Message(L["No loot found here for this class."])
         else
-            ShowMessage(L["No items for this filter."], rowWidth)
+            Message(L["No items for this filter."])
         end
-        child:SetHeight(48)
-        Continue()
         return
     end
 
-    local showTiers = BGV.Utils.ShowBisTiers()
-    local tierSpecs = TierSpecs()
+    paintTiers = BGV.Utils.ShowBisTiers()
+    paintSpecs = TierSpecs()
     local y = 2
-    local function RenderGroup(group, first)
+    local function AddGroup(group, first)
         if not first then
             y = y + 6
         end
-        AddGroupHeader(group, rowWidth, y)
+        AddLine("group", y, GROUP_H).group = group
         y = y + GROUP_H
         for index, entry in ipairs(group.entries) do
-            local row = Acquire()
-            row:SetWidth(rowWidth)
-            row:ClearAllPoints()
-            row:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -y)
-            PlaceColumns(row, rowWidth)
-            row.entry = entry
-            row.icon:SetTexture(entry.icon)
-            local r, g, b = QualityColor(entry)
-            row.iconBG:SetVertexColor(r, g, b, 0.9)
-            row.iconBG:Show()
-            row.name:SetText(entry.name or L["Item"])
-            row.name:SetTextColor(r, g, b)
-            local tier = showTiers and BestTier(entry.itemID, tierSpecs) or nil
-            if tier then
-                local color = TIER_TEXT[tier]
-                row.tierBadge:SetVertexColor(color[1], color[2], color[3], 0.95)
-                row.tierBadge:Show()
-                row.tier:SetText(tier)
-                row.tier:SetTextColor(0.07, 0.07, 0.08)
-            else
-                row.tier:SetText(showTiers and "-" or "")
-                row.tier:SetTextColor(0.45, 0.45, 0.48)
-            end
-            row.level:SetText(BGV.Utils.IsUsableNumber(entry.itemLevel) and tostring(entry.itemLevel) or "-")
-            row.level:SetTextColor(0.96, 0.96, 0.96)
-            row.slot:SetText(SlotText(entry))
-            -- One stat per line, highest amount first; the row grows if there are more lines
-            -- than fit.
+            -- One stat a line (PaintItem): the row grows if there are more lines than fit.
             local stats = EntryStats(entry)
-            local exact = BGV.Utils.IsUsableNumber(entry.itemLevel)
-            local lines = {}
-            for _, stat in ipairs(stats or NO_STATS) do
-                if exact then
-                    local amount = type(BreakUpLargeNumbers) == "function" and BreakUpLargeNumbers(stat.amount) or tostring(stat.amount)
-                    lines[#lines + 1] = string.format("+%s %s", amount, stat.name)
-                else
-                    -- The amounts depend on an item level that isn't known here.
-                    lines[#lines + 1] = stat.name
-                end
-            end
-            if #lines > 0 then
-                PaintStats(row, lines, 0.9, 0.9, 0.92)
-            else
-                PaintStats(row, { stats and "-" or "..." }, 0.55, 0.55, 0.58)
-            end
-            local height = math.max(ROW_H, #lines * STAT_LINE_H + 8)
-            row:SetHeight(height)
-            row.stripe:SetShown(index % 2 == 0)
+            local height = math.max(ROW_H, #(stats or NO_STATS) * STAT_LINE_H + 8)
+            local line = AddLine("item", y, height)
+            line.entry, line.index, line.stats = entry, index, stats
             y = y + height
         end
     end
-    local groups = GroupItems(items, section.slot)
+    local groups = Groups(items, section.slot)
     if section.parts then
         -- Several database sources: each source's groups under its own divider.
         for partIndex, part in ipairs(section.parts) do
             if partIndex > 1 then
                 y = y + 12
             end
-            AddSourceHeader(part.text, rowWidth, y)
+            AddLine("source", y, SOURCE_H).text = part.text
             y = y + SOURCE_H
             local first = true
             for _, group in ipairs(groups) do
                 if group.sourceOrder == part.order then
-                    RenderGroup(group, first)
+                    AddGroup(group, first)
                     first = false
                 end
             end
         end
     else
         for groupIndex, group in ipairs(groups) do
-            RenderGroup(group, groupIndex == 1)
+            AddGroup(group, groupIndex == 1)
         end
     end
     child:SetHeight(math.max(y + 8, 40))
+    PaintVisible(keepRows)
     Continue()
 end
 
@@ -2362,6 +2696,10 @@ local function Build()
     end)
     scroll:SetScript("OnVerticalScroll", function()
         UpdateScrollThumb()
+        PaintVisible()
+    end)
+    scroll:SetScript("OnSizeChanged", function()
+        PaintVisible()
     end)
     scroll:SetScript("OnMouseWheel", function(self, delta)
         local maxScroll = self:GetVerticalScrollRange() or 0
@@ -2379,6 +2717,9 @@ local function Build()
             scrollTarget = nil
         else
             self:SetVerticalScroll(current + distance * math.min(1, elapsed * 14))
+        end
+        if tipWaiting and not ListMoving() then
+            ShowTipUnderPointer()
         end
     end)
 
@@ -2474,6 +2815,17 @@ local function PlaceHeaders()
     end
 end
 
+-- Shows the window laid out once: showing it lays it out (OnShow), so only one already open
+-- needs a new layout.
+local function ShowLaidOut(window)
+    if window:IsShown() then
+        Layout()
+    else
+        window:Show()
+    end
+    window:Raise()
+end
+
 function BGV.LootTable.Show(slot)
     local window = Build()
     if mode == "database" and BGV.Rewards and type(BGV.Rewards.ClearDatabase) == "function" then
@@ -2491,10 +2843,8 @@ function BGV.LootTable.Show(slot)
         selectedKey = nil
     end
     PlaceHeaders()
-    window:Show()
-    window:Raise()
     JumpScroll(0)
-    Layout()
+    ShowLaidOut(window)
 end
 
 -- Repaints an open table (the accent color changed in the settings).
@@ -2532,10 +2882,8 @@ function BGV.LootTable.ShowDatabase()
         db.specID = BGV.Utils.LootSpecID() or 0
     end
     PlaceHeaders()
-    window:Show()
-    window:Raise()
     ScrollTop()
-    Layout()
+    ShowLaidOut(window)
 end
 
 function BGV.LootTable.ToggleDatabase()

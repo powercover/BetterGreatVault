@@ -707,7 +707,7 @@ function Utils.CreateEmblem(parent, size)
     local puffs = {}
     for index = 1, PUFF_COUNT do
         local texture = body:CreateTexture(nil, "OVERLAY", nil, 2)
-        texture:SetTexture(EMBLEM_MEDIA .. "EmblemPuff")
+        texture:SetTexture(EMBLEM_MEDIA .. "CasePuffs")
         texture:Hide()
         puffs[index] = { texture = texture }
     end
@@ -715,11 +715,21 @@ function Utils.CreateEmblem(parent, size)
     local spin = { t = SPIN_START, angle = 0, speed = SPIN_SLOW, effect = 0, scale = 1, velocity = 0, spawn = 0, puffs = puffs }
     emblem.spin = spin
 
-    -- A puff thrown off the rim, flung along the spin; it grows as it goes and fades out.
+    -- A puff thrown off the rim, flung along the spin; it grows as it goes and fades out. Each
+    -- is one of four cloud shapes, mirrored at random, tilted, turning a little, and stretched.
     local function Puff()
         for _, puff in ipairs(puffs) do
             if not puff.active then
                 puff.active, puff.age, puff.angle = true, 0, math.random() * 2 * math.pi
+                local shape = math.random(4)
+                local left, right = (shape - 1) / 4, shape / 4
+                if math.random() < 0.5 then
+                    left, right = right, left
+                end
+                puff.texture:SetTexCoord(left, right, 0, 1)
+                puff.tilt = (math.random() - 0.5) * 1.0
+                puff.turn = (math.random() - 0.5) * 1.6
+                puff.aspect = 0.85 + math.random() * 0.35
                 puff.texture:Show()
                 return
             end
@@ -732,19 +742,27 @@ function Utils.CreateEmblem(parent, size)
         local radial, tangent = size * 0.5 + travel * 0.75, travel * 0.66
         local cos, sin = math.cos(puff.angle), math.sin(puff.angle)
         local puffSize = size * (0.16 + 0.16 * life)
-        puff.texture:SetSize(puffSize, puffSize)
+        puff.texture:SetSize(puffSize * puff.aspect, puffSize)
+        puff.texture:SetRotation(puff.tilt + puff.turn * puff.age)
         puff.texture:SetPoint("CENTER", body, "CENTER", cos * radial - sin * tangent, sin * radial + cos * tangent)
         puff.texture:SetAlpha(0.95 * (1 - life * life))
     end
 
+    -- Once a frame while shown: only what moves is touched (no tables made, so no garbage).
+    local effects = { blur, trails, arcs }
+    local pose = { shown = nil, scale = nil, rattled = true }
     local function Pose()
         local effect = spin.effect
         wheel:SetRotation(spin.angle)
         wheel:SetAlpha(1 - 0.6 * effect)
-        for _, texture in ipairs({ blur, trails, arcs }) do
-            texture:SetShown(effect > 0)
+        local shown = effect > 0
+        if pose.shown ~= shown then
+            pose.shown = shown
+            for index = 1, 3 do
+                effects[index]:SetShown(shown)
+            end
         end
-        if effect > 0 then
+        if shown then
             blur:SetRotation(spin.angle)
             blur:SetAlpha(0.9 * effect)
             trails:SetRotation(spin.angle)
@@ -752,10 +770,17 @@ function Utils.CreateEmblem(parent, size)
             arcs:SetRotation(spin.angle * 0.85)
             arcs:SetAlpha(effect)
         end
-        body:SetScale(math.max(0.5, spin.scale))
+        local scale = math.max(0.5, spin.scale)
+        if pose.scale ~= scale then
+            pose.scale = scale
+            body:SetScale(scale)
+        end
         -- The rattle at full tilt, a pixel or so either way.
         local rattle = effect > 0.5 and effect * size / 30 * 0.7 or 0
-        body:SetPoint("CENTER", emblem, "CENTER", (math.random() * 2 - 1) * rattle, (math.random() * 2 - 1) * rattle)
+        if rattle > 0 or pose.rattled then
+            pose.rattled = rattle > 0
+            body:SetPoint("CENTER", emblem, "CENTER", (math.random() * 2 - 1) * rattle, (math.random() * 2 - 1) * rattle)
+        end
     end
 
     local function Animate(_, elapsed)

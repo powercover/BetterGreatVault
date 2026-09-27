@@ -29,6 +29,7 @@ Rewards.lua
 Bis.lua
 GreatVault.lua
 Tooltip.lua
+Case.lua
 UI.lua
 LootTable.lua
 Settings.lua

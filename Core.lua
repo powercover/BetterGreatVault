@@ -11,6 +11,8 @@ local function SavedDefaults()
     if type(BetterGreatVaultCharDB) ~= "table" then
         BetterGreatVaultCharDB = {}
     end
+    -- Timings a diagnostic build kept, if one ran.
+    BetterGreatVaultCharDB.diag = nil
     BetterGreatVaultDB = Utils.CopyDefaults(BetterGreatVaultCharDB, {
         debug = false,
         openLootTable = true,
@@ -24,6 +26,7 @@ local function SavedDefaults()
         lockMinimap = false,
         minimapAngle = 220,
         disableAnimations = false,
+        vaultStyle = "spec",
         showBisTiers = true,
         remindRewards = true,
         fontSize = 0,
@@ -132,7 +135,58 @@ local function PrintHelp()
     Utils.Print("/bgv db - " .. L["loot database: everything the vault can award, for any class"])
     Utils.Print("/bgv debug - " .. L["debug mode, and print the Great Vault's slots"])
     Utils.Print("/bgv refresh - " .. L["read the Great Vault again"])
+    Utils.Print("/bgv perf - " .. L["what the addon costs: CPU, memory and animations"])
     Utils.Print("/bgv reset - " .. L["reset settings"])
+end
+
+-- What the addon costs: its CPU time a frame from the game's addon profiler (the figures the
+-- AddOns list shows, worked out the same way; the profiler counts from when the game started,
+-- through reloads), its memory, and its own timing of loading, the last slot animation (Case.lua)
+-- and the last loot table load (LootTable.lua).
+function BGV.PrintPerformance()
+    local function Line(text)
+        DEFAULT_CHAT_FRAME:AddMessage("    " .. text)
+    end
+    Utils.Print(L["Performance"])
+    local profiler = C_AddOnProfiler
+    local metrics = Enum and Enum.AddOnProfilerMetric
+    if profiler and metrics and type(profiler.IsEnabled) == "function" and profiler.IsEnabled() then
+        local function Metric(metric)
+            return profiler.GetAddOnMetric(addonName, metric) or 0
+        end
+        local recent = Metric(metrics.RecentAverageTime)
+        local game = profiler.GetApplicationMetric(metrics.RecentAverageTime) or 0
+        local addons = profiler.GetOverallMetric(metrics.RecentAverageTime) or 0
+        local total = game - addons + recent
+        local share = total > 0 and recent / total * 100 or 0
+        Line(string.format(L["CPU: %.3f ms a frame now (%.2f%% of the game's time); since the game started, %.3f ms on average and %.1f ms at the peak"],
+            recent, share, Metric(metrics.SessionAverageTime), Metric(metrics.PeakTime)))
+        Line(string.format(L["Frames where it took over 5 ms since the game started: %d"], Metric(metrics.CountTimeOver5Ms)))
+    else
+        Line(L["The game's addon profiler is off, so there are no CPU figures."])
+    end
+    if type(UpdateAddOnMemoryUsage) == "function" and type(GetAddOnMemoryUsage) == "function" then
+        UpdateAddOnMemoryUsage()
+        Line(string.format(L["Memory: %.1f MB"], (GetAddOnMemoryUsage(addonName) or 0) / 1024))
+    end
+    if BGV.loadFiles then
+        local setup = BGV.loadSetup or 0
+        Line(string.format(L["Loading: %.1f ms (its files %.1f ms, setting up %.1f ms)"], BGV.loadFiles + setup, BGV.loadFiles, setup))
+    end
+    local stats = BGV.Case and BGV.Case.lastStats
+    if stats and stats.frames > 0 then
+        local fps = stats.seconds > 0 and stats.frames / stats.seconds or 0
+        Line(string.format(L["Last slot animation: %.3f ms a frame on average, %.3f ms at most, %d frames at %.0f fps"],
+            stats.time / stats.frames, stats.peak, stats.frames, fps))
+    else
+        Line(L["Point at an unlocked slot in the Great Vault, then run this again to see what its animation costs."])
+    end
+    local load = BGV.LootTable and BGV.LootTable.lastLoad
+    if load and load.redraws > 0 then
+        Line(string.format(L["Last loot table load: %.1f ms in all, the longest redraw %.1f ms, redraws: %d"],
+            load.time, load.peak, load.redraws))
+    end
+    Line(L["The AddOns list (Esc > AddOns) shows the same CPU figures for every addon."])
 end
 
 -- Lists every Great Vault slot in chat: progress, requirement and reward item level.
@@ -236,6 +290,8 @@ local function HandleSlash(message)
         end
     elseif command == "refresh" then
         BGV.RefreshVault()
+    elseif command == "perf" or command == "performance" then
+        BGV.PrintPerformance()
     elseif command == "reset" then
         BGV.ResetSettings()
     else
@@ -247,12 +303,16 @@ end
 frame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" then
         if arg1 == addonName then
+            local started = type(debugprofilestop) == "function" and debugprofilestop() or nil
             SavedDefaults()
             -- The chosen language first: everything built from here on speaks it.
             BGV.Locale.Apply()
             NameBindings()
             Utils.ApplyFontSize()
             BGV.Minimap.RegisterSettings()
+            if started then
+                BGV.loadSetup = debugprofilestop() - started
+            end
         elseif arg1 == "Blizzard_WeeklyRewards" then
             AttachToVault()
         end
@@ -368,3 +428,8 @@ frame:RegisterEvent("PLAYER_LOOT_SPEC_UPDATED")
 
 SLASH_BETTERGREATVAULT1 = "/bgv"
 SlashCmdList.BETTERGREATVAULT = HandleSlash
+
+-- The last file the game loads (see the TOC): how long loading the addon's files took.
+if BGV.loadStarted then
+    BGV.loadFiles = debugprofilestop() - BGV.loadStarted
+end

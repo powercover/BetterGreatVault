@@ -1,5 +1,8 @@
 local _, BGV = ...
 
+-- The first file the game loads (see the TOC): /bgv perf times the addon's loading from here.
+BGV.loadStarted = type(debugprofilestop) == "function" and debugprofilestop() or nil
+
 -- Translations. The addon's text is written in English and looked up through BGV.L: L["Settings"]
 -- is the chosen language's text, or the English itself when there's no translation for it.
 BGV.Locale = {}
