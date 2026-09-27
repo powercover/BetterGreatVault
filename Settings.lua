@@ -23,10 +23,30 @@ local function DB()
     return BetterGreatVaultDB
 end
 
+-- The panel's own accents (selection bar, heading rules, checkbox fills) follow the addon's
+-- accent color, so the choice made here shows right away.
+local accentTextures = {}
+
+local function Accent(texture, alpha)
+    accentTextures[#accentTextures + 1] = { texture = texture, alpha = alpha or 1 }
+    return texture
+end
+
+local function PaintAccent()
+    local color = BGV.Utils.AccentColor()
+    for _, item in ipairs(accentTextures) do
+        item.texture:SetVertexColor(color[1], color[2], color[3], item.alpha)
+    end
+end
+
 local function RefreshAccent()
+    PaintAccent()
     local function Go()
         if BGV.UI and type(BGV.UI.RefreshOpenFrame) == "function" then
             BGV.UI.RefreshOpenFrame()
+        end
+        if BGV.LootTable and type(BGV.LootTable.RefreshStyle) == "function" then
+            BGV.LootTable.RefreshStyle()
         end
     end
     Go()
@@ -114,7 +134,7 @@ local function MakeLink(parent, text, id)
     link:SetPoint("TOPLEFT", parent, "TOPLEFT", 18, -78 - (id - 1) * 32)
     link.id = id
 
-    local bar = Pixel(link, "ARTWORK", 0.85, 0.65, 0.2, 1)
+    local bar = Accent(Pixel(link, "ARTWORK", 0.85, 0.65, 0.2, 1))
     bar:SetSize(2, 14)
     bar:SetPoint("LEFT", link, "LEFT", 0, 0)
     bar:Hide()
@@ -155,7 +175,7 @@ local function MakeHeader(parent, text, section)
     header:SetJustifyH("LEFT")
     header:SetText(text)
     header:SetTextColor(0.96, 0.96, 0.96)
-    local rule = Pixel(parent, "ARTWORK", 0.85, 0.65, 0.2, 0.9)
+    local rule = Accent(Pixel(parent, "ARTWORK", 0.85, 0.65, 0.2, 0.9), 0.9)
     rule:SetSize(36, 2)
     rule:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -6)
     layout[#layout + 1] = { widget = header, x = PAD, height = 36, section = section }
@@ -186,7 +206,7 @@ local function MakeCheckbox(parent, label, y, getter, setter)
     box:SetPoint("LEFT", row, "LEFT", 0, 0)
     BoxBorder(row, box)
 
-    local fill = Pixel(row, "ARTWORK", 0.85, 0.65, 0.2, 1)
+    local fill = Accent(Pixel(row, "ARTWORK", 0.85, 0.65, 0.2, 1))
     fill:SetSize(10, 10)
     fill:SetPoint("CENTER", box, "CENTER", 0, 0)
     fill:Hide()
@@ -480,6 +500,7 @@ local function Build()
         if self.bgvFit then
             self.bgvFit()
         end
+        PaintAccent()
         BGV.Settings.Refresh()
         ScrollTo(1)
     end)
