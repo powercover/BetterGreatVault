@@ -141,7 +141,7 @@ local function HandleSlash(message)
         BetterGreatVaultDB = nil
         BetterGreatVaultCharDB = nil
         SavedDefaults()
-        BGV.Minimap.Apply()
+        BGV.Minimap.Apply(true)
         if BGV.Settings and type(BGV.Settings.Refresh) == "function" then
             BGV.Settings.Refresh()
         end
