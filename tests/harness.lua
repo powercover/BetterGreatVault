@@ -58,13 +58,17 @@ function H.BuildSlots()
             defeated = difficultyID > 0,
         }
     end
+    M.weekly.raidKills = H.RAID_KILLS
     local T = Enum.WeeklyRewardChestThresholdType
+    -- Tiers and item levels agree with the game's steps (ej_model.lua M.weekly): keystone tier 256
+    -- (+10 = 318), world tier 249 (tier 8 = 305), raid Mythic 334. The Heroic raid slot's 311 is the
+    -- harness's own choice (the game gives no step for it; only a resolved slot says).
     H.slots = {
-        R1 = { type = T.Raid, index = 1, unlocked = true, level = 16, itemLevel = 289, threshold = 2, progress = 7, encounters = encounters },
-        R2 = { type = T.Raid, index = 2, unlocked = true, level = 15, itemLevel = 282, threshold = 4, progress = 7, encounters = encounters },
-        M1 = { type = T.Activities, index = 1, unlocked = true, level = 10, itemLevel = 285, activityTierID = 901, threshold = 1, progress = 8 },
+        R1 = { type = T.Raid, index = 1, unlocked = true, level = 16, itemLevel = 334, threshold = 2, progress = 7, encounters = encounters },
+        R2 = { type = T.Raid, index = 2, unlocked = true, level = 15, itemLevel = 311, threshold = 4, progress = 7, encounters = encounters },
+        M1 = { type = T.Activities, index = 1, unlocked = true, level = 10, itemLevel = 318, activityTierID = 256, threshold = 1, progress = 8 },
         M2 = { type = T.Activities, index = 2, unlocked = true, level = 0, itemLevel = 272, activityTierID = 900, threshold = 4, progress = 8 },
-        W1 = { type = T.World, index = 1, unlocked = true, level = 8, itemLevel = 275, activityTierID = 902, threshold = 2, progress = 3, qualifier = "Delves" },
+        W1 = { type = T.World, index = 1, unlocked = true, level = 8, itemLevel = 305, activityTierID = 249, threshold = 2, progress = 3, qualifier = "Delves" },
     }
     H.slotOrder = { "M1", "M2", "R1", "R2", "W1" }
     H.vaultSlots = {}
@@ -73,6 +77,28 @@ function H.BuildSlots()
         H.vaultSlots[#H.vaultSlots + 1] = H.slots[name]
         H.nameOf[H.slots[name]] = name
     end
+end
+
+-- Scenario helpers: change a vault slot's field (nil clears it, e.g. an item level not resolved
+-- yet), or add a raid slot at another difficulty.
+function H.SetSlot(name, field, value)
+    H.slots[name][field] = value
+end
+
+function H.AddRaidSlot(name, level, itemLevel)
+    H.AddSlot(name, "Raid", 3, level, itemLevel)
+end
+
+-- An extra unlocked vault slot, e.g. ("M3", "Activities", 3, 2, 305, 256): a keystone slot at +2.
+function H.AddSlot(name, typeName, index, level, itemLevel, tier)
+    local slot = {
+        type = Enum.WeeklyRewardChestThresholdType[typeName], index = index, unlocked = true, level = level,
+        itemLevel = itemLevel, activityTierID = tier, threshold = 8, progress = 8,
+        encounters = typeName == "Raid" and H.slots.R1.encounters or nil,
+    }
+    H.slots[name] = slot
+    H.vaultSlots[#H.vaultSlots + 1] = slot
+    H.nameOf[slot] = name
 end
 
 local function SlotName(slot)
@@ -278,7 +304,20 @@ local function WrapRewards()
     R.InvalidateIcons = function(...)
         H.counters.invalidations = H.counters.invalidations + 1
         H.ResetStatus()
+        if H.DbRestart then
+            H.DbRestart("InvalidateIcons")
+        end
         return invalidate(...)
+    end
+    local clear = R.ClearDatabase
+    if type(clear) == "function" then
+        R.ClearDatabase = function(...)
+            H.counters.clears = (H.counters.clears or 0) + 1
+            if H.DbRestart then
+                H.DbRestart("ClearDatabase")
+            end
+            return clear(...)
+        end
     end
 end
 
@@ -401,6 +440,15 @@ local function DriverUpdate(_, elapsed)
             end
         end
     end
+    -- The loot table's database view, polling its lists while they load.
+    local dbPoll = H.dbPoll
+    if dbPoll then
+        dbPoll.clock = dbPoll.clock + elapsed
+        if dbPoll.clock >= POLL_DELAY then
+            dbPoll.clock = 0
+            H.DbPollOnce()
+        end
+    end
 end
 
 -- The Great Vault opens: Blizzard shows the frame, then UI.lua's OnShow hook schedules the reels.
@@ -467,6 +515,15 @@ function H.Boot(reference, testsDir)
     if reference then
         BGV.Rewards = BGV.Rewards or {}
         H.LoadFile((testsDir or "tests") .. "/reference_rewards.lua")
+    end
+    -- The real GreatVault.lua for its RaidRows (the loot database's season raid scope), with the
+    -- harness's vault slots standing in for its snapshot.
+    local stub = BGV.GreatVault
+    if not H.LoadFile("GreatVault.lua", true) then
+        BGV.GreatVault = stub
+    end
+    BGV.GreatVault.GetSnapshot = function()
+        return H.vaultSlots
     end
     H.LoadFile("LootTable.lua", true)
     H.LoadFile("Core.lua")
@@ -552,7 +609,8 @@ local function CheckFinish(names)
     return true
 end
 
-local function CheckLists(names)
+local function CheckLists(names, report)
+    report = report or Result
     -- Slots nothing finished (e.g. the pump stalled before them) get polled directly for up to
     -- 10s, as an open loot table would, so this check is about the lists themselves.
     local unfinished = {}
@@ -650,10 +708,10 @@ local function CheckLists(names)
         end
     end
     if #failures > 0 then
-        Result("a", "FAIL", table.concat(failures, " | "))
+        report("a", "FAIL", table.concat(failures, " | "))
         return false
     end
-    Result("a", "PASS", table.concat(notes, " "))
+    report("a", "PASS", table.concat(notes, " "))
     return true
 end
 
@@ -725,7 +783,8 @@ local function CheckGuideWork()
     return true
 end
 
-local function CheckErrors()
+local function CheckErrors(key)
+    key = key or "e"
     local count = #M.errors
     if count > 0 or #M.blocked > 0 then
         local detail = string.format("%d Lua error(s)", count)
@@ -735,10 +794,10 @@ local function CheckErrors()
         if count > 0 then
             detail = detail .. ": " .. M.ErrorText(nil, 1):gsub("\n", " / "):sub(1, 400)
         end
-        Result("e", "FAIL", detail)
+        Result(key, "FAIL", detail)
         return false
     end
-    Result("e", "PASS", "")
+    Result(key, "PASS", "")
     return true
 end
 
@@ -803,6 +862,835 @@ function H.Verify(csv)
     CheckGuideWork()
     CheckQuiet(not finished)
     CheckErrors()
+end
+
+---------------------------------------------------------------------------------------------------
+-- Loot database mode: Rewards.DatabaseLevels(source), DatabaseItems(source, level, classID,
+-- specID), ClearDatabase(). Checks (keys):
+--   itm  items equal the ground truth for the class/spec filter and the whole season scope, at the
+--        expected item levels (ceiling for raid Mythic's last two bosses), epic, boss order, source
+--   lvl  DatabaseLevels tables
+--   rst  every database call leaves the journal and the guide as they were, and the guide rebuilds
+--        or re-selects nothing during it
+--   vlt  the vault's lists are untouched by database browsing (and the other way round): same
+--        results, no extra journal calls
+--   prf  settled database lists make no journal calls
+--   clr  ClearDatabase drops the database's caches but not the vault's
+--   rec  lists recover after a loot spec change / InvalidateIcons / ClearDatabase mid-load
+--   err  no Lua errors
+---------------------------------------------------------------------------------------------------
+
+H.DB_KEYS = { "itm", "lvl", "rst", "vlt", "prf", "clr", "rec", "err" }
+
+-- Expected item levels, from the user's in-game data (ej_model.lua M.weekly): the vault's upgrade
+-- steps give keystones +4..+10 (+8 is 315, not the 305 GetRewardLevelForDifficultyLevel says) and
+-- world tiers 2..8. Levels below the first step (+2/+3, world tier 1) come only from the vault's
+-- own answer below level 0 or from a resolved vault slot: by default neither, so they're unknown.
+-- Raid Mythic is 334, 344 for the last two bosses; other raid difficulties only from a slot.
+H.DB_STEPS = {
+    mplus = { first = 2, last = 10, itemLevels = { [4] = 308, [5] = 308, [6] = 311, [7] = 315, [8] = 315, [9] = 315, [10] = 318 } },
+    world = { first = 1, last = 8, itemLevels = { [2] = 282, [3] = 285, [4] = 289, [5] = 292, [6] = 295, [7] = 298, [8] = 305 } },
+}
+H.DB_RAID_ORDER = { 17, 14, 15, 16 }
+H.DB_RAID_MYTHIC = 334
+H.DB_RAID_CEILING = 344
+
+-- What the game has told the addon in the scenario: `known` item levels for levels without a
+-- step (from resolved vault slots or the vault's answer below its first step; the harness's R2
+-- slot is Heroic at 311), and whether the upgrade steps are available for a source. Steps come
+-- first; known values only fill the levels steps don't cover.
+H.dbExpect = {
+    known = { raid = { [15] = 311 }, mplus = {}, world = {} },
+    steps = { mplus = true, world = true },
+}
+
+function H.DbExpect(source, level, itemLevel)
+    H.dbExpect.known[source][level] = itemLevel
+end
+
+function H.DbExpectSteps(source, present)
+    H.dbExpect.steps[source] = present and true or false
+end
+
+function H.ExpectedLevels(source)
+    local list = {}
+    local known = H.dbExpect.known[source] or {}
+    if source == "raid" then
+        for _, difficultyID in ipairs(H.DB_RAID_ORDER) do
+            if difficultyID == 16 then
+                list[#list + 1] = { level = 16, itemLevel = H.DB_RAID_MYTHIC, ceiling = H.DB_RAID_CEILING }
+            else
+                list[#list + 1] = { level = difficultyID, itemLevel = known[difficultyID] }
+            end
+        end
+    else
+        local steps = H.DB_STEPS[source]
+        for level = steps.first, steps.last do
+            local itemLevel = H.dbExpect.steps[source] and steps.itemLevels[level] or nil
+            if itemLevel == nil then
+                itemLevel = known[level]
+            end
+            list[#list + 1] = { level = level, itemLevel = itemLevel }
+        end
+    end
+    -- The default is the highest level with a known item level; none if nothing is known.
+    for index = #list, 1, -1 do
+        if list[index].itemLevel then
+            list.default = list[index].level
+            break
+        end
+    end
+    return list
+end
+
+local function ExpectedLevel(source, level)
+    for _, info in ipairs(H.ExpectedLevels(source)) do
+        if info.level == level then
+            return info
+        end
+    end
+    return {}
+end
+
+H.db = {}
+H.dbCalls = 0
+H.dbRestarts = 0
+
+local function DbCheck(key)
+    local check = H.db[key]
+    if not check then
+        check = { fails = {}, failCount = 0, notes = {} }
+        H.db[key] = check
+    end
+    return check
+end
+
+local function DbFail(key, message)
+    local check = DbCheck(key)
+    check.failCount = check.failCount + 1
+    if #check.fails < 4 then
+        check.fails[#check.fails + 1] = message
+    end
+end
+
+local function DbNote(key, message)
+    local check = DbCheck(key)
+    if #check.notes < 16 then
+        check.notes[#check.notes + 1] = message
+    end
+end
+
+-- Journal calls that read or change the journal's selection (a scan), vs every journal call.
+local SCAN_CALLS = {
+    EJ_SelectInstance = true, EJ_SelectEncounter = true, EJ_SetDifficulty = true, EJ_SetLootFilter = true,
+    EJ_ResetLootFilter = true, SetSlotFilter = true, ResetSlotFilter = true, EJ_SelectTier = true,
+    InitalizeSelectedTier = true, EJ_GetNumLoot = true, GetLootInfoByIndex = true, EJ_GetEncounterInfoByIndex = true,
+}
+
+local function AddonCalls()
+    local all, scan = 0, 0
+    for name, count in pairs(M.stats.calls.addon) do
+        all = all + count
+        if SCAN_CALLS[name] then
+            scan = scan + count
+        end
+    end
+    return all, scan
+end
+
+local CALL_ALWAYS = { "classID", "specID", "slotFilter", "tier", "guideShown", "guideInstance", "guideEncounter",
+    "guideDifficultyEvent", "guideLootEvent" }
+
+-- What a call changed in the journal and the guide. The selection must come back exactly when the
+-- guide shows one; with none, the addon reads the selected instance back from the journal's link
+-- (a boss selected with no guide isn't tracked, and nothing shows it).
+local function StateChanges(before, after)
+    local changes = {}
+    local function Compare(field)
+        if before[field] ~= after[field] then
+            changes[#changes + 1] = field == "peek" and "journal loot list differs"
+                or string.format("%s %s -> %s", field, tostring(before[field]), tostring(after[field]))
+        end
+    end
+    for _, field in ipairs(CALL_ALWAYS) do
+        Compare(field)
+    end
+    if before.guideInstance ~= nil then
+        Compare("instance")
+        Compare("encounter")
+        Compare("difficulty")
+        Compare("peek")
+    elseif before.instance ~= nil then
+        Compare("instance")
+        Compare("difficulty")
+    end
+    return changes
+end
+
+local function ListName(source, level, classID, specID)
+    return string.format("%s@%s class %s spec %s", source, tostring(level), tostring(classID), tostring(specID or 0))
+end
+
+-- One Rewards.DatabaseItems call, checked for what it leaves behind. Returns items, pending, and
+-- the journal calls it made (all, and those that read or change the selection).
+function H.DbCall(source, level, classID, specID)
+    local before = M.Snapshot()
+    local rebuilds, hijacks = M.stats.agRebuilds, M.stats.agHijacks
+    local all0, scan0 = AddonCalls()
+    local items, pending = M.AddonCall(BGV.Rewards.DatabaseItems, source, level, classID, specID)
+    local all1, scan1 = AddonCalls()
+    local after = M.Snapshot()
+    H.dbCalls = H.dbCalls + 1
+    local problems = StateChanges(before, after)
+    if M.stats.agRebuilds ~= rebuilds then
+        problems[#problems + 1] = string.format("guide rebuilt its loot list %d time(s)", M.stats.agRebuilds - rebuilds)
+    end
+    if M.stats.agHijacks ~= hijacks then
+        problems[#problems + 1] = string.format("guide re-selected %d time(s)", M.stats.agHijacks - hijacks)
+    end
+    DbCheck("rst")
+    if #problems > 0 then
+        DbFail("rst", ListName(source, level, classID, specID) .. ": " .. table.concat(problems, ", "))
+    end
+    return items, pending, all1 - all0, scan1 - scan0
+end
+
+H.dbLists = {}
+
+-- The database lists the loot table polls, as "source/level/classID/specID", comma separated
+-- (replaces the current ones). Polled every 0.25s while loading.
+function H.DbStart(csv)
+    H.dbLists = {}
+    for spec in tostring(csv):gmatch("[^,%s]+") do
+        local source, level, classID, specID = spec:match("^(%a+)/(%d+)/(%d+)/(%d+)$")
+        assert(source, "bad database list " .. spec)
+        level, classID, specID = tonumber(level), tonumber(classID), tonumber(specID)
+        H.dbLists[#H.dbLists + 1] = {
+            source = source, level = level, classID = classID, specID = specID,
+            name = ListName(source, level, classID, specID), calls = 0, callsSinceRestart = 0,
+        }
+    end
+    H.dbRestarts = 0
+    H.dbPoll = { clock = POLL_DELAY }
+end
+
+function H.DbStop()
+    H.dbPoll = nil
+end
+
+-- InvalidateIcons / ClearDatabase: the loot table re-reads what it shows.
+function H.DbRestart()
+    if #H.dbLists == 0 then
+        return
+    end
+    H.dbRestarts = H.dbRestarts + 1
+    for _, list in ipairs(H.dbLists) do
+        list.finishedAt = nil
+        list.restartedAt = M.clock
+        list.callsSinceRestart = 0
+    end
+end
+
+local function Record(list, items, pending)
+    list.calls = list.calls + 1
+    list.callsSinceRestart = list.callsSinceRestart + 1
+    list.firstAt = list.firstAt or M.clock
+    list.items = items
+    list.pending = pending == true
+    if not list.pending and not list.finishedAt then
+        list.finishedAt = M.clock
+        list.callsToFinish = list.callsSinceRestart
+    end
+end
+
+function H.DbPollOnce()
+    for _, list in ipairs(H.dbLists) do
+        if not list.finishedAt then
+            local items, pending = H.DbCall(list.source, list.level, list.classID, list.specID)
+            Record(list, items, pending)
+        end
+    end
+end
+
+function H.DbSettle(maxSeconds)
+    return M.RunUntil(function()
+        for _, list in ipairs(H.dbLists) do
+            if not list.finishedAt then
+                return false
+            end
+        end
+        return true
+    end, maxSeconds or H.SETTLE_LIMIT)
+end
+
+function H.Invalidate()
+    M.AddonCall(BGV.Rewards.InvalidateIcons)
+end
+
+function H.ClearDatabase()
+    M.AddonCall(BGV.Rewards.ClearDatabase)
+end
+
+-- The items the vault can award from `source` at `level` for the class/spec filter (specID 0: any
+-- of the class's specs), over the whole season: every raid boss, every rotation dungeon with a
+-- keystone difficulty, every world item. Returns set, list and per-item expectations.
+function H.DbTruth(source, level, classID, specID)
+    specID = specID or 0
+    local expected = ExpectedLevel(source, level)
+    local set, list, meta = {}, {}, {}
+    local function Add(itemID, info)
+        set[itemID] = true
+        list[#list + 1] = itemID
+        meta[itemID] = info
+    end
+    local function Wanted(item, difficultyID)
+        return not item.nonGear and (difficultyID == nil or M.Drops(item, difficultyID)) and M.Usable(item, classID, specID)
+    end
+    if source == "raid" then
+        local raid = M.instances[M.ids.raid]
+        local count = #raid.bosses
+        for index, bossID in ipairs(raid.bosses) do
+            -- Raid Mythic's ceiling: the raid's last two bosses (of three or more).
+            local atCeiling = count >= 3 and index > count - 2
+            for _, itemID in ipairs(M.bosses[bossID].loot) do
+                if Wanted(M.items[itemID], level) then
+                    if not set[itemID] then
+                        Add(itemID, { bossOrder = 100 + index, source = M.bosses[bossID].name, ceiling = atCeiling })
+                    elseif atCeiling then
+                        meta[itemID].ceiling = true
+                    end
+                end
+            end
+        end
+    elseif source == "mplus" then
+        for _, instanceID in ipairs(M.ids.seasonDungeons) do
+            local instance = M.instances[instanceID]
+            if instance.diffSet[8] then
+                for _, bossID in ipairs(instance.bosses) do
+                    for _, itemID in ipairs(M.bosses[bossID].loot) do
+                        if not set[itemID] and Wanted(M.items[itemID], 8) then
+                            Add(itemID, { source = instance.name })
+                        end
+                    end
+                end
+            end
+        end
+    elseif source == "world" then
+        for _, itemID in ipairs(BGV.WorldLoot or {}) do
+            local item = M.items[itemID]
+            if item and not set[itemID] and Wanted(item, nil) then
+                Add(itemID, { source = BGV.WorldLootSource and BGV.WorldLootSource[itemID] or "World" })
+            end
+        end
+    end
+    for _, itemID in ipairs(list) do
+        local info = meta[itemID]
+        info.itemLevel = expected.itemLevel
+        if expected.ceiling and info.ceiling then
+            info.itemLevel = expected.ceiling
+        end
+    end
+    return set, list, meta
+end
+
+local function CheckDbList(list, items, pending, key)
+    local truthSet, truthList, meta = H.DbTruth(list.source, list.level, list.classID, list.specID)
+    local got, gotList, dupes, broken, wrong = {}, {}, {}, {}, {}
+    local ceilings = 0
+    for _, entry in ipairs(type(items) == "table" and items or {}) do
+        local itemID = type(entry) == "table" and entry.itemID or nil
+        if itemID then
+            if got[itemID] then
+                dupes[#dupes + 1] = itemID
+            end
+            got[itemID] = true
+            gotList[#gotList + 1] = itemID
+            if type(entry.name) ~= "string" or entry.name == "" or entry.name == "Item" or not entry.icon or entry.icon == 136243 then
+                broken[#broken + 1] = itemID
+            end
+            local want = meta[itemID]
+            if want then
+                if entry.itemLevel ~= want.itemLevel then
+                    wrong[#wrong + 1] = string.format("%s ilvl %s, want %s", Describe(itemID), tostring(entry.itemLevel), tostring(want.itemLevel))
+                end
+                if entry.quality ~= 4 then
+                    wrong[#wrong + 1] = string.format("%s quality %s", Describe(itemID), tostring(entry.quality))
+                end
+                if list.source == "raid" and entry.bossOrder ~= want.bossOrder then
+                    wrong[#wrong + 1] = string.format("%s boss order %s, want %s", Describe(itemID), tostring(entry.bossOrder), tostring(want.bossOrder))
+                end
+                if entry.source ~= want.source then
+                    wrong[#wrong + 1] = string.format("%s source %s, want %s", Describe(itemID), tostring(entry.source), tostring(want.source))
+                end
+                if want.ceiling and entry.itemLevel == H.DB_RAID_CEILING then
+                    ceilings = ceilings + 1
+                end
+            end
+        end
+    end
+    local missing, extra = {}, {}
+    for _, itemID in ipairs(truthList) do
+        if not got[itemID] then
+            missing[#missing + 1] = itemID
+        end
+    end
+    for _, itemID in ipairs(gotList) do
+        if not truthSet[itemID] then
+            extra[#extra + 1] = itemID
+        end
+    end
+    local problems = {}
+    if pending == true then
+        problems[#problems + 1] = "pending at final read"
+    end
+    if #missing > 0 then
+        problems[#problems + 1] = string.format("missing %d/%d: %s", #missing, #truthList, Sample(missing, 3))
+    end
+    if #extra > 0 then
+        problems[#problems + 1] = string.format("extra %d: %s", #extra, Sample(extra, 3))
+    end
+    if #dupes > 0 then
+        problems[#problems + 1] = "duplicates: " .. Sample(dupes, 3)
+    end
+    if #broken > 0 then
+        problems[#problems + 1] = "rows without name/icon: " .. Sample(broken, 3)
+    end
+    for index = 1, math.min(#wrong, 3) do
+        problems[#problems + 1] = wrong[index]
+    end
+    if #wrong > 3 then
+        problems[#problems + 1] = string.format("+%d more wrong fields", #wrong - 3)
+    end
+    if #truthList == 0 then
+        problems[#problems + 1] = "scenario error: empty ground truth"
+    end
+    if #problems > 0 then
+        DbFail(key, list.name .. ": " .. table.concat(problems, ", "))
+        return false
+    end
+    local expected = ExpectedLevel(list.source, list.level)
+    DbNote(key, string.format("%s=%d@%s%s", list.name, #truthList, tostring(expected.itemLevel),
+        ceilings > 0 and string.format(" (%d at %d)", ceilings, H.DB_RAID_CEILING) or ""))
+    return true
+end
+
+-- Every current list finished loading in time, and its items match the ground truth.
+function H.DbCheckItems()
+    DbCheck("itm")
+    for _, list in ipairs(H.dbLists) do
+        if not list.finishedAt then
+            DbFail("itm", string.format("%s still loading after %d passes", list.name, list.callsSinceRestart))
+        else
+            local took = list.finishedAt - (list.restartedAt or list.firstAt or list.finishedAt)
+            if took > H.FINISH_LIMIT or (list.callsToFinish or 0) > H.PASS_LIMIT then
+                DbFail("itm", string.format("%s took %.1fs / %d passes", list.name, took, list.callsToFinish or 0))
+            end
+        end
+        local items, pending = H.DbCall(list.source, list.level, list.classID, list.specID)
+        CheckDbList(list, items, pending, "itm")
+    end
+end
+
+-- While a list's source data isn't there yet it must say it's loading, not finish empty (the
+-- loot table keeps a finished list and stops asking).
+function H.DbCheckLoading(label)
+    DbCheck("itm")
+    for _, list in ipairs(H.dbLists) do
+        local items, pending = H.DbCall(list.source, list.level, list.classID, list.specID)
+        if type(items) == "table" and #items == 0 and pending ~= true then
+            DbFail("itm", string.format("%s: %s came back finished and empty", label, list.name))
+        end
+    end
+end
+
+local function LevelText(levels)
+    local parts = {}
+    for _, info in ipairs(levels) do
+        parts[#parts + 1] = string.format("%s=%s%s", tostring(info.level), tostring(info.itemLevel),
+            info.ceiling and ("/" .. tostring(info.ceiling)) or "")
+    end
+    return table.concat(parts, " ")
+end
+
+function H.CheckLevels(source)
+    DbCheck("lvl")
+    local levels = M.AddonCall(BGV.Rewards.DatabaseLevels, source)
+    local expected = H.ExpectedLevels(source)
+    if type(levels) ~= "table" then
+        DbFail("lvl", source .. ": DatabaseLevels returned nothing")
+        return
+    end
+    local problems = {}
+    if #levels ~= #expected then
+        problems[#problems + 1] = string.format("%d levels, want %d", #levels, #expected)
+    end
+    for index, want in ipairs(expected) do
+        local got = levels[index]
+        if type(got) ~= "table" or got.level ~= want.level then
+            problems[#problems + 1] = string.format("level #%d is %s, want %s", index, tostring(got and got.level), tostring(want.level))
+        else
+            if got.itemLevel ~= want.itemLevel then
+                problems[#problems + 1] = string.format("%s ilvl %s, want %s", tostring(want.level), tostring(got.itemLevel), tostring(want.itemLevel))
+            end
+            if got.ceiling ~= want.ceiling then
+                problems[#problems + 1] = string.format("%s ceiling %s, want %s", tostring(want.level), tostring(got.ceiling), tostring(want.ceiling))
+            end
+            if type(got.label) ~= "string" or got.label == "" then
+                problems[#problems + 1] = string.format("%s has no label", tostring(want.level))
+            end
+        end
+    end
+    if levels.default ~= expected.default then
+        problems[#problems + 1] = string.format("default %s, want %s", tostring(levels.default), tostring(expected.default))
+    end
+    if #problems > 0 then
+        DbFail("lvl", source .. ": " .. table.concat(problems, "; ") .. " [got " .. LevelText(levels) .. "]")
+    else
+        DbNote("lvl", source .. " " .. LevelText(levels))
+    end
+end
+
+local function SerializeEntries(items)
+    local parts = {}
+    for _, entry in ipairs(type(items) == "table" and items or {}) do
+        parts[#parts + 1] = table.concat({ tostring(entry.itemID), tostring(entry.itemLevel), tostring(entry.source),
+            tostring(entry.name), tostring(entry.quality), tostring(entry.icon), tostring(entry.bossOrder) }, ":")
+    end
+    return table.concat(parts, ",")
+end
+
+local function SerializeIcons(icons)
+    local parts = {}
+    for _, icon in ipairs(type(icons) == "table" and icons or {}) do
+        parts[#parts + 1] = tostring(icon.itemID) .. ":" .. tostring(icon.icon)
+    end
+    return table.concat(parts, ",")
+end
+
+-- One read of a vault slot's list and reel, with the journal calls it made.
+local function VaultRead(name)
+    local slot = H.slots[name]
+    local all0, scan0 = AddonCalls()
+    local items, pending = M.AddonCall(BGV.Rewards.ItemsForSlot, slot)
+    local icons, iconsPending
+    if ProgressWeek() then
+        icons, iconsPending = M.AddonCall(BGV.Rewards.PossibleIcons, slot)
+    end
+    local all1, scan1 = AddonCalls()
+    return {
+        text = SerializeEntries(items) .. "#" .. SerializeIcons(icons) .. "#" .. tostring(pending) .. "/" .. tostring(iconsPending),
+        all = all1 - all0,
+        scan = scan1 - scan0,
+        count = type(items) == "table" and #items or 0,
+    }
+end
+
+-- Remembers the settled vault lists (their results and the journal calls a warm read makes).
+function H.MarkVault(csv)
+    DbCheck("vlt")
+    H.vaultMark = {}
+    H.vaultMarkOrder = Split(csv)
+    for _, name in ipairs(H.vaultMarkOrder) do
+        -- A first read may still build the reel (its list is kept once built); mark a warm one.
+        VaultRead(name)
+        local read = VaultRead(name)
+        H.vaultMark[name] = read
+        if read.scan > 0 then
+            DbFail("vlt", name .. ": the vault list was still reading the journal when marked")
+        end
+    end
+end
+
+local function CompareVault(label, key)
+    local same = true
+    for _, name in ipairs(H.vaultMarkOrder or {}) do
+        local mark = H.vaultMark[name]
+        local read = VaultRead(name)
+        if read.text ~= mark.text then
+            same = false
+            DbFail(key, string.format("%s: %s list changed (%d items, was %d)", label, name, read.count, mark.count))
+        end
+        if read.all ~= mark.all or read.scan > 0 then
+            same = false
+            DbFail(key, string.format("%s: %s made %d journal call(s) (%d reading/selecting), a warm read makes %d",
+                label, name, read.all, read.scan, mark.all))
+        end
+    end
+    return same
+end
+
+function H.CheckVault(label)
+    DbCheck("vlt")
+    if CompareVault(label, "vlt") then
+        DbNote("vlt", label .. ": vault lists identical, no extra journal calls")
+    end
+end
+
+-- Remembers the settled database lists.
+function H.MarkDb()
+    H.dbMark = {}
+    for index, list in ipairs(H.dbLists) do
+        local items, pending = H.DbCall(list.source, list.level, list.classID, list.specID)
+        H.dbMark[index] = { text = SerializeEntries(items), pending = pending == true, count = type(items) == "table" and #items or 0 }
+    end
+end
+
+local function CompareDb(label, key, allowReads)
+    local same = true
+    for index, list in ipairs(H.dbLists) do
+        local mark = H.dbMark and H.dbMark[index]
+        local items, pending, all = H.DbCall(list.source, list.level, list.classID, list.specID)
+        if mark and SerializeEntries(items) ~= mark.text then
+            same = false
+            DbFail(key, string.format("%s: %s changed (%d items, was %d)", label, list.name, type(items) == "table" and #items or 0, mark.count))
+        end
+        if pending == true then
+            same = false
+            DbFail(key, string.format("%s: %s is loading again", label, list.name))
+        end
+        if all > 0 and not allowReads then
+            same = false
+            DbFail(key, string.format("%s: %s made %d journal call(s)", label, list.name, all))
+        end
+    end
+    return same
+end
+
+function H.CheckDb(label)
+    DbCheck("vlt")
+    if CompareDb(label, "vlt") then
+        DbNote("vlt", label .. ": database lists identical, no journal calls")
+    end
+end
+
+-- Settled database lists, read again and again (the loot table re-lays out on every event):
+-- no journal calls, same results.
+function H.CheckDbPerf(passes)
+    DbCheck("prf")
+    local calls, changed, loading = 0, 0, 0
+    local first = {}
+    for pass = 1, passes do
+        for index, list in ipairs(H.dbLists) do
+            local items, pending, all = H.DbCall(list.source, list.level, list.classID, list.specID)
+            calls = calls + all
+            local text = SerializeEntries(items)
+            if pass == 1 then
+                first[index] = text
+            elseif first[index] ~= text then
+                changed = changed + 1
+            end
+            if pending == true then
+                loading = loading + 1
+            end
+        end
+    end
+    local detail = string.format("%d passes over %d lists: %d journal calls, %d changed, %d loading", passes, #H.dbLists, calls, changed, loading)
+    if calls > 0 or changed > 0 or loading > 0 then
+        DbFail("prf", detail)
+    else
+        DbNote("prf", detail)
+    end
+end
+
+-- ClearDatabase: the vault's lists stay warm (same results, no extra journal calls); the database
+-- reads the journal again, rebuilds its level tables and raid scope, and settles to the same lists.
+function H.CheckClear()
+    DbCheck("clr")
+    H.ClearDatabase()
+    local asked = M.stats.specInfo
+    CompareVault("after ClearDatabase", "clr")
+    if M.stats.specInfo ~= asked then
+        DbFail("clr", "the vault's world spec answers were dropped by ClearDatabase")
+    end
+    local weekly = M.WeeklyCount("GetActivities")
+    M.AddonCall(BGV.Rewards.DatabaseLevels, "mplus")
+    if M.WeeklyCount("GetActivities") == weekly then
+        DbFail("clr", "DatabaseLevels still served from before ClearDatabase")
+    end
+    local scope = M.WeeklyCount("GetActivityEncounterInfo")
+    local readsRaid, readsWorld = false, false
+    asked = M.stats.specInfo
+    for _, list in ipairs(H.dbLists) do
+        local _, _, _, scan = H.DbCall(list.source, list.level, list.classID, list.specID)
+        if list.source == "world" then
+            readsWorld = true
+        elseif scan == 0 then
+            DbFail("clr", list.name .. ": still served from the cleared cache")
+        end
+        readsRaid = readsRaid or list.source == "raid"
+    end
+    if readsRaid and M.WeeklyCount("GetActivityEncounterInfo") == scope then
+        DbFail("clr", "the season raid scope wasn't rebuilt")
+    end
+    if readsWorld and M.stats.specInfo == asked then
+        DbFail("clr", "the database's world spec answers weren't dropped")
+    end
+    H.DbSettle(H.SETTLE_LIMIT)
+    if CompareDb("after ClearDatabase", "clr", true) then
+        DbNote("clr", "database re-read and settled to the same lists; vault lists and answers untouched")
+    end
+end
+
+-- InvalidateIcons (loot spec change, new vault data): the database keeps what it read, so its
+-- settled lists stay complete and need no journal reads, but its level tables are rebuilt.
+function H.CheckInvalidateKeepsDb()
+    DbCheck("clr")
+    H.Invalidate()
+    local weekly = M.WeeklyCount("GetActivities")
+    M.AddonCall(BGV.Rewards.DatabaseLevels, "mplus")
+    if M.WeeklyCount("GetActivities") == weekly then
+        DbFail("clr", "InvalidateIcons didn't rebuild the database's level tables")
+    end
+    local kept = true
+    for _, list in ipairs(H.dbLists) do
+        local items, pending, _, scan = H.DbCall(list.source, list.level, list.classID, list.specID)
+        if scan > 0 then
+            kept = false
+            DbFail("clr", list.name .. ": InvalidateIcons dropped its journal reads")
+        end
+        if pending == true then
+            kept = false
+            DbFail("clr", string.format("%s: loading again right after InvalidateIcons (%d items)", list.name,
+                type(items) == "table" and #items or 0))
+        end
+    end
+    H.DbSettle(H.SETTLE_LIMIT)
+    if kept then
+        DbNote("clr", "InvalidateIcons kept the database's reads and rebuilt its levels")
+    end
+end
+
+-- After disruptions mid-load, every list finished again within the limits.
+function H.CheckDbRecovery()
+    DbCheck("rec")
+    if H.dbRestarts == 0 then
+        DbFail("rec", "nothing restarted the database lists")
+    end
+    for _, list in ipairs(H.dbLists) do
+        if not list.finishedAt then
+            DbFail("rec", string.format("%s still loading %.1fs after the last restart", list.name, M.clock - (list.restartedAt or list.firstAt or M.clock)))
+        else
+            local took = list.finishedAt - (list.restartedAt or list.firstAt or list.finishedAt)
+            if took > H.FINISH_LIMIT then
+                DbFail("rec", string.format("%s took %.1fs after the last restart", list.name, took))
+            end
+        end
+    end
+    DbNote("rec", string.format("%d restarts, lists finished again", H.dbRestarts))
+end
+
+-- The vault's own lists, against their ground truth (e.g. for a new loot spec).
+function H.CheckVaultTruth(csv, key)
+    key = key or "rec"
+    DbCheck(key)
+    CheckLists(Split(csv), function(_, status, detail)
+        if status == "FAIL" then
+            DbFail(key, "vault lists: " .. detail)
+        else
+            DbNote(key, "vault lists " .. detail)
+        end
+    end)
+end
+
+-- Another addon that calls Rewards.DatabaseItems from EJ_LOOT_DATA_RECIEVED while one of our scans
+-- is open (the event fires inside our own journal calls): a nested read with its own class filter,
+-- up to `times` times, never from inside itself.
+function H.ArmNestedRead(spec, times)
+    local source, level, classID, specID = tostring(spec):match("^(%a+)/(%d+)/(%d+)/(%d+)$")
+    assert(source, "bad nested read " .. tostring(spec))
+    H.nested = {
+        source = source, level = tonumber(level), classID = tonumber(classID), specID = tonumber(specID),
+        name = ListName(source, tonumber(level), tonumber(classID), tonumber(specID)),
+        remaining = times or 1, results = {},
+    }
+    if H.nestedFrame then
+        return
+    end
+    M.Invoke("addon", function()
+        local frame = CreateFrame("Frame")
+        frame:RegisterEvent("EJ_LOOT_DATA_RECIEVED")
+        frame:SetScript("OnEvent", function()
+            local nested = H.nested
+            local R = BGV.Rewards
+            if not nested or nested.active or nested.remaining <= 0 or not (R.IsScanning and R.IsScanning()) then
+                return
+            end
+            nested.remaining = nested.remaining - 1
+            nested.active = true
+            local items, pending = R.DatabaseItems(nested.source, nested.level, nested.classID, nested.specID)
+            nested.active = false
+            nested.results[#nested.results + 1] = { items = items, pending = pending }
+        end)
+        H.nestedFrame = frame
+    end)
+end
+
+-- The nested reads happened, and any of them that came back finished is right for its own filter.
+function H.CheckNestedReads()
+    DbCheck("itm")
+    local nested = H.nested
+    if not nested or #nested.results == 0 then
+        DbFail("itm", "scenario error: no nested read happened")
+        return
+    end
+    local finished = 0
+    for _, result in ipairs(nested.results) do
+        if result.pending ~= true then
+            finished = finished + 1
+            CheckDbList(nested, result.items, result.pending, "itm")
+        end
+    end
+    DbNote("itm", string.format("%d nested read(s) of %s inside our scans, %d finished", #nested.results, nested.name, finished))
+end
+
+-- Scenario sanity: the lists include rows the journal flags for the player (handError /
+-- weaponTypeError), so the check that the database lists them means something.
+function H.CheckFlaggedListed()
+    DbCheck("itm")
+    local flagged = 0
+    for _, list in ipairs(H.dbLists) do
+        local items = H.DbCall(list.source, list.level, list.classID, list.specID)
+        for _, entry in ipairs(type(items) == "table" and items or {}) do
+            local item = M.items[entry.itemID]
+            local handError, weaponTypeError = M.EquipErrors(item)
+            if handError or weaponTypeError then
+                flagged = flagged + 1
+            end
+        end
+    end
+    if flagged == 0 then
+        DbFail("itm", "scenario error: no listed row carries an equip flag for the player")
+    else
+        DbNote("itm", string.format("%d listed rows the journal flags for the player (%s)", flagged, M.player.className))
+    end
+end
+
+function H.DbReport()
+    if M.stats.agRebuildsInAddon > 0 or M.stats.agHijacks > 0 then
+        DbFail("rst", string.format("%d guide loot rebuilds and %d re-selects inside addon calls",
+            M.stats.agRebuildsInAddon, M.stats.agHijacks))
+    end
+    if H.dbCalls > 0 then
+        DbNote("rst", string.format("%d database calls checked", H.dbCalls))
+    end
+    for _, key in ipairs(H.DB_KEYS) do
+        if key == "err" then
+            CheckErrors("err")
+        else
+            local check = H.db[key]
+            if check then
+                if check.failCount > 0 then
+                    local detail = table.concat(check.fails, " | ")
+                    if check.failCount > #check.fails then
+                        detail = detail .. string.format(" (+%d more)", check.failCount - #check.fails)
+                    end
+                    Result(key, "FAIL", detail)
+                else
+                    Result(key, "PASS", table.concat(check.notes, "; "))
+                end
+            end
+        end
+    end
 end
 
 function H.ResultText()

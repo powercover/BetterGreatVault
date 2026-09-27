@@ -140,6 +140,8 @@ end
 
 local MYTHIC_VAULT_ILVL = 334
 local MYTHIC_VAULT_STEP = 6
+-- Myth 9/6: the ceiling only the raid's last two bosses award, when killed on Mythic.
+local MYTHIC_CEILING_ILVL = 344
 
 local function RaidMythicID()
     local ids = DifficultyUtil and DifficultyUtil.ID
@@ -289,6 +291,13 @@ local givenUp = {}
 -- Timed retries already spent on lists given up on while empty and out of date: batchKey -> n.
 local staleRetries = {}
 
+-- Database mode (see Rewards.DatabaseItems): its own journal batches, level tables and season
+-- raid scope, kept apart from the vault's lists and dropped when the database closes.
+local DB_PREFIX = "db:"
+local dbBatches = {}
+local dbLevels = {}
+local dbRaid
+
 local mythicMaps
 
 -- /bgv debug: what each instance's read found during a load pass (instanceID -> text).
@@ -299,15 +308,32 @@ function Rewards.LastLoadTrace()
     return lastTraceLine
 end
 
+-- The entries of `byKey` that belong to the database: keys starting with `prefix`.
+local function DatabaseKeysOnly(byKey, prefix)
+    prefix = prefix or DB_PREFIX
+    local kept = {}
+    for key, value in pairs(byKey) do
+        if type(key) == "string" and key:sub(1, #prefix) == prefix then
+            kept[key] = value
+        end
+    end
+    return kept
+end
+
+-- Drops the vault's lists. An open database keeps its reads (they don't depend on the player's
+-- spec or vault progress); only its item level tables are rebuilt, to pick up what the vault
+-- has shown since.
 function Rewards.InvalidateIcons()
     iconLists = {}
     journalBatches = {}
-    readAttempts = {}
-    givenUp = {}
-    staleRetries = {}
-    specKnown = {}
-    specAnswers = {}
+    readAttempts = DatabaseKeysOnly(readAttempts)
+    givenUp = DatabaseKeysOnly(givenUp)
+    staleRetries = DatabaseKeysOnly(staleRetries)
+    -- World spec answers for the database's classes are keyed "class..spec..:item".
+    specKnown = DatabaseKeysOnly(specKnown, "class")
+    specAnswers = DatabaseKeysOnly(specAnswers, "class")
     mythicMaps = nil
+    dbLevels = {}
 end
 
 -- The journal's state (selected instance and boss, difficulty, loot and slot filters) is global
@@ -398,9 +424,12 @@ local function KeepGuideDetached()
     end
 end
 
--- Opened lazily, by the first read of an uncached instance; closed by Rewards.ItemsForSlot.
-local function OpenScan(specID)
+-- Opened lazily, by the first read of an uncached instance; closed by Rewards.ItemsForSlot or
+-- Rewards.DatabaseItems. The loot filter is the class and spec being read (the player's class and
+-- loot spec for the vault's own lists); a scan that's already open just switches to it.
+local function OpenScan(classID, specID)
     if scan then
+        SetLootFilterIfNeeded(classID, specID)
         return
     end
     local saved = { detached = {} }
@@ -428,7 +457,6 @@ local function OpenScan(specID)
         saved.instance = SelectedInstance()
     end
 
-    local _, _, classID = UnitClass("player")
     SetLootFilterIfNeeded(classID, specID)
     local noFilter = Enum and Enum.ItemSlotFilterType and Enum.ItemSlotFilterType.NoFilter
     if C_EncounterJournal and type(C_EncounterJournal.ResetSlotFilter) == "function"
@@ -491,7 +519,7 @@ local function AllowRead(budget)
     return true
 end
 
-local function JournalBatchKey(difficultyID, instanceID, encounterSet, specID)
+local function JournalBatchKey(difficultyID, instanceID, encounterSet, classID, specID)
     local encounterKey = ""
     if type(encounterSet) == "table" then
         local ids = {}
@@ -504,6 +532,7 @@ local function JournalBatchKey(difficultyID, instanceID, encounterSet, specID)
     return table.concat({
         tostring(difficultyID),
         tostring(instanceID),
+        tostring(classID),
         tostring(specID),
         encounterKey,
     }, ":")
@@ -764,20 +793,23 @@ local function MythicPlusMapInfo()
     return ids, names, seasonMaps, unresolved
 end
 
-local function SpecCanUse(itemID, specID)
-    if type(GetItemSpecInfo) ~= "function" or not specID then
+-- Whether any of `specs` can use the item; nil while its data loads. No specs: no filter.
+local function SpecsCanUse(itemID, specs)
+    if type(GetItemSpecInfo) ~= "function" or type(specs) ~= "table" or #specs == 0 then
         return true
     end
-    local specs = GetItemSpecInfo(itemID)
-    if type(specs) ~= "table" then
+    local usable = GetItemSpecInfo(itemID)
+    if type(usable) ~= "table" then
         if C_Item and type(C_Item.RequestLoadItemDataByID) == "function" then
             C_Item.RequestLoadItemDataByID(itemID)
         end
         return nil
     end
-    for _, id in ipairs(specs) do
-        if id == specID then
-            return true
+    for _, id in ipairs(usable) do
+        for _, wanted in ipairs(specs) do
+            if id == wanted then
+                return true
+            end
         end
     end
     return false
@@ -1063,7 +1095,7 @@ end
 -- item gets its source. Mythic+ dungeons are read whole. Returns { entries, bosses, rows,
 -- missing (items whose info hasn't loaded), problem (why the read can't be trusted),
 -- unsupported (the instance has no such difficulty) }.
-local function ReadInstance(instanceID, difficultyID, encounterSet, names)
+local function ReadInstance(instanceID, difficultyID, encounterSet, names, anyClass)
     local read = { entries = {}, bosses = 0, rows = 0, missing = 0, missingItems = {} }
     -- Mythic+ reads the whole dungeon: the journal lists no bosses for keystone dungeons (in game,
     -- EJ_GetEncounterInfoByIndex returns nothing for them, with or without the instance ID), and
@@ -1101,7 +1133,9 @@ local function ReadInstance(instanceID, difficultyID, encounterSet, names)
     local byItem = {}
     local function AddRow(info, boss)
         local itemID = info.itemID
-        if info.handError or info.weaponTypeError or not Utils.IsUsableNumber(itemID) or not IsVaultGear(itemID) then
+        -- handError / weaponTypeError describe what the character looking can equip, so they only
+        -- apply to its own lists; a database read for another class relies on the loot filter.
+        if (not anyClass and (info.handError or info.weaponTypeError)) or not Utils.IsUsableNumber(itemID) or not IsVaultGear(itemID) then
             return
         end
         local existing = byItem[itemID]
@@ -1218,7 +1252,9 @@ local function ScheduleStaleRetry(batchKey)
     end)
 end
 
-local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, budget)
+-- `filter` (optional, database mode): { classID, specID, cache, prefix }. Without it, the vault's
+-- own lists: the player's class and loot spec, cached in journalBatches.
+local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, budget, filter)
     if type(instanceIDs) ~= "table" or #instanceIDs == 0 then
         return {}, false
     end
@@ -1227,15 +1263,22 @@ local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, bu
         return {}, true
     end
 
-    local specID = Utils.LootSpecID()
+    local classID, specID
+    if filter then
+        classID, specID = filter.classID, filter.specID
+    else
+        classID, specID = Utils.PlayerClassID(), Utils.LootSpecID()
+    end
+    local cache = filter and filter.cache or journalBatches
+    local prefix = filter and filter.prefix or ""
     local entries = {}
     local seen = {}
     local pending = false
     budget = budget or NewBudget()
     for _, instanceID in ipairs(instanceIDs) do
         if Utils.IsUsableNumber(instanceID) then
-            local batchKey = JournalBatchKey(difficultyID, instanceID, encounterSet, specID)
-            local batch = journalBatches[batchKey]
+            local batchKey = prefix .. JournalBatchKey(difficultyID, instanceID, encounterSet, classID, specID)
+            local batch = cache[batchKey]
             if batch then
                 if loadTrace then
                     loadTrace[instanceID] = "cached(" .. #batch .. ")"
@@ -1246,8 +1289,8 @@ local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, bu
                     loadTrace[instanceID] = "next pass"
                 end
             else
-                OpenScan(specID)
-                local read = ReadInstance(instanceID, difficultyID, encounterSet, names)
+                OpenScan(classID, specID)
+                local read = ReadInstance(instanceID, difficultyID, encounterSet, names, filter ~= nil)
                 batch = read.entries
                 local settled, status
                 if read.unsupported then
@@ -1265,10 +1308,11 @@ local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, bu
                         read.bosses > 0 and (read.bosses .. " bosses") or "whole instance", read.rows, #batch)
                 end
                 if settled then
-                    journalBatches[batchKey] = batch
+                    cache[batchKey] = batch
                     readAttempts[batchKey] = nil
                     if read.problem or read.missing > 0 then
                         givenUp[batchKey] = {
+                            cache = cache,
                             items = read.missing > 0 and read.missingItems or nil,
                             stale = read.problem == STALE_EMPTY,
                         }
@@ -1307,15 +1351,18 @@ end
 -- Drops those batches so the next pass reads them again; returns true if it dropped any.
 function Rewards.RetryGivenUp(itemID)
     local dropped = false
+    local vaultDropped = false
     for batchKey, why in pairs(givenUp) do
         if (itemID and why.items and why.items[itemID]) or (not itemID and why.stale) then
-            journalBatches[batchKey] = nil
+            local cache = why.cache or journalBatches
+            cache[batchKey] = nil
             readAttempts[batchKey] = nil
             givenUp[batchKey] = nil
             dropped = true
+            vaultDropped = vaultDropped or cache == journalBatches
         end
     end
-    if dropped then
+    if vaultDropped then
         iconLists = {}
     end
     return dropped
@@ -1414,6 +1461,63 @@ local function StampReward(entries, slot, ceilingEncounters)
     return stamped
 end
 
+-- World loot (BGV.WorldLoot, the season's delve, prey and world-boss gear) that any of `specs` can
+-- use; no specs means no filter. `answerKey` keys the cached spec answers.
+local function WorldEntries(specs, answerKey)
+    local entries = {}
+    local pending = false
+    local rows = BGV.WorldLoot
+    if type(rows) ~= "table" then
+        return entries, pending
+    end
+    local lookups = 0
+    for _, itemID in ipairs(rows) do
+        if Utils.IsUsableNumber(itemID) and IsVaultGear(itemID) then
+            local key = answerKey .. ":" .. tostring(itemID)
+            local allowed
+            if specKnown[key] then
+                allowed = specAnswers[key]
+            else
+                if type(debugprofilestop) == "function" and lookups >= 40 then
+                    pending = true
+                    break
+                end
+                lookups = lookups + 1
+                allowed = SpecsCanUse(itemID, specs)
+                if allowed == nil then
+                    pending = true
+                else
+                    specKnown[key] = true
+                    specAnswers[key] = allowed and true or false
+                end
+            end
+            if allowed then
+                local equipLoc, icon, name, quality = ItemFields(itemID)
+                if icon and icon ~= 0 then
+                    entries[#entries + 1] = {
+                        itemID = itemID,
+                        name = name or "Item",
+                        icon = icon,
+                        equipLoc = equipLoc,
+                        equipLabel = EQUIP_LABEL[equipLoc] or "Gear",
+                        quality = quality,
+                        source = BGV.WorldLootSource and BGV.WorldLootSource[itemID] or "World",
+                    }
+                else
+                    pending = true
+                end
+            end
+        end
+    end
+    table.sort(entries, function(left, right)
+        if left.equipLabel ~= right.equipLabel then
+            return left.equipLabel < right.equipLabel
+        end
+        return (left.name or "") < (right.name or "")
+    end)
+    return entries, pending
+end
+
 local function SlotItems(slot)
     Rewards.EnsureJournal()
 
@@ -1480,80 +1584,467 @@ local function SlotItems(slot)
 
     if Utils.SameType(slot.type, Utils.ThresholdType("World")) then
         local specID = Utils.LootSpecID()
-        local entries = {}
-        local pending = false
-        local rows = BGV.WorldLoot
-        if type(rows) ~= "table" then
-            return entries, pending
-        end
-        local lookups = 0
-        for _, itemID in ipairs(rows) do
-            if Utils.IsUsableNumber(itemID) and IsVaultGear(itemID) then
-                local answerKey = tostring(specID) .. ":" .. tostring(itemID)
-                local allowed
-                if specKnown[answerKey] then
-                    allowed = specAnswers[answerKey]
-                else
-                    if type(debugprofilestop) == "function" and lookups >= 40 then
-                        pending = true
-                        break
-                    end
-                    lookups = lookups + 1
-                    allowed = SpecCanUse(itemID, specID)
-                    if allowed == nil then
-                        pending = true
-                    else
-                        specKnown[answerKey] = true
-                        specAnswers[answerKey] = allowed and true or false
-                    end
-                end
-                if allowed then
-                    local equipLoc, icon, name, quality = ItemFields(itemID)
-                    if icon and icon ~= 0 then
-                        entries[#entries + 1] = {
-                            itemID = itemID,
-                            name = name or "Item",
-                            icon = icon,
-                            equipLoc = equipLoc,
-                            equipLabel = EQUIP_LABEL[equipLoc] or "Gear",
-                            quality = quality,
-                            source = BGV.WorldLootSource and BGV.WorldLootSource[itemID] or "World",
-                        }
-                    else
-                        pending = true
-                    end
-                end
-            end
-        end
-        table.sort(entries, function(left, right)
-            if left.equipLabel ~= right.equipLabel then
-                return left.equipLabel < right.equipLabel
-            end
-            return (left.name or "") < (right.name or "")
-        end)
+        local entries, pending = WorldEntries(specID and { specID } or nil, tostring(specID))
         return StampReward(entries, slot), pending
     end
 
     return {}
 end
 
--- Every read runs inside one scan (see OpenScan), closed here even if reading failed, so the
--- journal and the Adventure Guide are always put back before anything else can run.
 local scanDepth = 0
 
-function Rewards.ItemsForSlot(slot)
-    if type(slot) ~= "table" or not slot.unlocked then
-        return {}
+-- Runs `read` inside one scan (see OpenScan), closed here even if reading failed, so the journal
+-- and the Adventure Guide are always put back before anything else can run.
+local function WithScan(read, ...)
+    -- Only the outermost call closes the scan, should anything call back into us mid-scan; a
+    -- nested read may switch the loot filter, so the outer read's is put back after it.
+    local outerClass, outerSpec
+    if scan and type(EJ_GetLootFilter) == "function" then
+        outerClass, outerSpec = EJ_GetLootFilter()
     end
-    -- Only the outermost call closes the scan, should anything call back into us mid-scan.
     scanDepth = scanDepth + 1
-    local ok, entries, pending = pcall(SlotItems, slot)
+    local ok, entries, pending = pcall(read, ...)
     scanDepth = scanDepth - 1
     if scanDepth == 0 then
         CloseScan()
+    elseif outerClass ~= nil then
+        SetLootFilterIfNeeded(outerClass, outerSpec)
     end
     if not ok then
         error(entries, 0)
     end
     return entries, pending
+end
+
+function Rewards.ItemsForSlot(slot)
+    if type(slot) ~= "table" or not slot.unlocked then
+        return {}
+    end
+    return WithScan(SlotItems, slot)
+end
+
+----------------------------------------------------------------------------------------------------
+-- Database mode
+--
+-- The loot table's database lists everything the Great Vault can award this season, as if every
+-- boss, dungeon and world activity were completed, for any class and spec, at the vault's item
+-- level for a chosen raid difficulty, keystone level or world tier. It reads through the same
+-- isolated scans into its own cache, so the vault's reels and lists are never touched.
+--
+-- Item levels come only from the game: the vault's upgrade steps, rewards this character's own
+-- vault has shown (kept for the season), and the Mythic raid rule above. A level whose item
+-- level isn't known has none (nil), never a guess.
+----------------------------------------------------------------------------------------------------
+
+local EPIC_QUALITY = Enum and Enum.ItemQuality and Enum.ItemQuality.Epic or 4
+local DEFAULT_KEYSTONE_MAX = 10
+local DEFAULT_WORLD_MAX = 8
+
+local function RaidDifficulties()
+    local ids = DifficultyUtil and DifficultyUtil.ID or {}
+    return {
+        ids.PrimaryRaidLFR or 17,
+        ids.PrimaryRaidNormal or 14,
+        ids.PrimaryRaidHeroic or 15,
+        RaidMythicID(),
+    }
+end
+
+local function SeasonID()
+    local season = C_MythicPlus and Utils.Call(C_MythicPlus.GetCurrentSeason)
+    if Utils.IsUsableNumber(season) and season > 0 then
+        return season
+    end
+end
+
+-- What this character's own vault has shown this season, kept in its saved variables: the
+-- activity tiers the upgrade steps are read from, and exact reward item levels per level.
+local function RewardData()
+    local season = SeasonID()
+    local saved = BetterGreatVaultDB
+    if not season or type(saved) ~= "table" then
+        return { tiers = {}, levels = {} }
+    end
+    local data = saved.rewardData
+    if type(data) ~= "table" or data.season ~= season then
+        data = { season = season }
+        saved.rewardData = data
+    end
+    data.tiers = type(data.tiers) == "table" and data.tiers or {}
+    data.levels = type(data.levels) == "table" and data.levels or {}
+    return data
+end
+
+local function Remember(data, kind, level, itemLevel)
+    local levels = data.levels[kind]
+    if type(levels) ~= "table" then
+        levels = {}
+        data.levels[kind] = levels
+    end
+    levels[level] = itemLevel
+end
+
+local function LearnFromVault()
+    local data = RewardData()
+    local activities = C_WeeklyRewards and Utils.Call(C_WeeklyRewards.GetActivities)
+    for _, activity in ipairs(type(activities) == "table" and activities or {}) do
+        local tier = type(activity) == "table" and activity.activityTierID or nil
+        if Utils.IsUsableNumber(tier) and tier > 0 then
+            if Utils.SameType(activity.type, Utils.ThresholdType("Activities")) then
+                if not Utils.IsHeroicDungeonTier(tier) then
+                    data.tiers.mplus = tier
+                end
+            elseif Utils.SameType(activity.type, Utils.ThresholdType("World")) then
+                data.tiers.world = tier
+            end
+        end
+    end
+    -- Only the progress week's rewards describe a level; a claim week's are the items rolled.
+    if not Rewards.ShowingWeeklyProgress() then
+        return data
+    end
+    local snapshot = BGV.GreatVault and type(BGV.GreatVault.GetSnapshot) == "function" and BGV.GreatVault.GetSnapshot()
+    for _, slot in ipairs(type(snapshot) == "table" and snapshot or {}) do
+        if slot.unlocked and Utils.IsUsableNumber(slot.level) and Utils.IsUsableNumber(slot.itemLevel) then
+            if Utils.SameType(slot.type, Utils.ThresholdType("Raid")) then
+                -- Mythic follows the season's rule (MYTHIC_VAULT_ILVL, the ceiling for end bosses).
+                if slot.level ~= RaidMythicID() then
+                    Remember(data, "raid", slot.level, slot.itemLevel)
+                end
+            elseif Utils.SameType(slot.type, Utils.ThresholdType("Activities")) then
+                if not Utils.IsHeroicDungeonTier(slot.activityTierID) then
+                    Remember(data, "mplus", slot.level, slot.itemLevel)
+                end
+            elseif Utils.SameType(slot.type, Utils.ThresholdType("World")) then
+                Remember(data, "world", slot.level, slot.itemLevel)
+            end
+        end
+    end
+    return data
+end
+
+-- Each level where the reward's item level rises, walking `nextIncrease(level)` up from 0.
+local function IncreaseSteps(nextIncrease)
+    local steps = {}
+    local level = 0
+    for _ = 1, 30 do
+        local nextLevel, itemLevel = nextIncrease(level)
+        if not (Utils.IsUsableNumber(nextLevel) and nextLevel > level and Utils.IsUsableNumber(itemLevel) and itemLevel > 0) then
+            break
+        end
+        steps[#steps + 1] = { level = nextLevel, itemLevel = itemLevel }
+        level = nextLevel
+    end
+    return steps
+end
+
+-- The vault's upgrade steps for an activity tier, as Blizzard's own vault tooltips read them.
+local function ActivitySteps(tierID)
+    if not (Utils.IsUsableNumber(tierID) and C_WeeklyRewards and type(C_WeeklyRewards.GetNextActivitiesIncrease) == "function") then
+        return {}
+    end
+    local tier = tierID
+    return IncreaseSteps(function(level)
+        -- pcall directly: the next tier can be nil in the middle of the returns.
+        local ok, hasData, nextTier, nextLevel, itemLevel = pcall(C_WeeklyRewards.GetNextActivitiesIncrease, tier, level)
+        if not ok or hasData ~= true then
+            return nil
+        end
+        if Utils.IsUsableNumber(nextTier) and nextTier > 0 then
+            tier = nextTier
+        end
+        return nextLevel, itemLevel
+    end)
+end
+
+-- The same steps for keystones without a tier, for when this character has no Mythic+ slot yet.
+local function KeystoneSteps()
+    if not (C_WeeklyRewards and type(C_WeeklyRewards.GetNextMythicPlusIncrease) == "function") then
+        return {}
+    end
+    return IncreaseSteps(function(level)
+        local ok, hasData, nextLevel, itemLevel = pcall(C_WeeklyRewards.GetNextMythicPlusIncrease, level)
+        if not ok or hasData ~= true then
+            return nil
+        end
+        return nextLevel, itemLevel
+    end)
+end
+
+local function StepItemLevel(steps, level)
+    local itemLevel
+    for _, step in ipairs(steps) do
+        if step.level <= level then
+            itemLevel = step.itemLevel
+        end
+    end
+    return itemLevel
+end
+
+-- The item level of the levels below the first step, which all share one: one this character's
+-- vault showed for such a level, or the vault's step up from below level 0.
+local function BaseItemLevel(steps, learned, tierID)
+    local first = steps[1]
+    if not first then
+        return nil
+    end
+    for level, itemLevel in pairs(learned) do
+        if Utils.IsUsableNumber(level) and level < first.level and Utils.IsUsableNumber(itemLevel) and itemLevel < first.itemLevel then
+            return itemLevel
+        end
+    end
+    if Utils.IsUsableNumber(tierID) and C_WeeklyRewards and type(C_WeeklyRewards.GetNextActivitiesIncrease) == "function" then
+        local ok, hasData, _, nextLevel, itemLevel = pcall(C_WeeklyRewards.GetNextActivitiesIncrease, tierID, -1)
+        if ok and hasData == true and Utils.IsUsableNumber(nextLevel) and nextLevel < first.level
+            and Utils.IsUsableNumber(itemLevel) and itemLevel > 0 and itemLevel < first.itemLevel then
+            return itemLevel
+        end
+    end
+end
+
+local function BuildDatabaseLevels(source)
+    local data = LearnFromVault()
+    local learned = type(data.levels[source]) == "table" and data.levels[source] or {}
+    local levels = {}
+    local function Add(level, label, itemLevel, ceiling)
+        levels[#levels + 1] = { level = level, label = label, itemLevel = itemLevel, ceiling = ceiling }
+    end
+
+    if source == "raid" then
+        for _, difficultyID in ipairs(RaidDifficulties()) do
+            local label = Utils.DifficultyName(difficultyID) or tostring(difficultyID)
+            if difficultyID == RaidMythicID() then
+                Add(difficultyID, label, MYTHIC_VAULT_ILVL, MYTHIC_CEILING_ILVL)
+            else
+                Add(difficultyID, label, learned[difficultyID])
+            end
+        end
+    elseif source == "mplus" then
+        local steps = ActivitySteps(data.tiers.mplus)
+        if #steps == 0 then
+            steps = KeystoneSteps()
+        end
+        -- (Not C_MythicPlus.GetRewardLevelForDifficultyLevel: it disagrees with the vault, e.g. +8.)
+        local base = BaseItemLevel(steps, learned, data.tiers.mplus)
+        local maxLevel = #steps > 0 and steps[#steps].level or DEFAULT_KEYSTONE_MAX
+        for level = 2, maxLevel do
+            local itemLevel = StepItemLevel(steps, level) or learned[level]
+            if not itemLevel and steps[1] and level < steps[1].level then
+                itemLevel = base
+            end
+            Add(level, "+" .. level, itemLevel)
+        end
+    elseif source == "world" then
+        local steps = ActivitySteps(data.tiers.world)
+        local base = BaseItemLevel(steps, learned, data.tiers.world)
+        local maxLevel = #steps > 0 and steps[#steps].level or DEFAULT_WORLD_MAX
+        for level = 1, maxLevel do
+            local itemLevel = StepItemLevel(steps, level) or learned[level]
+            if not itemLevel and steps[1] and level < steps[1].level then
+                itemLevel = base
+            end
+            Add(level, "Tier " .. level, itemLevel)
+        end
+    end
+
+    -- Default: the highest level whose item level is known (none if no level is known).
+    for index = #levels, 1, -1 do
+        if levels[index].itemLevel then
+            levels.default = levels[index].level
+            break
+        end
+    end
+    return levels
+end
+
+-- The levels offered for a database source ("raid", "mplus", "world"), lowest first: { level,
+-- label, itemLevel (nil if unknown), ceiling (raid Mythic's last two bosses) }, plus .default.
+function Rewards.DatabaseLevels(source)
+    local levels = dbLevels[source]
+    if not levels then
+        levels = BuildDatabaseLevels(source)
+        dbLevels[source] = levels
+    end
+    return levels
+end
+
+-- Every boss of the season's raids, from the vault's own boss list (C_WeeklyRewards lists them
+-- all, killed or not): instances, the boss pool, names, sort order, and the ceiling bosses (the
+-- last two of each raid with three or more bosses).
+local function SeasonRaidScope()
+    if dbRaid then
+        return dbRaid
+    end
+    local scope = { instanceIDs = {}, encounterSet = {}, names = {}, ceiling = {}, order = {} }
+    local rows = BGV.GreatVault and type(BGV.GreatVault.RaidRows) == "function"
+        and BGV.GreatVault.RaidRows(Utils.ThresholdType("Raid"), 1, 0) or {}
+    local byInstance = {}
+    for _, row in ipairs(rows) do
+        local instanceID = row.journalInstanceID
+        if Utils.IsUsableNumber(instanceID) and Utils.IsUsableNumber(row.journalEncounterID) then
+            if not byInstance[instanceID] then
+                byInstance[instanceID] = {}
+                scope.instanceIDs[#scope.instanceIDs + 1] = instanceID
+            end
+            table.insert(byInstance[instanceID], row)
+        end
+    end
+    for position, instanceID in ipairs(scope.instanceIDs) do
+        local list = byInstance[instanceID]
+        table.sort(list, function(left, right)
+            return (left.uiOrder or 0) < (right.uiOrder or 0)
+        end)
+        for index, row in ipairs(list) do
+            local atCeiling = #list >= 3 and index > #list - 2
+            local function Add(encounterID)
+                if Utils.IsUsableNumber(encounterID) then
+                    scope.encounterSet[encounterID] = true
+                    scope.names[encounterID] = row.name
+                    scope.order[encounterID] = position * 100 + index
+                    if atCeiling then
+                        scope.ceiling[encounterID] = true
+                    end
+                end
+            end
+            Add(row.journalEncounterID)
+            Add(row.dungeonEncounterID)
+            Add(row.activityEncounterID)
+        end
+    end
+    -- An empty list may just not be loaded yet, so it isn't kept.
+    if #scope.instanceIDs > 0 then
+        dbRaid = scope
+    end
+    return scope
+end
+
+-- Copies with the vault's item level for the chosen level (the ceiling for raid Mythic's last two
+-- bosses); unknown item levels stay nil. Vault rewards are always epic.
+local function StampDatabase(entries, info, scope, sources)
+    local stamped = {}
+    for index, source in ipairs(entries) do
+        local entry = {}
+        for key, value in pairs(source) do
+            entry[key] = value
+        end
+        local itemLevel = info and info.itemLevel or nil
+        if info and info.ceiling and scope and AtCeiling(entry, scope.ceiling) then
+            itemLevel = info.ceiling
+        end
+        entry.itemLevel = itemLevel
+        entry.quality = EPIC_QUALITY
+        if scope and entry.encounterID then
+            entry.bossOrder = scope.order[entry.encounterID]
+        end
+        if sources then
+            entry.source = sources[index]
+        end
+        stamped[index] = entry
+    end
+    return stamped
+end
+
+local function DatabaseLevel(source, level)
+    for _, info in ipairs(Rewards.DatabaseLevels(source)) do
+        if info.level == level then
+            return info
+        end
+    end
+end
+
+local function DatabaseEntries(source, level, classID, specID)
+    Rewards.EnsureJournal()
+    local filter = { classID = classID, specID = specID or 0, cache = dbBatches, prefix = DB_PREFIX }
+    local info = DatabaseLevel(source, level)
+
+    if source == "raid" then
+        local scope = SeasonRaidScope()
+        if #scope.instanceIDs == 0 then
+            return {}, true
+        end
+        local entries, pending = CollectEntries(level, scope.instanceIDs, scope.encounterSet, scope.names, nil, filter)
+        return StampDatabase(entries, info, scope), pending
+    end
+
+    if source == "mplus" then
+        local instanceIDs, challengeNames, seasonMaps = MythicPlusMapInfo()
+        if #instanceIDs == 0 then
+            return {}, seasonMaps == 0
+        end
+        local groups = {}
+        local pending = false
+        local budget = NewBudget()
+        for _, instanceID in ipairs(instanceIDs) do
+            local batch, batchPending = CollectEntries(KEYSTONE_DIFFICULTY, { instanceID }, nil, nil, budget, filter)
+            if batchPending then
+                pending = true
+            end
+            if #batch > 0 then
+                groups[#groups + 1] = {
+                    name = challengeNames[instanceID] or JournalInstanceName(instanceID) or "Mythic+",
+                    entries = batch,
+                }
+            end
+        end
+        table.sort(groups, function(left, right)
+            return left.name < right.name
+        end)
+        local entries = {}
+        local sources = {}
+        for _, group in ipairs(groups) do
+            for _, entry in ipairs(group.entries) do
+                entries[#entries + 1] = entry
+                sources[#entries] = group.name
+            end
+        end
+        return StampDatabase(entries, info, nil, sources), pending
+    end
+
+    if source == "world" then
+        -- No specs (all classes) means no spec filter.
+        local specs = {}
+        if Utils.IsUsableNumber(specID) and specID > 0 then
+            specs[1] = specID
+        elseif classID ~= 0 then
+            for _, spec in ipairs(Utils.ClassSpecs(classID)) do
+                specs[#specs + 1] = spec.id
+            end
+        end
+        local entries, pending = WorldEntries(specs, "class" .. tostring(classID) .. "spec" .. tostring(specID or 0))
+        return StampDatabase(entries, info), pending
+    end
+
+    return {}, false
+end
+
+-- Items the vault can award from `source` ("raid", "mplus", "world") at `level` (difficulty ID,
+-- keystone level or world tier) for any class and spec (classID 0: all classes, the journal's own
+-- "All classes" filter; specID 0: all of the class's specs).
+function Rewards.DatabaseItems(source, level, classID, specID)
+    if not Utils.IsUsableNumber(classID) then
+        return {}, false
+    end
+    return WithScan(DatabaseEntries, source, level, classID, specID)
+end
+
+-- Drops everything the database read, when it closes.
+function Rewards.ClearDatabase()
+    dbBatches = {}
+    dbLevels = {}
+    dbRaid = nil
+    for _, byKey in ipairs({ readAttempts, givenUp, staleRetries }) do
+        for batchKey in pairs(byKey) do
+            if type(batchKey) == "string" and batchKey:sub(1, #DB_PREFIX) == DB_PREFIX then
+                byKey[batchKey] = nil
+            end
+        end
+    end
+    -- World spec answers for other classes (keyed "class..spec..:item", see DatabaseEntries).
+    for _, byKey in ipairs({ specKnown, specAnswers }) do
+        for key in pairs(byKey) do
+            if type(key) == "string" and key:sub(1, 5) == "class" then
+                byKey[key] = nil
+            end
+        end
+    end
 end

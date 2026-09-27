@@ -4,13 +4,24 @@ Each scenario runs in a fresh Lua runtime with tests/ej_model.lua (the client's 
 plus Blizzard's Adventure Guide), tests/harness.lua (addon loading, UI stand-in, checks) and the
 addon's non-UI files (Utils, WorldLoot, Rewards, LootTable, Core).
 
-Checks per scenario (see harness.lua):
+Checks per vault scenario (see harness.lua):
   a  lists equal the ground truth from the model DB (pool + difficulty + loot spec), reels too
   b  lists finish within 10 simulated seconds / 400 passes
   c  after scanning, the journal state the Adventure Guide had is back and its events are attached
   d  no Adventure Guide loot rebuild or re-select happens inside an addon call
   e  no Lua errors, no blocked actions
   f  10s of later journal events cause no rescans
+
+Checks per loot database scenario (Rewards.DatabaseLevels / DatabaseItems / ClearDatabase):
+  itm  items equal the ground truth for the class/spec filter over the whole season (every raid
+       boss), at the in-game item level tables, raid Mythic's last two bosses at the ceiling
+  lvl  DatabaseLevels tables equal the in-game data
+  rst  every database call leaves the journal and the guide as they were (no guide rebuilds)
+  vlt  vault lists untouched by database browsing and the reverse (same results, no extra calls)
+  prf  settled database lists make no journal calls
+  clr  ClearDatabase drops the database's caches, not the vault's
+  rec  lists recover from a loot spec change / InvalidateIcons / ClearDatabase mid-load
+  err  no Lua errors
 
 Usage (from the tests folder):
   python scenarios.py                 run every scenario against the working tree
@@ -30,7 +41,11 @@ from lupa import LuaError, LuaRuntime
 ROOT = Path(__file__).resolve().parents[1]
 TESTS = ROOT / "tests"
 CHECKS = ["a", "b", "c", "d", "e", "f"]
+DB_CHECKS = ["itm", "lvl", "rst", "vlt", "prf", "clr", "rec", "err"]
 ALL = "R1,R2,M1,M2,W1"
+
+# Classes and specs in the model: Warrior 1 (71 Arms, 72 Fury, 73 Protection), Priest 5 (256, 257,
+# 258), Mage 8 (62, 63, 64), Druid 11 (the player: 102 Balance, 103, 104, 105 Restoration).
 
 
 class Run:
@@ -99,6 +114,38 @@ class Run:
 
     def verify(self, names=ALL):
         self.H.Verify(names)
+
+    # loot database -------------------------------------------------------------------------
+    def boot_db(self):
+        self.boot()
+        rewards = self.H.BGV.Rewards
+        missing = [name for name in ("DatabaseLevels", "DatabaseItems", "ClearDatabase") if rewards[name] is None]
+        if missing:
+            raise BootError("no loot database API: BGV.Rewards." + ", ".join(missing) + " missing")
+
+    def db_start(self, lists):
+        """Database lists the loot table polls: "source/level/classID/specID", comma separated."""
+        self.H.DbStart(lists)
+
+    def db_settle(self, seconds=20):
+        return self.H.DbSettle(seconds)
+
+    def db_items(self):
+        self.H.DbCheckItems()
+
+    def levels(self, *sources):
+        for source in sources:
+            self.H.CheckLevels(source)
+
+    def expect(self, source, level, item_level):
+        """The item level the game has shown for a level (None: not known)."""
+        self.H.DbExpect(source, level, item_level)
+
+    def slot(self, name, field, value):
+        self.H.SetSlot(name, field, value)
+
+    def db_report(self):
+        self.H.DbReport()
 
     def results(self):
         rows = []
@@ -417,6 +464,373 @@ def guide_and_vault_open_together(t):
     t.verify()
 
 
+# ----------------------------------------------------------------------------------------------
+# Loot database scenarios (Rewards.DatabaseLevels / DatabaseItems / ClearDatabase)
+# ----------------------------------------------------------------------------------------------
+
+def db_other_classes(t):
+    """Another class, one spec then all specs, for every source and several levels: items equal
+    the truth for that filter over every raid boss, at the in-game item levels (none where the
+    game gives none), raid Mythic's last two bosses at the ceiling. Then settled lists are read
+    again and again with no journal calls."""
+    t.boot_db()
+    t.db_start("raid/16/1/73,raid/15/1/73,raid/17/1/73,mplus/8/1/73,mplus/2/1/73,world/8/1/73,world/1/1/73")
+    t.db_settle()
+    t.db_items()
+    t.db_start("raid/16/1/0,raid/14/1/0,mplus/10/1/0,mplus/4/1/0,world/8/1/0,world/2/1/0")
+    t.db_settle()
+    t.db_items()
+    t.db_start("raid/16/8/63,mplus/7/8/0,world/5/8/63,raid/16/5/0,mplus/9/5/258,world/3/5/0")
+    t.db_settle()
+    t.db_items()
+    t.H.CheckDbPerf(3)
+    t.db_report()
+
+
+def db_all_classes(t):
+    """"All classes" (class 0, the journal's own all-classes filter): every source lists every
+    class's loot, including gear the player can't equip, at the in-game item levels; switching
+    back to one class afterwards gives that class's list again."""
+    t.boot_db()
+    t.db_start("raid/16/0/0,raid/15/0/0,mplus/10/0/0,mplus/7/0/0,world/8/0/0,world/3/0/0")
+    t.db_settle()
+    t.db_items()
+    t.H.CheckFlaggedListed()
+    t.db_start("raid/16/8/0,mplus/10/8/63,world/8/8/0")
+    t.db_settle()
+    t.db_items()
+    t.db_report()
+
+
+def db_equip_flags(t):
+    """The player is a Druid: the journal flags plate, swords and shields on every row it lists
+    (handError / weaponTypeError describe the character looking). Browsing Mage, Paladin and
+    Warrior loot still lists them: the flags don't apply to another class's list."""
+    t.boot_db()
+    t.db_start("raid/16/8/0,raid/16/2/0,raid/15/2/66,raid/16/1/73,mplus/8/2/70,mplus/8/8/63,mplus/10/1/0,world/8/2/0")
+    t.db_settle()
+    t.db_items()
+    t.H.CheckFlaggedListed()
+    t.db_report()
+
+
+def db_guide_restored(t):
+    """While the Adventure Guide is open on a dungeon boss at Mythic with a Priest/Shadow class
+    filter and a Trinket slot filter (then closed, then open on a raid boss), every database call
+    leaves the journal and the guide exactly as they were, and the guide never rebuilds."""
+    t.boot_db()
+    t.ag("Open")
+    dungeon = t.dungeon(2)
+    t.ag("PickInstance", dungeon)
+    t.ag("SetDifficulty", 23)
+    t.ag("PickBoss", t.boss(dungeon, 3))
+    t.ag("SetLootFilter", 5, 258)
+    t.ag("SetSlotFilter", 13)
+    t.db_start("raid/16/1/73,mplus/8/8/0,world/8/11/0,raid/14/11/0")
+    t.db_settle()
+    t.db_items()
+    t.ag("Close")
+    t.db_start("raid/15/5/0,mplus/4/1/71")
+    t.db_settle()
+    t.db_items()
+    t.ag("Open")
+    t.ag("PickInstance", t.raid)
+    t.ag("PickBoss", t.raid_boss(7))
+    t.ag("SetDifficulty", 16)
+    t.ag("ResetLootFilter")
+    t.db_start("raid/16/2/0,mplus/10/11/104")
+    t.db_settle()
+    t.db_items()
+    t.db_report()
+
+
+def db_no_guide_after_vault(t):
+    """No guide ever loaded: the vault's scans leave an instance selected in the journal, and each
+    database call puts that selection (read back from the journal's link) and the filters back."""
+    t.boot_db()
+    t.open_vault()
+    t.hover("R1")
+    t.settle()
+    t.db_start("raid/16/1/73,mplus/8/5/0,world/8/8/0")
+    t.db_settle()
+    t.db_items()
+    t.db_report()
+
+
+def db_vault_isolation(t):
+    """Database lists first (including the player's own class and loot spec), then the vault's:
+    the database lists are unchanged and need no journal calls. Vault lists marked, the database
+    browsed for other classes: the vault lists are unchanged with no extra journal calls."""
+    t.boot_db()
+    t.db_start("raid/16/11/102,mplus/8/11/102,world/8/11/102,raid/15/1/0,mplus/2/8/62")
+    t.db_settle()
+    t.H.MarkDb()
+    t.open_vault()
+    t.hover("R1")
+    t.run(0.3)
+    t.hover("M1")
+    t.settle()
+    t.H.CheckDb("after the vault's lists loaded")
+    t.H.MarkVault(ALL)
+    t.db_start("raid/16/1/73,raid/17/5/0,mplus/8/1/0,mplus/5/5/257,world/8/8/63,world/1/5/0")
+    t.db_settle()
+    t.H.CheckVault("after browsing the database")
+    t.H.CheckDbPerf(3)
+    t.db_report()
+
+
+def db_clear_and_invalidate(t):
+    """InvalidateIcons (a loot spec change) keeps the database's reads and only rebuilds its level
+    tables. ClearDatabase (the window closing) drops the database's reads, levels, raid scope and
+    world spec answers, but the vault's lists stay warm; the database settles to the same lists."""
+    t.boot_db()
+    t.open_vault()
+    t.hover("R1")
+    t.settle()
+    t.db_start("raid/16/1/73,mplus/8/8/0,world/8/5/0,world/4/2/66")
+    t.db_settle()
+    t.H.CheckInvalidateKeepsDb()
+    # The vault's lists were dropped: the loot table re-reads them.
+    t.poll(ALL)
+    t.settle()
+    t.H.StopPoll()
+    t.H.MarkVault(ALL)
+    t.db_settle()
+    t.H.MarkDb()
+    t.H.CheckClear()
+    t.db_items()
+    t.db_report()
+
+
+def db_spec_change_recovery(t):
+    """Database lists loading (half the items not cached, slow item data) while the loot spec
+    changes (PLAYER_LOOT_SPEC_UPDATED -> InvalidateIcons), InvalidateIcons runs again and the
+    database is cleared (window closed and reopened): every list finishes again, correct, and the
+    vault's lists follow the new loot spec."""
+    t.M.SetUncached(2, 1)
+    t.cfg("itemLoadDelay", 0.4)
+    t.boot_db()
+    t.open_vault()
+    t.hover("M1")
+    t.db_start("raid/16/1/73,mplus/8/8/0,world/8/5/0,raid/15/11/0")
+    t.run(0.3)
+    t.set_loot_spec(105)
+    t.run(0.3)
+    t.H.Invalidate()
+    t.run(0.2)
+    t.H.ClearDatabase()
+    t.poll(ALL)
+    t.db_settle()
+    t.H.CheckDbRecovery()
+    t.db_items()
+    t.settle()
+    t.H.CheckVaultTruth(ALL)
+    t.db_report()
+
+
+def db_nested_read(t):
+    """Another addon calls DatabaseItems from a journal event fired inside our scan (a nested read
+    with its own class filter), twice: at the scan's loot filter switch and inside a later journal
+    change. The outer read keeps its own filter (a raid list, then the vault's own lists), both
+    lists come out right, and the journal and the guide are restored."""
+    t.boot_db()
+    t.ag("Open")
+    t.ag("PickInstance", t.dungeon(1))
+    t.ag("PickBoss", t.boss(t.dungeon(1), 1))
+    t.ag("Close")
+    t.H.ArmNestedRead("mplus/8/5/0", 2)
+    t.db_start("raid/16/1/73")
+    t.db_settle()
+    t.H.CheckNestedReads()
+    t.H.ArmNestedRead("raid/15/2/0", 2)
+    t.open_vault()
+    t.hover("R1")
+    t.settle()
+    t.H.CheckVaultTruth("R1,M1", "itm")
+    t.H.CheckNestedReads()
+    t.db_start("raid/16/1/73,mplus/8/5/0,raid/15/2/0")
+    t.db_settle()
+    t.db_items()
+    t.db_report()
+
+
+def db_raid_scope_late(t):
+    """The vault's raid boss list (GetActivityEncounterInfo) arrives after the database opened:
+    until it does, the raid lists report loading instead of finishing empty; then they fill in."""
+    t.M.weekly.encounterInfoReady = False
+    t.boot_db()
+    t.db_start("raid/16/11/0,raid/15/1/73")
+    t.run(1.0)
+    t.H.DbCheckLoading("before the raid boss list arrived")
+    t.M.weekly.encounterInfoReady = True
+    t.M.Fire("WEEKLY_REWARDS_UPDATE")
+    t.db_settle()
+    t.db_items()
+    t.db_report()
+
+
+def db_levels_real_data(t):
+    """The user's in-game data: keystones +4..+10 and world tiers 2..8 from the vault's steps
+    (+8 = 315); +2/+3 and world tier 1 have no step and no slot, so they're unknown; raid Heroic
+    from the vault's Heroic slot, LFR and Normal unknown, Mythic 334 (344 ceiling). Items at an
+    unknown level still come back, with no item level."""
+    t.boot_db()
+    t.levels("raid", "mplus", "world")
+    t.db_start("mplus/3/1/73,world/1/8/0,raid/17/2/0")
+    t.db_settle()
+    t.db_items()
+    t.db_report()
+
+
+def db_levels_below_first_step(t):
+    """The vault reports a level below its first step (GetNextActivitiesIncrease(tier, -1)): +2/+3
+    and world tier 1 take that item level."""
+    t.M.weekly.belowZero[256] = t.lua.table(2, 305)
+    t.M.weekly.belowZero[249] = t.lua.table(1, 279)
+    t.boot_db()
+    t.expect("mplus", 2, 305)
+    t.expect("mplus", 3, 305)
+    t.expect("world", 1, 279)
+    t.levels("mplus", "world")
+    t.db_start("mplus/2/11/0,world/1/11/0")
+    t.db_settle()
+    t.db_items()
+    t.db_report()
+
+
+def db_levels_learned_fill_gaps(t):
+    """A keystone slot resolved at +2 fills +2/+3 (below the first step); a slot at +10 whose item
+    level disagrees with the step doesn't override it (live steps first)."""
+    t.boot_db()
+    t.H.AddSlot("M3", "Activities", 3, 2, 305, 256)
+    t.slot("M1", "itemLevel", 999)
+    t.expect("mplus", 2, 305)
+    t.expect("mplus", 3, 305)
+    t.levels("mplus")
+    t.db_report()
+
+
+def db_levels_world_tier1(t):
+    """World tier 1 (below the first step) is unknown while the vault's tier-1 world slot hasn't
+    resolved, and takes the slot's item level once it has."""
+    t.boot_db()
+    t.slot("W1", "level", 1)
+    t.slot("W1", "itemLevel", None)
+    t.levels("world")
+    t.slot("W1", "itemLevel", 279)
+    t.H.ClearDatabase()
+    t.expect("world", 1, 279)
+    t.levels("world")
+    t.db_start("world/1/11/0,world/1/1/73")
+    t.db_settle()
+    t.db_items()
+    t.db_report()
+
+
+def db_levels_raid_slots(t):
+    """Raid difficulties other than Mythic are known only from a resolved vault slot at that
+    difficulty: none while the Heroic slot hasn't resolved; Normal and Heroic once slots have."""
+    t.boot_db()
+    t.slot("R2", "itemLevel", None)
+    t.expect("raid", 15, None)
+    t.levels("raid")
+    t.H.AddRaidSlot("R3", 14, 298)
+    t.slot("R2", "itemLevel", 311)
+    t.H.ClearDatabase()
+    t.expect("raid", 14, 298)
+    t.expect("raid", 15, 311)
+    t.levels("raid")
+    t.db_start("raid/14/5/257,raid/17/5/257")
+    t.db_settle()
+    t.db_items()
+    t.db_report()
+
+
+def db_levels_no_tiers(t):
+    """No keystone or world tier learned (GetActivities lists none), no GetNextMythicPlusIncrease,
+    no resolved keystone or world slot: every M+ and World level is unknown and there's no default,
+    nothing is guessed; items still come back, with no item level. Once the keystone fallback API
+    answers, the keystone steps come from it."""
+    t.M.weekly.activities = t.lua.table()
+    t.M.SetApiPresent("C_WeeklyRewards", "GetNextMythicPlusIncrease", False)
+    t.boot_db()
+    t.slot("M1", "itemLevel", None)
+    t.slot("W1", "itemLevel", None)
+    t.H.DbExpectSteps("mplus", False)
+    t.H.DbExpectSteps("world", False)
+    t.levels("mplus", "world")
+    t.db_start("mplus/8/1/73,world/8/11/0")
+    t.db_settle()
+    t.db_items()
+    t.M.SetApiPresent("C_WeeklyRewards", "GetNextMythicPlusIncrease", True)
+    t.H.ClearDatabase()
+    t.H.DbExpectSteps("mplus", True)
+    t.levels("mplus")
+    t.db_report()
+
+
+def db_levels_claim_week(t):
+    """Claim week: the tiers are still learned from GetActivities (keystone and world steps known),
+    but the vault's slots show the items rolled, not a level: raid Heroic stays unknown."""
+    t.M.weekly.canClaim = True
+    t.boot_db()
+    t.expect("raid", 15, None)
+    t.levels("raid", "mplus", "world")
+    t.db_report()
+
+
+def db_levels_persisted(t):
+    """Tiers and levels learned this season are kept (saved variables) when the vault stops listing
+    them; a new season drops them."""
+    t.boot_db()
+    t.levels("mplus")
+    rows = t.lua.table(t.lua.table_from({"type": 3, "index": 1, "level": 15, "activityTierID": 0,
+                                         "progress": 2, "threshold": 2, "id": 1002}))
+    t.M.weekly.activities = rows
+    t.M.SetApiPresent("C_WeeklyRewards", "GetNextMythicPlusIncrease", False)
+    t.slot("M1", "itemLevel", None)
+    t.H.ClearDatabase()
+    t.levels("mplus")
+    t.M.mythicPlus.season = 16
+    t.H.ClearDatabase()
+    t.H.DbExpectSteps("mplus", False)
+    t.levels("mplus")
+    t.db_report()
+
+
+def db_levels_heroic_tier_last(t):
+    """GetActivities lists a heroic-dungeon row after the keystone rows (its own tier, answering
+    its own steps): the keystone tier is still the one the levels come from."""
+    t.M.AddActivity(1, 3, 0, 900, 4, 8)
+    t.M.weekly.steps[900] = t.lua.table(t.lua.table(1, 272))
+    t.boot_db()
+    t.levels("mplus")
+    t.db_report()
+
+
+DB_SCENARIOS = [
+    ("db_other_classes", db_other_classes),
+    ("db_all_classes", db_all_classes),
+    ("db_equip_flags", db_equip_flags),
+    ("db_guide_restored", db_guide_restored),
+    ("db_no_guide_after_vault", db_no_guide_after_vault),
+    ("db_vault_isolation", db_vault_isolation),
+    ("db_clear_and_invalidate", db_clear_and_invalidate),
+    ("db_spec_change_recovery", db_spec_change_recovery),
+    ("db_nested_read", db_nested_read),
+    ("db_raid_scope_late", db_raid_scope_late),
+    ("db_levels_real_data", db_levels_real_data),
+    ("db_levels_below_first_step", db_levels_below_first_step),
+    ("db_levels_learned_fill_gaps", db_levels_learned_fill_gaps),
+    ("db_levels_world_tier1", db_levels_world_tier1),
+    ("db_levels_raid_slots", db_levels_raid_slots),
+    ("db_levels_no_tiers", db_levels_no_tiers),
+    ("db_levels_claim_week", db_levels_claim_week),
+    ("db_levels_persisted", db_levels_persisted),
+    ("db_levels_heroic_tier_last", db_levels_heroic_tier_last),
+]
+
+
 SCENARIOS = [
     ("fresh_login_no_guide", fresh_login_no_guide),
     ("cold_journal_login", cold_journal_login),
@@ -456,6 +870,37 @@ def run_one(name, fn, reference):
         return [], "PY: " + traceback.format_exc().strip().splitlines()[-1]
 
 
+def run_group(title, scenarios, checks, reference, verbose, details):
+    """Runs a group of scenarios, printing one table row each; returns how many failed."""
+    width = max(len(n) for n, _ in scenarios)
+    header = title.ljust(width) + "  " + "  ".join(c.center(4) for c in checks)
+    print(header)
+    print("-" * len(header))
+    failed = 0
+    for name, fn in scenarios:
+        rows, error = run_one(name, fn, reference)
+        by_key = {key: (status, detail) for key, status, detail in rows if key in checks}
+        if error:
+            cells = ["ERR "] * len(checks)
+            failed += 1
+            details.append((name, "run", "ERROR", error))
+        else:
+            cells = []
+            for key in checks:
+                status, detail = by_key.get(key, ("----", ""))
+                cells.append(status[:4].ljust(4))
+                if status == "FAIL" or (verbose and status != "----"):
+                    details.append((name, key, status, detail))
+            if any(by_key.get(key, ("",))[0] == "FAIL" for key in checks):
+                failed += 1
+            for key, status, detail in rows:
+                if key == "info" and verbose:
+                    details.append((name, key, status, detail))
+        print(name.ljust(width) + "  " + "  ".join(cells))
+    print()
+    return failed
+
+
 def main(argv):
     argv = list(argv)
     addon_root = ROOT
@@ -467,42 +912,23 @@ def main(argv):
     reference = "naive" if "--naive" in argv else ("--reference" in argv)
     verbose = "-v" in argv or "--verbose" in argv
     wanted = [arg for arg in argv if not arg.startswith("-")]
-    selected = [(n, f) for n, f in SCENARIOS if not wanted or n in wanted]
-    if not selected:
+    vault = [(n, f) for n, f in SCENARIOS if not wanted or n in wanted]
+    database = [(n, f) for n, f in DB_SCENARIOS if not wanted or n in wanted]
+    if not vault and not database:
         print("no scenario matches " + ", ".join(wanted))
         return 2
 
-    width = max(len(n) for n, _ in selected)
-    header = "scenario".ljust(width) + "  " + "  ".join(c.center(4) for c in CHECKS)
     label = {"naive": "NAIVE reference (no isolation)", True: "REFERENCE scanner", False: "working tree"}
     print(label[reference] + ("" if addon_root == ROOT else f" from {addon_root}") + "\n")
-    print(header)
-    print("-" * len(header))
     failed = 0
     details = []
-    for name, fn in selected:
-        rows, error = run_one(name, fn, reference)
-        by_key = {key: (status, detail) for key, status, detail in rows if key in CHECKS}
-        if error:
-            cells = ["ERR "] * len(CHECKS)
-            failed += 1
-            details.append((name, "run", "ERROR", error))
-        else:
-            cells = []
-            for key in CHECKS:
-                status, detail = by_key.get(key, ("----", ""))
-                cells.append(status[:4].ljust(4))
-                if status == "FAIL" or verbose:
-                    details.append((name, key, status, detail))
-            if any(by_key.get(key, ("",))[0] == "FAIL" for key in CHECKS):
-                failed += 1
-            for key, status, detail in rows:
-                if key == "info" and verbose:
-                    details.append((name, key, status, detail))
-        print(name.ljust(width) + "  " + "  ".join(cells))
+    if vault:
+        failed += run_group("vault scenario", vault, CHECKS, reference, verbose, details)
+    if database:
+        failed += run_group("database scenario", database, DB_CHECKS, reference, verbose, details)
 
-    print()
-    print(f"{len(selected) - failed}/{len(selected)} scenarios passed")
+    total = len(vault) + len(database)
+    print(f"{total - failed}/{total} scenarios passed")
     if details:
         print()
         for name, key, status, detail in details:
