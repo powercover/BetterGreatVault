@@ -10,7 +10,6 @@ local LEFT_W = 188
 local PAD = 22
 local TEXT_W = FRAME_W - LEFT_W - PAD * 2 - 16
 local BUTTON_H = 24
-local ICON = "Interface\\AddOns\\BetterGreatVault\\Icon"
 
 -- Where to find the addon online, listed in About. A link without an address yet shows "Coming
 -- soon"; set its `url` once the page exists.
@@ -555,14 +554,14 @@ local function Metadata(field, fallback)
     return fallback
 end
 
--- About: the emblem, the addon's name, its version and author.
+-- About: the emblem (its handle spinning, Utils.CreateEmblem), the addon's name, its version
+-- and author.
 local function MakeAboutCard(parent)
     local card = CreateFrame("Frame", nil, parent)
     card:SetHeight(52)
-    local emblem = card:CreateTexture(nil, "ARTWORK")
-    emblem:SetTexture(ICON)
-    emblem:SetSize(48, 48)
+    local emblem = BGV.Utils.CreateEmblem(card, 48)
     emblem:SetPoint("LEFT", card, "LEFT", 0, 0)
+    card.emblem = emblem
     local name = BGV.Utils.FontString(card, "OVERLAY", "NormalLarge")
     name:SetPoint("TOPLEFT", emblem, "TOPRIGHT", 12, -7)
     name:SetText("Better Great Vault")

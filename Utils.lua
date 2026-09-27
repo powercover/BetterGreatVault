@@ -599,8 +599,10 @@ end
 
 Utils.ApplyFontSize()
 
--- A flat button in the addon's own style (dark fill, 1px border, soft hover glow), with a font
--- string so :SetText works as on Blizzard's buttons.
+-- A flat button in the addon's own style (dark fill, 1px border, soft hover glow). Its label is
+-- a plain font string rather than the button's own text (SetFontString): in the game, button
+-- text showed Cyrillic as boxes while the plain font strings around it (headings, notes) showed
+-- it fine. :SetText, :GetText and :GetFontString work on the label as on Blizzard's buttons.
 function Utils.CreateFlatButton(parent, width, height)
     local button = CreateFrame("Button", nil, parent)
     button:SetSize(width or 120, height or 22)
@@ -610,12 +612,200 @@ function Utils.CreateFlatButton(parent, width, height)
     local glow = Utils.Pixel(button, "HIGHLIGHT", 1, 1, 1, 0.07)
     glow:SetAllPoints()
     local text = Utils.FontString(button, "OVERLAY", "HighlightSmall")
-    text:SetPoint("LEFT", button, "LEFT", 8, 0)
-    text:SetPoint("RIGHT", button, "RIGHT", -8, 0)
     text:SetWordWrap(false)
-    button:SetFontString(text)
-    button:SetPushedTextOffset(0, -1)
+    -- Pressed, the label dips a pixel (what SetPushedTextOffset did).
+    local function Place(dip)
+        text:SetPoint("LEFT", button, "LEFT", 8, dip)
+        text:SetPoint("RIGHT", button, "RIGHT", -8, dip)
+    end
+    Place(0)
+    button:HookScript("OnMouseDown", function(self)
+        if self:IsEnabled() then
+            Place(-1)
+        end
+    end)
+    button:HookScript("OnMouseUp", function()
+        Place(0)
+    end)
+    function button:SetText(value)
+        text:SetText(value)
+    end
+    function button:GetText()
+        return text:GetText()
+    end
+    function button:GetFontString()
+        return text
+    end
     return button
+end
+
+-- The spinning vault emblem (the minimap popup's and About's): the icon's layers, with the
+-- handle turning slowly, then winding up and taking off in an old-cartoon burst of speed (a spin
+-- blur, streaks behind the knobs, swoosh arcs, dust puffs, a rattle, squash and stretch), then
+-- easing back to slow. One cycle is SPIN_PERIOD seconds; it animates only while shown.
+local EMBLEM_MEDIA = "Interface\\AddOns\\BetterGreatVault\\Media\\"
+local SPIN_SLOW, SPIN_BACK, SPIN_FAST = 0.9, -1.4, 28 -- radians a second, counter-clockwise
+local SPIN_PERIOD = 6.2
+local SPIN_START = 1.4 -- where a showing starts, so the burst comes a second later
+-- The most the handle turns in one frame: under half its 90 degree symmetry, so a low frame
+-- rate can't make it look like it's turning backwards.
+local SPIN_MAX_STEP = 0.65
+local PUFF_LIFE = 0.45
+local PUFF_COUNT = 6
+
+local function Smooth(x)
+    x = math.max(0, math.min(1, x))
+    return x * x * (3 - 2 * x)
+end
+
+-- The spin's speed `t` seconds into the cycle: slow; backing off a little (the wind-up); taking
+-- off; flat out; then slowing down.
+local function SpinSpeed(t)
+    if t < 2.4 then
+        return SPIN_SLOW
+    elseif t < 2.75 then
+        return SPIN_SLOW + (SPIN_BACK - SPIN_SLOW) * Smooth((t - 2.4) / 0.12)
+    elseif t < 3.2 then
+        return SPIN_BACK + (SPIN_FAST - SPIN_BACK) * Smooth((t - 2.75) / 0.45)
+    elseif t < 4.4 then
+        return SPIN_FAST
+    end
+    return SPIN_SLOW + (SPIN_FAST - SPIN_SLOW) * (1 - (t - 4.4) / (SPIN_PERIOD - 4.4)) ^ 3
+end
+
+-- The size the emblem springs toward: squashed on the wind-up, swollen at speed.
+local function SpinScale(t)
+    if t >= 2.4 and t < 2.75 then
+        return 0.9
+    elseif t >= 2.75 and t < 4.4 then
+        return 1.06
+    end
+    return 1
+end
+
+function Utils.CreateEmblem(parent, size)
+    local emblem = CreateFrame("Frame", nil, parent)
+    emblem:SetSize(size, size)
+    -- The layers ride on a body that rattles and squashes; the emblem itself stays put for anchors.
+    local body = CreateFrame("Frame", nil, emblem)
+    body:SetSize(size, size)
+    body:SetPoint("CENTER", emblem, "CENTER", 0, 0)
+    local function Layer(file, drawLayer, sublevel, scale)
+        local texture = body:CreateTexture(nil, drawLayer, nil, sublevel)
+        texture:SetTexture(EMBLEM_MEDIA .. file)
+        texture:SetSize(size * (scale or 1), size * (scale or 1))
+        texture:SetPoint("CENTER", body, "CENTER", 0, 0)
+        return texture
+    end
+    Layer("MinimapBase", "ARTWORK", 0)
+    local blur = Layer("EmblemBlur", "ARTWORK", 1)
+    local wheel = Layer("MinimapWheel", "ARTWORK", 2)
+    local trails = Layer("EmblemTrails", "ARTWORK", 3)
+    Layer("MinimapGem", "OVERLAY", 0)
+    -- The arcs' texture is 1.6 times the emblem, so they swoop around outside the rim.
+    local arcs = Layer("EmblemArcs", "OVERLAY", 1, 1.6)
+    local puffs = {}
+    for index = 1, PUFF_COUNT do
+        local texture = body:CreateTexture(nil, "OVERLAY", nil, 2)
+        texture:SetTexture(EMBLEM_MEDIA .. "EmblemPuff")
+        texture:Hide()
+        puffs[index] = { texture = texture }
+    end
+
+    local spin = { t = SPIN_START, angle = 0, speed = SPIN_SLOW, effect = 0, scale = 1, velocity = 0, spawn = 0, puffs = puffs }
+    emblem.spin = spin
+
+    -- A puff thrown off the rim, flung along the spin; it grows as it goes and fades out.
+    local function Puff()
+        for _, puff in ipairs(puffs) do
+            if not puff.active then
+                puff.active, puff.age, puff.angle = true, 0, math.random() * 2 * math.pi
+                puff.texture:Show()
+                return
+            end
+        end
+    end
+
+    local function PlacePuff(puff)
+        local life = puff.age / PUFF_LIFE
+        local travel = size * 0.3 * (1 - (1 - life) ^ 2)
+        local radial, tangent = size * 0.5 + travel * 0.75, travel * 0.66
+        local cos, sin = math.cos(puff.angle), math.sin(puff.angle)
+        local puffSize = size * (0.16 + 0.16 * life)
+        puff.texture:SetSize(puffSize, puffSize)
+        puff.texture:SetPoint("CENTER", body, "CENTER", cos * radial - sin * tangent, sin * radial + cos * tangent)
+        puff.texture:SetAlpha(0.95 * (1 - life * life))
+    end
+
+    local function Pose()
+        local effect = spin.effect
+        wheel:SetRotation(spin.angle)
+        wheel:SetAlpha(1 - 0.6 * effect)
+        for _, texture in ipairs({ blur, trails, arcs }) do
+            texture:SetShown(effect > 0)
+        end
+        if effect > 0 then
+            blur:SetRotation(spin.angle)
+            blur:SetAlpha(0.9 * effect)
+            trails:SetRotation(spin.angle)
+            trails:SetAlpha(effect)
+            arcs:SetRotation(spin.angle * 0.85)
+            arcs:SetAlpha(effect)
+        end
+        body:SetScale(math.max(0.5, spin.scale))
+        -- The rattle at full tilt, a pixel or so either way.
+        local rattle = effect > 0.5 and effect * size / 30 * 0.7 or 0
+        body:SetPoint("CENTER", emblem, "CENTER", (math.random() * 2 - 1) * rattle, (math.random() * 2 - 1) * rattle)
+    end
+
+    local function Animate(_, elapsed)
+        elapsed = math.min(elapsed or 0, 0.05)
+        local before = spin.t
+        spin.t = (spin.t + elapsed) % SPIN_PERIOD
+        spin.speed = SpinSpeed(spin.t)
+        local step = math.max(-SPIN_MAX_STEP, math.min(SPIN_MAX_STEP, spin.speed * elapsed))
+        spin.angle = (spin.angle + step) % (2 * math.pi)
+        spin.effect = Smooth((spin.speed - 6) / (SPIN_FAST - 6))
+        -- Squash and stretch: a spring toward the phase's size, so it overshoots a little.
+        spin.velocity = spin.velocity + ((SpinScale(spin.t) - spin.scale) * 260 - spin.velocity * 16) * elapsed
+        spin.scale = spin.scale + spin.velocity * elapsed
+        -- Puffs: a burst at takeoff, then a steady few while flat out.
+        if before < 2.75 and spin.t >= 2.75 then
+            for _ = 1, 4 do
+                Puff()
+            end
+        end
+        spin.spawn = spin.spawn - elapsed
+        if spin.effect > 0.7 and spin.spawn <= 0 then
+            spin.spawn = 0.14
+            Puff()
+        end
+        for _, puff in ipairs(puffs) do
+            if puff.active then
+                puff.age = puff.age + elapsed
+                if puff.age >= PUFF_LIFE then
+                    puff.active = false
+                    puff.texture:Hide()
+                else
+                    PlacePuff(puff)
+                end
+            end
+        end
+        Pose()
+    end
+
+    -- Each showing starts over from the slow spin.
+    emblem:SetScript("OnShow", function()
+        spin.t, spin.speed, spin.effect, spin.scale, spin.velocity, spin.spawn = SPIN_START, SPIN_SLOW, 0, 1, 0, 0
+        for _, puff in ipairs(puffs) do
+            puff.active = false
+            puff.texture:Hide()
+        end
+        Pose()
+    end)
+    emblem:SetScript("OnUpdate", Animate)
+    Pose()
+    return emblem
 end
 
 -- Upper case for the small headings, in any of the addon's languages: string.upper only knows
