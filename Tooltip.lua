@@ -4,6 +4,7 @@ BGV.Tooltip = {}
 
 local Tooltip = BGV.Tooltip
 local Utils = BGV.Utils
+local L = BGV.L
 
 local CHECK = "|TInterface\\RaidFrame\\ReadyCheck-Ready:0|t "
 local MAX_LISTED = 12
@@ -34,7 +35,7 @@ local function AddList(rows, formatter)
         end
     end
     if hidden > 0 then
-        AddBody(string.format("... and %d more", hidden), 0.7, 0.7, 0.7)
+        AddBody(string.format(L["... and %d more"], hidden), 0.7, 0.7, 0.7)
     end
 end
 
@@ -44,13 +45,13 @@ local function AppendDungeon(slot)
     end
 
     AddBlank()
-    AddHeader("Completed Activities")
+    AddHeader(L["Completed Activities"])
     AddList(slot.runs, function(run)
-        local line = run.text or "Mythic+"
+        local line = run.text or L["Mythic+"]
         if run.counts then
             line = CHECK .. line
             if run.setsReward then
-                line = line .. "  (sets reward)"
+                line = line .. "  " .. L["(sets reward)"]
             end
             return line
         end
@@ -64,7 +65,7 @@ local function AppendRaid(slot)
     end
 
     AddBlank()
-    AddHeader("Bosses")
+    AddHeader(L["Bosses"])
     local lastInstance
     local listed = 0
     local hidden = 0
@@ -76,9 +77,9 @@ local function AppendRaid(slot)
                 AddBody(encounter.instanceName, 1, 0.82, 0)
                 lastInstance = encounter.instanceName
             end
-            local line = encounter.name or "Boss"
+            local line = encounter.name or L["Boss"]
             if encounter.defeated then
-                line = CHECK .. line .. " (" .. (encounter.difficultyName or "Defeated") .. ")"
+                line = CHECK .. line .. " (" .. (encounter.difficultyName or L["Defeated"]) .. ")"
                 AddBody(line, 0.2, 1, 0.2)
             else
                 AddBody(line, 0.5, 0.5, 0.5)
@@ -87,7 +88,7 @@ local function AppendRaid(slot)
         end
     end
     if hidden > 0 then
-        AddBody(string.format("... and %d more", hidden), 0.7, 0.7, 0.7)
+        AddBody(string.format(L["... and %d more"], hidden), 0.7, 0.7, 0.7)
     end
 end
 
@@ -97,9 +98,9 @@ local function AppendWorld(slot)
     end
 
     AddBlank()
-    AddHeader("Completed Activities")
+    AddHeader(L["Completed Activities"])
     AddList(slot.worldTiers, function(tier)
-        local line = tier.text or "World"
+        local line = tier.text or L["World"]
         if tier.counts then
             return CHECK .. line
         end
@@ -134,7 +135,7 @@ function Tooltip.ShowStandalone(activityFrame)
     if not ok then
         BGV.lastError = err
         GameTooltip:ClearLines()
-        GameTooltip:AddLine("Great Vault", 1, 0.82, 0)
+        GameTooltip:AddLine(L["Great Vault"], 1, 0.82, 0)
         GameTooltip:AddLine(BGV.GreatVault.ProgressText(slot), 1, 1, 1, true)
         GameTooltip:Show()
     end
@@ -142,9 +143,9 @@ end
 
 function Tooltip.Write(slot)
     AddBlank()
-    AddHeader(string.format("Great Vault — %s", slot.category or "Reward"))
+    AddHeader(string.format(L["Great Vault — %s"], slot.category or L["Reward"]))
     AddBlank()
-    AddHeader("Progress")
+    AddHeader(L["Progress"])
     local progress = BGV.GreatVault.ProgressText(slot)
     if slot.qualifier then
         progress = progress .. " (" .. slot.qualifier .. ")"
@@ -153,7 +154,7 @@ function Tooltip.Write(slot)
 
     if type(slot.killSummary) == "string" then
         AddBlank()
-        AddHeader("Bosses Killed")
+        AddHeader(L["Bosses Killed"])
         AddBody(slot.killSummary)
     end
 
@@ -165,24 +166,24 @@ function Tooltip.Write(slot)
         AppendWorld(slot)
     elseif slot.qualifier then
         AddBlank()
-        AddHeader("Activity")
+        AddHeader(L["Activity"])
         AddBody(slot.qualifier)
     end
 
     if Utils.IsUsableNumber(slot.nextThreshold) then
         AddBlank()
-        AddHeader("Next Slot")
-        AddBody(string.format("%d %s", slot.nextThreshold, slot.unit or "Activities"))
+        AddHeader(L["Next Slot"])
+        AddBody(string.format("%d %s", slot.nextThreshold, slot.unit or L["Activities"]))
         if Utils.IsUsableNumber(slot.nextProgress) and slot.nextProgress < slot.nextThreshold then
-            AddBody(string.format("%d more to unlock", slot.nextThreshold - slot.nextProgress), 0.8, 0.8, 0.8)
+            AddBody(string.format(L["%d more to unlock"], slot.nextThreshold - slot.nextProgress), 0.8, 0.8, 0.8)
         end
     end
 
     if slot.qualifier or slot.itemQuality or Utils.IsUsableNumber(slot.itemLevel) then
         AddBlank()
-        AddHeader("Potential Reward")
+        AddHeader(L["Potential Reward"])
         if slot.qualifier then
-            AddBody("Difficulty: " .. slot.qualifier)
+            AddBody(string.format(L["Difficulty: %s"], slot.qualifier))
         end
         local upgradeText = BGV.GreatVault.RewardText(slot)
         if upgradeText then
@@ -192,19 +193,19 @@ function Tooltip.Write(slot)
 
     if type(slot.upgrade) == "table" and (slot.upgrade.nextLevel or slot.upgrade.itemLevel) then
         AddBlank()
-        AddHeader("Higher Reward")
+        AddHeader(L["Higher Reward"])
         if Utils.SameType(slot.type, Utils.ThresholdType("Activities")) and Utils.IsUsableNumber(slot.upgrade.nextLevel) then
-            AddBody(string.format("Next key level: +%d", slot.upgrade.nextLevel))
+            AddBody(string.format(L["Next key level: +%d"], slot.upgrade.nextLevel))
         elseif Utils.SameType(slot.type, Utils.ThresholdType("World")) and Utils.IsUsableNumber(slot.upgrade.nextLevel) then
-            AddBody(string.format("Next tier: %d", slot.upgrade.nextLevel))
+            AddBody(string.format(L["Next tier: %d"], slot.upgrade.nextLevel))
         elseif Utils.IsUsableNumber(slot.upgrade.nextLevel) then
             local difficultyName = Utils.DifficultyName(slot.upgrade.nextLevel)
             if difficultyName then
-                AddBody("Next difficulty: " .. difficultyName)
+                AddBody(string.format(L["Next difficulty: %s"], difficultyName))
             end
         end
         if Utils.IsUsableNumber(slot.upgrade.itemLevel) then
-            AddBody(string.format("Item level: %d", slot.upgrade.itemLevel))
+            AddBody(string.format(L["Item level: %d"], slot.upgrade.itemLevel))
         end
     end
 

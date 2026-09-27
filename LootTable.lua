@@ -2,6 +2,8 @@ local _, BGV = ...
 
 BGV.LootTable = {}
 
+local L = BGV.L
+
 local FILTERS = {
     { id = "ALL", label = "All gear" },
     { id = "Head", label = "Head" },
@@ -91,8 +93,11 @@ local headerTitle
 local headerReward
 local gearFilterButton
 local statFilterButton
+local searchBox
 local specButton
 local filterID = "ALL"
+-- The item name search (lower case, trimmed); empty lists everything.
+local searchText = ""
 -- Selected secondary stats (id -> true). None: no filter; one: items with it; two: items with
 -- both; three or more: items with at least one of them.
 local statFilter = {}
@@ -180,15 +185,15 @@ local function SlotKey(category, slot)
 end
 
 local function SlotTitle(slot)
-    local title = "Slot " .. tostring(slot.index or "?")
+    local title = string.format(L["Slot %s"], tostring(slot.index or "?"))
     if BGV.Utils.IsUsableNumber(slot.threshold) and type(slot.unit) == "string" then
-        title = string.format("%s · %d %s", title, slot.threshold, slot.unit)
+        title = string.format("%s • %d %s", title, slot.threshold, slot.unit)
     end
     if type(slot.qualifier) == "string" and slot.qualifier ~= "" then
-        title = title .. " · " .. slot.qualifier
+        title = title .. " • " .. slot.qualifier
     end
     if not slot.unlocked then
-        title = title .. " · Locked"
+        title = title .. " • " .. L["Locked"]
     end
     return title
 end
@@ -201,10 +206,10 @@ local function RewardLine(slot)
         and BGV.Utils.IsUsableNumber(slot.upgradeLevel)
         and BGV.Utils.IsUsableNumber(slot.upgradeMax)
         and BGV.Utils.IsUsableNumber(slot.itemLevel) then
-        return string.format("%s %d/%d (%d ilvl)", slot.upgradeTrack, slot.upgradeLevel, slot.upgradeMax, slot.itemLevel)
+        return string.format(L["%s %d/%d (%d ilvl)"], slot.upgradeTrack, slot.upgradeLevel, slot.upgradeMax, slot.itemLevel)
     end
     if BGV.Utils.IsUsableNumber(slot.itemLevel) then
-        return string.format("%d ilvl", slot.itemLevel)
+        return string.format(L["%d ilvl"], slot.itemLevel)
     end
     return ""
 end
@@ -214,7 +219,7 @@ local function StatName(stat)
     if type(text) == "string" and text ~= "" then
         return text
     end
-    return stat.name
+    return L[stat.name]
 end
 
 -- The amount if tooltip line `text` is exactly this stat ("+123 Haste"); nil for anything else,
@@ -335,25 +340,25 @@ end
 -- The first letter of the stat's (localized) name, for the header's filter button.
 local function StatLetter(stat)
     local name = StatName(stat)
-    return name:match("^[\1-\127\194-\244][\128-\191]*") or stat.short:sub(1, 1)
+    return name:match("^[\1-\127\194-\244][\128-\191]*") or L[stat.short]:sub(1, 1)
 end
 
 -- What the stat filter shows, for the filter button's tooltip.
 local function StatFilterSummary()
     local selected = SelectedStats()
     if #selected == 0 then
-        return "Showing all items"
+        return L["Showing all items"]
     end
     local names = {}
     for _, stat in ipairs(selected) do
         names[#names + 1] = StatName(stat)
     end
     if #selected == 1 then
-        return "Items with " .. names[1]
+        return string.format(L["Items with %s"], names[1])
     elseif #selected == 2 then
-        return "Items with both " .. names[1] .. " and " .. names[2]
+        return string.format(L["Items with both %s and %s"], names[1], names[2])
     end
-    return "Items with at least one of: " .. table.concat(names, ", ")
+    return string.format(L["Items with at least one of: %s"], table.concat(names, ", "))
 end
 
 local function CacheKey(slot)
@@ -368,17 +373,25 @@ local function CacheKey(slot)
         tostring(slot.level),
         tostring(filterID),
         StatFilterKey(),
+        searchText,
     }, ":")
 end
 
 -- The gear and stat filters. An item whose stats are still loading is listed (without stats)
 -- unless filtering by stat, and the list stays pending so it's redrawn once they arrive.
+local function MatchesSearch(entry)
+    if searchText == "" then
+        return true
+    end
+    return type(entry.name) == "string" and entry.name:lower():find(searchText, 1, true) ~= nil
+end
+
 local function FilterEntries(found)
     local list = {}
     local pending = false
     local selected = SelectedStats()
     for _, entry in ipairs(type(found) == "table" and found or {}) do
-        if filterID == "ALL" or entry.equipLabel == filterID then
+        if (filterID == "ALL" or entry.equipLabel == filterID) and MatchesSearch(entry) then
             local stats = EntryStats(entry)
             if not stats then
                 pending = true
@@ -394,7 +407,7 @@ local function FilterEntries(found)
 end
 
 local function FiltersActive()
-    return filterID ~= "ALL" or #SelectedStats() > 0
+    return filterID ~= "ALL" or #SelectedStats() > 0 or searchText ~= ""
 end
 
 local function SlotItems(slot)
@@ -476,6 +489,7 @@ local function DatabaseKey(sourceID)
         tostring(db.specID),
         tostring(filterID),
         StatFilterKey(),
+        searchText,
     }, ":")
 end
 
@@ -512,17 +526,19 @@ local function ClassInfo(classID)
     end
 end
 
-local ALL_CLASSES_TEXT = BGV.Utils.GlobalString("ALL_CLASSES", "All classes")
+local function AllClassesText()
+    return BGV.Utils.GameText("ALL_CLASSES", "All classes")
+end
 
 local function ClassSpecLabel()
     if db.classID == 0 then
-        return ALL_CLASSES_TEXT
+        return AllClassesText()
     end
     local class = ClassInfo(db.classID)
     if not class then
-        return BGV.Utils.GlobalString("CLASS", "Class")
+        return BGV.Utils.GameText("CLASS", "Class")
     end
-    local specName = "All specs"
+    local specName = L["All specs"]
     if BGV.Utils.IsUsableNumber(db.specID) and db.specID ~= 0 then
         for _, spec in ipairs(BGV.Utils.ClassSpecs(db.classID)) do
             if spec.id == db.specID then
@@ -533,7 +549,6 @@ local function ClassSpecLabel()
     return BGV.Utils.ClassColorText(class.file, class.name) .. ": " .. specName
 end
 
-local ALL_SPECS_SHORT = "All specs"
 
 function BGV.LootTable.ItemsFor(slot)
     return SlotItems(slot)
@@ -622,7 +637,7 @@ local function BuildModel()
             if found and found.id == category.id then
                 group.slots[#group.slots + 1] = {
                     id = SlotKey(category, slot),
-                    title = "Slot " .. tostring(slot.index or "?"),
+                    title = string.format(L["Slot %s"], tostring(slot.index or "?")),
                     slot = slot,
                 }
             end
@@ -882,16 +897,16 @@ local function Acquire()
         row.tierBadge:SetSize(20, 16)
         row.tierBadge:Hide()
 
-        row.name = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
+        row.name = BGV.Utils.FontString(row, "OVERLAY", "Highlight")
         row.name:SetJustifyH("LEFT")
         row.name:SetWordWrap(false)
-        row.tier = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormalSmall")
+        row.tier = BGV.Utils.FontString(row, "OVERLAY", "NormalSmall")
         row.tier:SetJustifyH("CENTER")
         row.tier:SetWordWrap(false)
-        row.level = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
+        row.level = BGV.Utils.FontString(row, "OVERLAY", "Highlight")
         row.level:SetJustifyH("LEFT")
         row.level:SetWordWrap(false)
-        row.slot = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlightSmall")
+        row.slot = BGV.Utils.FontString(row, "OVERLAY", "HighlightSmall")
         row.slot:SetJustifyH("LEFT")
         row.slot:SetWordWrap(false)
         -- One font string per secondary stat, stacked (see PaintStats).
@@ -928,7 +943,7 @@ local function Acquire()
     row.hover:Show()
     row.bandEdge:SetVertexColor(accentColor[1], accentColor[2], accentColor[3], 0.95)
     row.icon:SetTexture(nil)
-    row.name:SetFontObject(BetterGreatVaultFontHighlight)
+    row.name:SetFontObject(BGV.Utils.Font("Highlight"))
     row.name:SetText("")
     row.tier:SetText("")
     row.level:SetText("")
@@ -987,7 +1002,7 @@ local function PaintLinks(model)
             bar:SetPoint("LEFT", link, "LEFT", 0, 0)
             bar:Hide()
             link.bar = bar
-            local label = link:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
+            local label = BGV.Utils.FontString(link, "OVERLAY", "Highlight")
             label:SetPoint("LEFT", link, "LEFT", 12, 0)
             label:SetPoint("RIGHT", link, "RIGHT", -8, 0)
             label:SetJustifyH("LEFT")
@@ -1030,7 +1045,7 @@ local function PaintLinks(model)
         header:SetPoint("TOPRIGHT", rail, "TOPRIGHT", -8, -y)
         header.bar:Hide()
         header.underline:Hide()
-        header.label:SetText(group.title)
+        header.label:SetText(L[group.title])
         header.label:SetTextColor(0.85, 0.65, 0.2)
         y = y + LINK_H
         for _, section in ipairs(group.slots) do
@@ -1092,7 +1107,7 @@ local function ArmorType(entry)
     local text = false
     if classID == armorClass then
         if subClassID == shield then
-            text = "Shield"
+            text = L["Shield"]
         elseif WEARABLE_ARMOR[subClassID] and equipLoc ~= "INVTYPE_CLOAK" and type(subType) == "string" and subType ~= "" then
             text = subType
         end
@@ -1171,7 +1186,7 @@ local function PaintStats(row, texts, r, g, b)
     for index, text in ipairs(texts) do
         local line = row.statLines[index]
         if not line then
-            line = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlightSmall")
+            line = BGV.Utils.FontString(row, "OVERLAY", "HighlightSmall")
             line:SetJustifyH("LEFT")
             line:SetWordWrap(false)
             row.statLines[index] = line
@@ -1185,6 +1200,29 @@ local function PaintStats(row, texts, r, g, b)
     end
 end
 
+-- The width of a font string's text on one line, whatever width the string is set to.
+local function TextWidth(fontString)
+    local width = fontString.GetUnboundedStringWidth and fontString:GetUnboundedStringWidth()
+    if type(width) ~= "number" then
+        width = fontString:GetStringWidth()
+    end
+    return math.ceil(width or 0)
+end
+
+-- Fits a column's label, and the filter button after it, into `room`. Translations run longer
+-- than English: a label too long for its column is cut short with "..." (the full name shows
+-- on hover), and a long filter pick on the button takes at most 60% of the room.
+local function FitHeaderColumn(label, room, button)
+    local buttonRoom = 0
+    if button then
+        local width = math.max(16, math.min(TextWidth(button.text) + 8, math.floor(room * 0.6)))
+        button:SetWidth(width)
+        button.text:SetWidth(width - 8)
+        buttonRoom = width + 5
+    end
+    label:SetWidth(math.max(12, math.min(TextWidth(label), room - buttonRoom)))
+end
+
 local function PlaceHeader(rowWidth)
     if not columnHeader then
         return
@@ -1194,9 +1232,27 @@ local function PlaceHeader(rowWidth)
     labels.item:SetPoint("LEFT", columnHeader, "LEFT", 4 + 9, 0)
     labels.tier:SetPoint("LEFT", columnHeader, "LEFT", 4 + tierX, 0)
     labels.tier:SetShown(BGV.Utils.ShowBisTiers())
+    labels.tier.hover:SetShown(BGV.Utils.ShowBisTiers())
     labels.level:SetPoint("LEFT", columnHeader, "LEFT", 4 + levelX, 0)
     labels.stats:SetPoint("LEFT", columnHeader, "LEFT", 4 + statsX, 0)
     labels.slot:SetPoint("LEFT", columnHeader, "LEFT", 4 + slotX, 0)
+    -- The header's controls follow the text size; each label keeps to its column, like the rows.
+    local offset = BGV.Utils.FontOffset()
+    for _, button in ipairs({ statFilterButton, gearFilterButton }) do
+        button:SetHeight(16 + offset)
+    end
+    FitHeaderColumn(labels.tier, TIER_W - 8)
+    FitHeaderColumn(labels.level, LEVEL_W - 8)
+    FitHeaderColumn(labels.stats, STATS_W - 8, statFilterButton)
+    FitHeaderColumn(labels.slot, SLOT_W - 8, gearFilterButton)
+    -- The search box fits between the Item label and the Tier column, at least 50 wide.
+    FitHeaderColumn(labels.item, tierX - 9 - 8 - (searchBox and 66 or 0))
+    if searchBox then
+        local left = 9 + labels.item:GetWidth() + 6
+        local room = tierX - left - 10
+        local width = math.floor(150 * BGV.Utils.FontScale(10) + 0.5)
+        searchBox:SetSize(math.max(50, math.min(width, room)), 16 + offset)
+    end
 end
 
 -- Groups by the entry's source (raid boss, dungeon, or world source). Raid bosses follow the
@@ -1219,7 +1275,7 @@ local function GroupItems(items, slot)
     local groups = {}
     local byName = {}
     for _, entry in ipairs(items) do
-        local name = entry.source or "Other"
+        local name = entry.source or L["Other"]
         local key = tostring(entry.sourceOrder or 0) .. ":" .. name
         local group = byName[key]
         if not group then
@@ -1271,13 +1327,13 @@ local function AddGroupHeader(group, rowWidth, y)
     row.name:ClearAllPoints()
     row.name:SetPoint("LEFT", row, "LEFT", 12, 0)
     row.name:SetWidth(rowWidth - 24)
-    row.name:SetFontObject(BetterGreatVaultFontNormal)
+    row.name:SetFontObject(BGV.Utils.Font("Normal"))
     row.name:SetText(string.format("%s   |cff77777b%d|r", group.name, #group.entries))
     row.name:SetTextColor(0.96, 0.86, 0.6)
 end
 
 
--- Heads one source's groups when several sources are listed: "RAID · MYTHIC · 334/344".
+-- Heads one source's groups when several sources are listed: "RAID • MYTHIC • 334/344".
 local function AddSourceHeader(text, rowWidth, y)
     local row = Acquire()
     row.hover:Hide()
@@ -1289,8 +1345,8 @@ local function AddSourceHeader(text, rowWidth, y)
     row.name:ClearAllPoints()
     row.name:SetPoint("LEFT", row, "LEFT", 2, 0)
     row.name:SetWidth(rowWidth - 8)
-    row.name:SetFontObject(BetterGreatVaultFontNormalSmall)
-    row.name:SetText(text:upper())
+    row.name:SetFontObject(BGV.Utils.Font("NormalSmall"))
+    row.name:SetText(BGV.Utils.Upper(text))
     row.name:SetTextColor(accentColor[1], accentColor[2], accentColor[3])
 end
 
@@ -1329,23 +1385,23 @@ end
 
 local function DatabaseRewardLine(info)
     if not (info and info.itemLevel) then
-        return "Vault item level not known yet"
+        return L["Vault item level not known yet"]
     end
     if info.ceiling then
-        return string.format("Vault reward: %d item level, %d from the raid's last two bosses", info.itemLevel, info.ceiling)
+        return string.format(L["Vault reward: %d item level, %d from the raid's last two bosses"], info.itemLevel, info.ceiling)
     end
-    return string.format("Vault reward: %d item level", info.itemLevel)
+    return string.format(L["Vault reward: %d item level"], info.itemLevel)
 end
 
--- A source with its chosen level: "Raid · Mythic", "Mythic +7" / "Mythic +10+", "World · Tier 8".
+-- A source with its chosen level: "Raid • Mythic", "Mythic +7" / "Mythic +10+", "World • Tier 8".
 local function SourceName(source, info)
     if not info then
-        return source.header
+        return L[source.header]
     end
     if source.id == "mplus" then
-        return "Mythic " .. info.label
+        return string.format(L["Mythic %s"], info.label)
     end
-    return source.header .. " · " .. info.label
+    return L[source.header] .. " • " .. info.label
 end
 
 -- The database mode's section: every selected source at its chosen level, for the chosen class
@@ -1361,7 +1417,7 @@ local function DatabaseSection()
         local name = SourceName(source, info)
         keys[#keys + 1] = source.id .. "=" .. tostring(info and info.level)
         titles[#titles + 1] = name
-        parts[#parts + 1] = { order = source.order, text = name .. " · " .. (ItemLevelText(info) or "item level not known yet") }
+        parts[#parts + 1] = { order = source.order, text = name .. " • " .. (ItemLevelText(info) or L["item level not known yet"]) }
         if info and info.itemLevel then
             known = known + 1
             local list, sourcePending = DatabaseItems(source)
@@ -1370,12 +1426,12 @@ local function DatabaseSection()
                 items[#items + 1] = entry
             end
             if info.ceiling then
-                rewards[#rewards + 1] = string.format("%s %d (%d from the last two bosses)", source.header, info.itemLevel, info.ceiling)
+                rewards[#rewards + 1] = string.format(L["%s %d (%d from the last two bosses)"], L[source.header], info.itemLevel, info.ceiling)
             else
-                rewards[#rewards + 1] = string.format("%s %d", source.header, info.itemLevel)
+                rewards[#rewards + 1] = string.format("%s %d", L[source.header], info.itemLevel)
             end
         else
-            rewards[#rewards + 1] = source.header .. " not known yet"
+            rewards[#rewards + 1] = string.format(L["%s not known yet"], L[source.header])
         end
     end
     local section = {
@@ -1391,7 +1447,7 @@ local function DatabaseSection()
     if #sources == 1 then
         section.reward = DatabaseRewardLine(DatabaseLevel(sources[1].id))
     else
-        section.reward = "Vault reward: " .. table.concat(rewards, "  ·  ")
+        section.reward = string.format(L["Vault reward: %s"], table.concat(rewards, "  •  "))
     end
     return section
 end
@@ -1419,18 +1475,18 @@ local function PaintDatabaseRail()
             -- The level picker only works for a listed source.
             row.level:SetEnabled(selected)
             row.level:SetAlpha(selected and 1 or 0.35)
-            row.label:SetText(source.title)
+            row.label:SetText(L[source.title])
             if selected then
                 row.label:SetTextColor(0.96, 0.96, 0.96)
             else
                 row.label:SetTextColor(0.46, 0.46, 0.48)
             end
-            local levelText = info and info.label or "Item level unknown"
+            local levelText = info and info.label or L["Item level unknown"]
             local itemLevel = ItemLevelText(info)
             if itemLevel then
-                levelText = levelText .. " · " .. itemLevel
+                levelText = levelText .. " • " .. itemLevel
             elseif info then
-                levelText = levelText .. " · unknown"
+                levelText = levelText .. " • " .. L["unknown"]
             end
             row.level:SetText(levelText)
             row:Show()
@@ -1459,10 +1515,10 @@ end
 local function RefreshModeWidgets()
     local database = mode == "database"
     if windowTitle then
-        windowTitle:SetText(database and "Loot database" or "Great Vault loot")
+        windowTitle:SetText(database and L["Loot database"] or L["Great Vault loot"])
     end
     if railTitle then
-        railTitle:SetText(database and "Loot sources" or "Contents")
+        railTitle:SetText(database and L["Loot sources"] or L["Contents"])
     end
     if database then
         if specButton then
@@ -1533,7 +1589,7 @@ function Layout()
             headerTitle:SetText(section.title)
             headerReward:SetText(section.reward or "")
         else
-            headerTitle:SetText("Great Vault loot")
+            headerTitle:SetText(L["Great Vault loot"])
             headerReward:SetText("")
         end
     end
@@ -1572,7 +1628,7 @@ function Layout()
         end
     end
     if not section then
-        ShowMessage("No Great Vault progress to list yet.", rowWidth)
+        ShowMessage(L["No Great Vault progress to list yet."], rowWidth)
         child:SetHeight(48)
         Continue()
         return
@@ -1581,17 +1637,17 @@ function Layout()
     local items = section.items or {}
     if #items == 0 then
         if section.locked then
-            ShowMessage("Locked.", rowWidth)
+            ShowMessage(L["Locked."], rowWidth)
         elseif section.unknownLevel then
-            ShowMessage("The vault hasn't shown item levels for this yet. Complete one of these in your Great Vault this season and they'll appear here.", rowWidth)
+            ShowMessage(L["The vault hasn't shown item levels for this yet. Complete one of these in your Great Vault this season and they'll appear here."], rowWidth)
         elseif section.pending and stalls >= MAX_STALLS then
-            ShowMessage("Loot didn't finish loading. Close and reopen this window to try again.", rowWidth)
+            ShowMessage(L["Loot didn't finish loading. Close and reopen this window to try again."], rowWidth)
         elseif section.pending then
-            ShowMessage("Loading loot...", rowWidth)
+            ShowMessage(L["Loading loot..."], rowWidth)
         elseif section.database and not FiltersActive() then
-            ShowMessage("No loot found here for this class.", rowWidth)
+            ShowMessage(L["No loot found here for this class."], rowWidth)
         else
-            ShowMessage("No items for this filter.", rowWidth)
+            ShowMessage(L["No items for this filter."], rowWidth)
         end
         child:SetHeight(48)
         Continue()
@@ -1618,7 +1674,7 @@ function Layout()
             local r, g, b = QualityColor(entry)
             row.iconBG:SetVertexColor(r, g, b, 0.9)
             row.iconBG:Show()
-            row.name:SetText(entry.name or "Item")
+            row.name:SetText(entry.name or L["Item"])
             row.name:SetTextColor(r, g, b)
             local tier = showTiers and BestTier(entry.itemID, tierSpecs) or nil
             if tier then
@@ -1692,7 +1748,7 @@ local function PaintHeaderFilter(button, text, active)
         return
     end
     button.text:SetText(text)
-    button:SetWidth(math.max(16, math.ceil(button.text:GetStringWidth() or 0) + 8))
+    button:SetWidth(math.max(16, TextWidth(button.text) + 8))
     if active then
         button.back:SetVertexColor(accentColor[1], accentColor[2], accentColor[3], 0.95)
         button.text:SetTextColor(OnAccentText())
@@ -1705,10 +1761,10 @@ end
 local function GearFilterLabel()
     for _, option in ipairs(FILTERS) do
         if option.id == filterID then
-            return option.label
+            return L[option.label]
         end
     end
-    return FILTERS[1].label
+    return L[FILTERS[1].label]
 end
 
 function RefreshHeaderFilters()
@@ -1736,9 +1792,9 @@ end
 local function OpenGearMenu(anchor)
     if MenuUtil and type(MenuUtil.CreateContextMenu) == "function" then
         MenuUtil.CreateContextMenu(anchor, function(_, root)
-            root:CreateTitle("Gear")
+            root:CreateTitle(L["Gear"])
             for _, option in ipairs(FILTERS) do
-                root:CreateRadio(option.label, function()
+                root:CreateRadio(L[option.label], function()
                     return filterID == option.id
                 end, function()
                     ApplyFilter(option.id)
@@ -1762,7 +1818,7 @@ end
 local function OpenStatMenu(anchor)
     if MenuUtil and type(MenuUtil.CreateContextMenu) == "function" then
         MenuUtil.CreateContextMenu(anchor, function(_, root)
-            root:CreateTitle("Secondary stats")
+            root:CreateTitle(L["Secondary stats"])
             for _, stat in ipairs(SECONDARY_STATS) do
                 local id = stat.id
                 root:CreateCheckbox(StatName(stat), function()
@@ -1775,7 +1831,7 @@ local function OpenStatMenu(anchor)
                 end)
             end
             root:CreateDivider()
-            root:CreateButton("Clear", function()
+            root:CreateButton(L["Clear"], function()
                 statFilter = {}
                 ApplyStatFilter()
             end)
@@ -1807,8 +1863,9 @@ local function CreateHeaderFilter(label, onClick, describe)
     button.back:SetAllPoints()
     local shine = Pixel(button, "HIGHLIGHT", 1, 1, 1, 0.18)
     shine:SetAllPoints()
-    button.text = button:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormalSmall")
+    button.text = BGV.Utils.FontString(button, "OVERLAY", "NormalSmall")
     button.text:SetPoint("CENTER", button, "CENTER", 0, 0)
+    button.text:SetWordWrap(false)
     button:SetScript("OnClick", onClick)
     button:SetScript("OnEnter", function(self)
         if GameTooltip then
@@ -1827,6 +1884,87 @@ end
 
 local function ScrollTop()
     JumpScroll(0)
+end
+
+-- The item name search, in the column header after the Item label like the other filters. The
+-- list redraws a moment after typing stops, not on every letter.
+local function CreateSearchBox(label)
+    local box = CreateFrame("EditBox", nil, columnHeader)
+    box:SetSize(150, 16)
+    box:SetPoint("LEFT", label, "RIGHT", 6, 0)
+    box:SetAutoFocus(false)
+    box:SetMaxLetters(40)
+    box:SetFontObject(BGV.Utils.Font("HighlightSmall"))
+    box:SetTextInsets(6, 16, 0, 0)
+    box.back = Pixel(box, "BACKGROUND", 0.24, 0.24, 0.26, 0.95)
+    box.back:SetAllPoints()
+    box.rule = Accent(Pixel(box, "ARTWORK", 1, 1, 1, 1))
+    box.rule:SetHeight(1)
+    box.rule:SetPoint("BOTTOMLEFT", box, "BOTTOMLEFT", 0, 0)
+    box.rule:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", 0, 0)
+    box.rule:Hide()
+    box.hint = BGV.Utils.FontString(box, "OVERLAY", "HighlightSmall")
+    box.hint:SetPoint("LEFT", box, "LEFT", 6, 0)
+    box.hint:SetText(L["Search"])
+    box.hint:SetTextColor(0.55, 0.55, 0.58)
+    local clear = CreateFrame("Button", nil, box)
+    clear:SetSize(14, 14)
+    clear:SetPoint("RIGHT", box, "RIGHT", -1, 0)
+    for _, angle in ipairs({ 45, -45 }) do
+        local line = Pixel(clear, "ARTWORK", 0.72, 0.72, 0.75, 1)
+        line:SetSize(8, 1)
+        line:SetPoint("CENTER", clear, "CENTER", 0, 0)
+        if line.SetRotation then
+            line:SetRotation(math.rad(angle))
+        end
+    end
+    clear:Hide()
+    clear:SetScript("OnClick", function()
+        box:SetText("")
+        box:ClearFocus()
+    end)
+    box.clear = clear
+
+    local token = 0
+    local function Redraw()
+        JumpScroll(0)
+        Layout()
+    end
+    box:SetScript("OnTextChanged", function(self)
+        local typed = self:GetText() or ""
+        self.hint:SetShown(typed == "" and not self:HasFocus())
+        clear:SetShown(typed ~= "")
+        self.rule:SetShown(typed ~= "")
+        local text = BGV.Utils.Trim(typed):lower()
+        if text == searchText then
+            return
+        end
+        searchText = text
+        token = token + 1
+        local mine = token
+        if C_Timer and type(C_Timer.After) == "function" then
+            C_Timer.After(0.25, function()
+                if mine == token then
+                    Redraw()
+                end
+            end)
+        else
+            Redraw()
+        end
+    end)
+    box:SetScript("OnEditFocusGained", function(self)
+        self.hint:Hide()
+    end)
+    box:SetScript("OnEditFocusLost", function(self)
+        self.hint:SetShown((self:GetText() or "") == "")
+    end)
+    box:SetScript("OnEscapePressed", function(self)
+        self:ClearFocus()
+    end)
+    box:SetScript("OnEnterPressed", function(self)
+        self:ClearFocus()
+    end)
+    return box
 end
 
 -- Clicking a source toggles it; clicking the only selected one leaves it selected.
@@ -1887,11 +2025,11 @@ local function OpenLevelMenu(anchor, sourceID)
         return
     end
     MenuUtil.CreateContextMenu(anchor, function(_, root)
-        root:CreateTitle("Vault reward item level")
+        root:CreateTitle(L["Vault reward item level"])
         for _, info in ipairs(levels) do
             local level = info.level
             local itemLevel = ItemLevelText(info)
-            local text = info.label .. "  |cff8a8a8e" .. (itemLevel or "unknown") .. "|r"
+            local text = info.label .. "  |cff8a8a8e" .. (itemLevel or L["unknown"]) .. "|r"
             local radio = root:CreateRadio(text, function()
                 return db.levels[sourceID] == level
             end, function()
@@ -1919,8 +2057,8 @@ local function OpenClassMenu(anchor)
         return
     end
     MenuUtil.CreateContextMenu(anchor, function(_, root)
-        local classMenu = root:CreateButton(BGV.Utils.GlobalString("CLASS", "Class"))
-        classMenu:CreateRadio(ALL_CLASSES_TEXT, function()
+        local classMenu = root:CreateButton(BGV.Utils.GameText("CLASS", "Class"))
+        classMenu:CreateRadio(AllClassesText(), function()
             return db.classID == 0
         end, function()
             SetDatabaseClass(0, 0)
@@ -1947,7 +2085,7 @@ local function OpenClassMenu(anchor)
                 SetDatabaseClass(db.classID, specID)
             end)
         end
-        root:CreateRadio(ALL_SPECS_SHORT, function()
+        root:CreateRadio(L["All specs"], function()
             return (db.specID or 0) == 0
         end, function()
             SetDatabaseClass(db.classID, 0)
@@ -2003,9 +2141,9 @@ local function Build()
     titleRule:SetPoint("TOPLEFT", titleBar, "BOTTOMLEFT", 0, 0)
     titleRule:SetPoint("TOPRIGHT", titleBar, "BOTTOMRIGHT", 0, 0)
 
-    local title = frame:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormal")
+    local title = BGV.Utils.FontString(frame, "OVERLAY", "Normal")
     title:SetPoint("TOPLEFT", 16, -14)
-    title:SetText("Great Vault loot")
+    title:SetText(L["Great Vault loot"])
     title:SetTextColor(0.85, 0.65, 0.2)
     windowTitle = title
 
@@ -2074,9 +2212,9 @@ local function Build()
     local railBack = Pixel(rail, "BACKGROUND", 0.035, 0.035, 0.042, 0.8)
     railBack:SetPoint("TOPLEFT", rail, "TOPLEFT", 1, 0)
     railBack:SetPoint("BOTTOMRIGHT", rail, "BOTTOMRIGHT", 0, 1)
-    local contents = rail:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormal")
+    local contents = BGV.Utils.FontString(rail, "OVERLAY", "Normal")
     contents:SetPoint("TOPLEFT", rail, "TOPLEFT", 16, -12)
-    contents:SetText("Contents")
+    contents:SetText(L["Contents"])
     contents:SetTextColor(0.85, 0.65, 0.2)
     railTitle = contents
 
@@ -2099,7 +2237,7 @@ local function Build()
         row.fill:SetSize(6, 6)
         row.fill:SetPoint("CENTER", row.box, "CENTER", 0, 0)
         row.fill:Hide()
-        row.label = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
+        row.label = BGV.Utils.FontString(row, "OVERLAY", "Highlight")
         row.label:SetPoint("TOPLEFT", row, "TOPLEFT", 30, -6)
         row.label:SetPoint("RIGHT", row, "RIGHT", -8, 0)
         row.label:SetJustifyH("LEFT")
@@ -2123,12 +2261,12 @@ local function Build()
     divider:SetPoint("BOTTOMLEFT", rail, "BOTTOMRIGHT", 0, 1)
     rail.divider = divider
 
-    headerTitle = frame:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormalLarge")
+    headerTitle = BGV.Utils.FontString(frame, "OVERLAY", "NormalLarge")
     headerTitle:SetPoint("TOPLEFT", frame, "TOPLEFT", LEFT_W + 20, -46)
     headerTitle:SetJustifyH("LEFT")
     headerTitle:SetWordWrap(false)
     headerTitle:SetTextColor(0.96, 0.96, 0.96)
-    headerReward = frame:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
+    headerReward = BGV.Utils.FontString(frame, "OVERLAY", "Highlight")
     headerReward:SetPoint("TOPLEFT", headerTitle, "BOTTOMLEFT", 0, -4)
     headerReward:SetJustifyH("LEFT")
     headerReward:SetWordWrap(false)
@@ -2153,26 +2291,45 @@ local function Build()
     headerRule:SetPoint("BOTTOMRIGHT")
     columnHeader.labels = {}
     for _, column in ipairs({ { "item", "Item" }, { "tier", "Tier" }, { "level", "Item Level" }, { "stats", "Secondary stats" }, { "slot", "Slot" } }) do
-        local label = columnHeader:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormalSmall")
-        label:SetText(column[2]:upper())
+        local label = BGV.Utils.FontString(columnHeader, "OVERLAY", "NormalSmall")
+        label:SetText(BGV.Utils.Upper(L[column[2]]))
         label:SetTextColor(0.66, 0.66, 0.7)
         label:SetJustifyH("LEFT")
+        label:SetWordWrap(false)
         columnHeader.labels[column[1]] = label
+        -- A label cut short to fit its column (PlaceHeader) shows its full name on hover.
+        local hover = CreateFrame("Frame", nil, columnHeader)
+        hover:SetAllPoints(label)
+        hover:EnableMouse(true)
+        hover:SetScript("OnEnter", function(self)
+            if GameTooltip and label:IsShown() and label:IsTruncated() then
+                GameTooltip:SetOwner(self, "ANCHOR_TOP")
+                GameTooltip:SetText(L[column[2]])
+                GameTooltip:Show()
+            end
+        end)
+        hover:SetScript("OnLeave", function()
+            if GameTooltip then
+                GameTooltip:Hide()
+            end
+        end)
+        label.hover = hover
     end
     -- The gear and secondary stat filters, as small buttons after their columns' labels.
     statFilterButton = CreateHeaderFilter(columnHeader.labels.stats, function(self)
         OpenStatMenu(self)
     end, function(tooltip)
-        tooltip:SetText("Secondary stats filter")
+        tooltip:SetText(L["Secondary stats filter"])
         tooltip:AddLine(StatFilterSummary(), 1, 1, 1)
-        tooltip:AddLine("Pick one stat for items with it, two for items with both, three or more for items with any of them.", 0.7, 0.7, 0.72, true)
+        tooltip:AddLine(L["Pick one stat for items with it, two for items with both, three or more for items with any of them."], 0.7, 0.7, 0.72, true)
     end)
     gearFilterButton = CreateHeaderFilter(columnHeader.labels.slot, function(self)
         OpenGearMenu(self)
     end, function(tooltip)
-        tooltip:SetText("Gear filter")
-        tooltip:AddLine(filterID == "ALL" and "Showing all gear" or ("Showing: " .. GearFilterLabel()), 1, 1, 1)
+        tooltip:SetText(L["Gear filter"])
+        tooltip:AddLine(filterID == "ALL" and L["Showing all gear"] or string.format(L["Showing: %s"], GearFilterLabel()), 1, 1, 1)
     end)
+    searchBox = CreateSearchBox(columnHeader.labels.item)
     RefreshHeaderFilters()
     child = CreateFrame("Frame", nil, scroll)
     child:SetSize(520, 40)

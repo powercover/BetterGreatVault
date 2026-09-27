@@ -219,6 +219,7 @@ local function loadModule(path)
     chunk("BetterGreatVault", BGV)
 end
 
+loadModule("Locales/Locales.lua")
 loadModule("Utils.lua")
 loadModule("Rewards.lua")
 loadModule("LootTable.lua")

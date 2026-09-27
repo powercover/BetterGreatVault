@@ -15,11 +15,7 @@ end
 
 -- The addon's outlined small font, sized by the text size setting (Utils.ApplyFontSize).
 local function ApplyFont(fontString)
-    if BetterGreatVaultFontVault then
-        fontString:SetFontObject(BetterGreatVaultFontVault)
-    else
-        fontString:SetFontObject(GameFontHighlightSmall)
-    end
+    fontString:SetFontObject(Utils.Font("Vault"))
     fontString:SetJustifyH("CENTER")
     fontString:SetJustifyV("TOP")
     fontString:SetWordWrap(true)

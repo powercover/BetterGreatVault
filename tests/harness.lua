@@ -508,6 +508,7 @@ function H.Boot(reference, testsDir)
         end,
     })
 
+    H.LoadFile("Locales/Locales.lua")
     H.LoadFile("Utils.lua")
     H.LoadFile("WorldLoot.lua")
     M.RegisterWorldItems(BGV.WorldLoot)

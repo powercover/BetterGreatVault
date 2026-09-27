@@ -4,6 +4,7 @@ BGV.VERSION = "1.0.0"
 BGV.AUTHOR = "powercover"
 
 local Utils = BGV.Utils
+local L = BGV.L
 local frame = CreateFrame("Frame")
 
 local function SavedDefaults()
@@ -26,6 +27,7 @@ local function SavedDefaults()
         showBisTiers = true,
         remindRewards = true,
         fontSize = 0,
+        language = "auto",
         useSpecAccent = true,
         accentColor = { r = 0.85, g = 0.65, b = 0.2 },
     })
@@ -37,12 +39,17 @@ local function LoadVaultUI()
 end
 
 -- Key bindings (Bindings.xml). No key is bound until the player picks one in the game's Key
--- Bindings, where these show in a section of their own.
-BINDING_HEADER_BETTERGREATVAULT = "Better Great Vault"
-BINDING_NAME_BETTERGREATVAULT_VAULT = "Toggle the Great Vault"
-BINDING_NAME_BETTERGREATVAULT_LOOT = "Toggle the loot table"
-BINDING_NAME_BETTERGREATVAULT_DATABASE = "Toggle the loot database"
-BINDING_NAME_BETTERGREATVAULT_SETTINGS = "Toggle Better Great Vault settings"
+-- Bindings, where these show in a section of their own. Named again in the chosen language once
+-- the settings are loaded.
+local function NameBindings()
+    BINDING_HEADER_BETTERGREATVAULT = "Better Great Vault"
+    BINDING_NAME_BETTERGREATVAULT_VAULT = L["Toggle the Great Vault"]
+    BINDING_NAME_BETTERGREATVAULT_LOOT = L["Toggle the loot table"]
+    BINDING_NAME_BETTERGREATVAULT_DATABASE = L["Toggle the loot database"]
+    BINDING_NAME_BETTERGREATVAULT_SETTINGS = L["Toggle Better Great Vault settings"]
+end
+
+NameBindings()
 
 function BetterGreatVault_OnBinding(action)
     if action == "vault" then
@@ -72,7 +79,7 @@ local function RemindRewards()
     if C_WeeklyRewards and type(C_WeeklyRewards.HasAvailableRewards) == "function"
         and C_WeeklyRewards.HasAvailableRewards() == true then
         remindUntil = nil
-        Utils.Print("Rewards are waiting in your Great Vault.")
+        Utils.Print(L["Rewards are waiting in your Great Vault."])
     end
 end
 
@@ -120,11 +127,12 @@ local function AttachToVault()
 end
 
 local function PrintHelp()
-    Utils.Print(string.format("v%s by %s", BGV.VERSION, BGV.AUTHOR))
-    Utils.Print("/bgv debug - toggle debug and print the current Great Vault")
-    Utils.Print("/bgv db - loot database: everything the vault can award, for any class")
-    Utils.Print("/bgv refresh - refresh the open Great Vault")
-    Utils.Print("/bgv reset - clear saved settings")
+    Utils.Print(string.format(L["Version %s by %s"], BGV.VERSION, BGV.AUTHOR))
+    Utils.Print("/bgv status - " .. L["this week's Great Vault"])
+    Utils.Print("/bgv db - " .. L["loot database: everything the vault can award, for any class"])
+    Utils.Print("/bgv debug - " .. L["debug mode, and print the Great Vault's slots"])
+    Utils.Print("/bgv refresh - " .. L["read the Great Vault again"])
+    Utils.Print("/bgv reset - " .. L["reset settings"])
 end
 
 -- Lists every Great Vault slot in chat: progress, requirement and reward item level.
@@ -133,30 +141,39 @@ function BGV.PrintVaultData()
     local ok, snapshot = pcall(BGV.GreatVault.GetSnapshot)
     if not ok then
         BGV.lastError = snapshot
-        Utils.Print("Could not read Great Vault data.")
+        Utils.Print(L["Could not read Great Vault data."])
         return
     end
 
     if BGV.lastError then
-        Utils.Print("Last error: " .. tostring(BGV.lastError))
+        Utils.Print(string.format(L["Last error: %s"], tostring(BGV.lastError)))
     end
 
     if #snapshot == 0 then
-        Utils.Print("No Great Vault activities returned.")
+        Utils.Print(L["No Great Vault activities returned."])
         return
     end
 
-    Utils.Print("Great Vault data:")
+    Utils.Print(L["Great Vault data:"])
     for _, slot in ipairs(snapshot) do
-        local reward = slot.itemLevel and tostring(slot.itemLevel) or "unavailable"
+        local reward = slot.itemLevel and tostring(slot.itemLevel) or L["unavailable"]
         Utils.Print(string.format(
-            "Category: %s | Slot: %d | Progress: %d | Required: %d | Reward ilvl: %s",
+            L["Category: %s | Slot: %d | Progress: %d | Required: %d | Reward ilvl: %s"],
             slot.category,
             slot.index,
             slot.progress,
             slot.threshold,
             reward
         ))
+    end
+end
+
+-- This week's Great Vault in chat, like the minimap popup.
+function BGV.PrintStatus()
+    local lines = BGV.Minimap.StatusLines()
+    Utils.Print(lines[1] or L["Your weekly Great Vault"])
+    for index = 2, #lines do
+        DEFAULT_CHAT_FRAME:AddMessage("    " .. lines[index])
     end
 end
 
@@ -171,8 +188,9 @@ function BGV.RefreshVault()
         end
     else
         BGV.UI.RefreshOpenFrame()
-        Utils.Print("Great Vault data refreshed. Open the Great Vault to see it.")
+        Utils.Print(L["Great Vault data refreshed. Open the Great Vault to see it."])
     end
+    BGV.Minimap.RefreshBroker()
 end
 
 -- Puts every option back to its default. What the addon learned about this season's rewards is
@@ -193,17 +211,19 @@ function BGV.ResetSettings()
     if BGV.Settings and type(BGV.Settings.RefreshAccent) == "function" then
         BGV.Settings.RefreshAccent()
     end
-    Utils.Print("Settings reset.")
+    Utils.Print(L["Settings reset."])
 end
 
 local function HandleSlash(message)
     local command = Utils.Trim(message):lower()
     if command == "" or command == "help" then
         PrintHelp()
+    elseif command == "status" then
+        BGV.PrintStatus()
     elseif command == "debug" then
         SavedDefaults()
         BetterGreatVaultDB.debug = not BetterGreatVaultDB.debug
-        Utils.Print(BetterGreatVaultDB.debug and "Debug enabled." or "Debug disabled.")
+        Utils.Print(BetterGreatVaultDB.debug and L["Debug enabled."] or L["Debug disabled."])
         if BetterGreatVaultDB.debug then
             BGV.PrintVaultData()
         end
@@ -219,7 +239,7 @@ local function HandleSlash(message)
     elseif command == "reset" then
         BGV.ResetSettings()
     else
-        Utils.Print("Unknown command.")
+        Utils.Print(L["Unknown command."])
         PrintHelp()
     end
 end
@@ -228,6 +248,9 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" then
         if arg1 == addonName then
             SavedDefaults()
+            -- The chosen language first: everything built from here on speaks it.
+            BGV.Locale.Apply()
+            NameBindings()
             Utils.ApplyFontSize()
             BGV.Minimap.RegisterSettings()
         elseif arg1 == "Blizzard_WeeklyRewards" then
@@ -241,6 +264,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
         if Utils.IsAddonLoaded("Blizzard_WeeklyRewards") then
             AttachToVault()
         end
+        BGV.Minimap.RegisterBroker()
         return
     end
 
@@ -267,6 +291,9 @@ frame:SetScript("OnEvent", function(_, event, arg1)
         if C_Timer and type(C_Timer.After) == "function" then
             C_Timer.After(0, BGV.Minimap.ApplyCompartment)
         end
+        -- A data bar addon may have brought LibDataBroker after login.
+        BGV.Minimap.RegisterBroker()
+        BGV.Minimap.RefreshBroker()
         if arg1 == true then
             remindUntil = GetTime() + REMIND_FOR
             if C_Timer and type(C_Timer.After) == "function" then
@@ -300,6 +327,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
         end
         RefreshLootLists()
         BGV.GreatVault.Invalidate()
+        BGV.Minimap.RefreshBroker()
         if WeeklyRewardsFrame and type(WeeklyRewardsFrame.IsShown) == "function" and WeeklyRewardsFrame:IsShown() then
             BGV.UI.RefreshOpenFrame()
             BGV.UI.ScheduleContent(WeeklyRewardsFrame)

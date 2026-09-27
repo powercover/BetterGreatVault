@@ -81,9 +81,27 @@ function Utils.GlobalString(key, fallback)
     return fallback
 end
 
+-- One of the game's common words (RAIDS, DUNGEONS...) in the game's language; or the addon's
+-- translation of `english` when the addon speaks another language than the game.
+function Utils.GameText(global, english)
+    if BGV.Locale and BGV.Locale.Foreign() then
+        return BGV.L[english]
+    end
+    return Utils.GlobalString(global, BGV.L[english])
+end
+
+-- Difficulty names in the addon's language, for when it isn't the game's.
+local DIFFICULTY_TEXT = {
+    [1] = "Normal", [2] = "Heroic", [8] = "Mythic Keystone", [14] = "Normal", [15] = "Heroic",
+    [16] = "Mythic", [17] = "Raid Finder", [23] = "Mythic",
+}
+
 function Utils.DifficultyName(difficultyID)
     if not Utils.IsUsableNumber(difficultyID) or difficultyID <= 0 then
         return nil
+    end
+    if DIFFICULTY_TEXT[difficultyID] and BGV.Locale and BGV.Locale.Foreign() then
+        return BGV.L[DIFFICULTY_TEXT[difficultyID]]
     end
 
     if DifficultyUtil and type(DifficultyUtil.GetDifficultyName) == "function" then
@@ -206,11 +224,11 @@ end
 
 function Utils.LootSpecLabel()
     local specID = Utils.LootSpecID()
-    local name = Utils.LootSpecName(specID) or "Unknown"
+    local name = Utils.LootSpecName(specID) or BGV.L["Unknown"]
     if Utils.HasExplicitLootSpec() then
         return name
     end
-    return name .. " (current)"
+    return string.format(BGV.L["%s (current)"], name)
 end
 
 -- Fallback for clients without MenuUtil: steps to the next class specialization.
@@ -319,7 +337,12 @@ function Utils.RefreshLootSpecButton(button)
         button:Hide()
         return
     end
-    button:SetText("Loot Spec: " .. Utils.LootSpecLabel())
+    button:SetText(string.format(BGV.L["Loot Spec: %s"], Utils.LootSpecLabel()))
+    -- Wide enough for its label in any language.
+    local label = button.GetFontString and button:GetFontString()
+    if label and label.GetStringWidth then
+        button:SetWidth(math.max(200, math.ceil((label:GetStringWidth() or 0) + 24)))
+    end
     button:Show()
 end
 
@@ -330,7 +353,7 @@ function Utils.OpenLootSpecMenu(anchor)
         return false
     end
     MenuUtil.CreateContextMenu(anchor, function(_, root)
-        root:CreateRadio("Current Specialization", function()
+        root:CreateRadio(BGV.L["Current Specialization"], function()
             return not Utils.HasExplicitLootSpec()
         end, function()
             Utils.SetLootSpec(0)
@@ -455,18 +478,21 @@ function Utils.Border(parent, r, g, b, a, target)
 end
 
 -- The addon's fonts: Blizzard's, at their size plus the text size offset chosen in the settings
--- (-5 to +5). The addon's text uses these, so a new offset resizes all of it at once.
-local FONTS = {
-    { name = "BetterGreatVaultFontHighlight", template = "GameFontHighlight" },
-    { name = "BetterGreatVaultFontNormal", template = "GameFontNormal" },
-    { name = "BetterGreatVaultFontHighlightSmall", template = "GameFontHighlightSmall" },
-    { name = "BetterGreatVaultFontNormalSmall", template = "GameFontNormalSmall" },
-    { name = "BetterGreatVaultFontNormalLarge", template = "GameFontNormalLarge" },
-    { name = "BetterGreatVaultFontDisable", template = "GameFontDisable" },
+-- (-5 to +5). The addon's text uses these (Utils.FontString), so a new offset resizes all of it.
+local FONT_TEMPLATES = {
+    Highlight = { template = "GameFontHighlight" },
+    Normal = { template = "GameFontNormal" },
+    HighlightSmall = { template = "GameFontHighlightSmall" },
+    NormalSmall = { template = "GameFontNormalSmall" },
+    NormalLarge = { template = "GameFontNormalLarge" },
+    Disable = { template = "GameFontDisable" },
     -- The Great Vault slots' text: small and outlined.
-    { name = "BetterGreatVaultFontVault", template = "GameFontHighlightSmall", size = 10, flags = "OUTLINE" },
+    Vault = { template = "GameFontHighlightSmall", flags = "OUTLINE" },
 }
-local fontBase = {}
+-- Like Blizzard's, each is a family with one font per alphabet, so every language's text shows,
+-- also when the language picked in the settings isn't the game's.
+local ALPHABETS = { "roman", "russian", "korean", "simplifiedchinese", "traditionalchinese" }
+local fonts, fontMembers = {}, {}
 
 function Utils.FontOffset()
     local value = BetterGreatVaultDB and BetterGreatVaultDB.fontSize
@@ -482,25 +508,91 @@ function Utils.FontScale(base)
     return (base + Utils.FontOffset()) / base
 end
 
-function Utils.ApplyFontSize()
-    if type(CreateFont) ~= "function" then
-        return
-    end
-    local offset = Utils.FontOffset()
-    for _, spec in ipairs(FONTS) do
-        local font = _G[spec.name]
-        if not font then
-            font = CreateFont(spec.name)
-            local template = _G[spec.template]
-            if template then
-                font:CopyFontObject(template)
-            end
-            local file, size, flags = font:GetFont()
-            fontBase[spec.name] = { file = file, size = spec.size or size, flags = spec.flags or flags }
+local function TemplateMembers(template, flags)
+    local members = {}
+    for _, alphabet in ipairs(ALPHABETS) do
+        local source = template
+        if type(template.GetFontObjectForAlphabet) == "function" then
+            source = template:GetFontObjectForAlphabet(alphabet) or template
         end
-        local base = fontBase[spec.name]
-        if base and base.file and base.size then
-            font:SetFont(base.file, math.max(4, base.size + offset), base.flags or "")
+        local file, height, ownFlags
+        if type(source.GetFont) == "function" then
+            file, height, ownFlags = source:GetFont()
+        end
+        if file and height then
+            members[#members + 1] = {
+                alphabet = alphabet, file = file, height = height, flags = flags or ownFlags or "", source = source,
+            }
+        end
+    end
+    return members
+end
+
+local function CreateAddonFont(key, spec)
+    local template = _G[spec.template]
+    if not template then
+        return nil
+    end
+    local name = "BetterGreatVaultFont" .. key
+    local members = TemplateMembers(template, spec.flags)
+    if type(CreateFontFamily) == "function" and #members > 0 then
+        local definition = {}
+        for index, member in ipairs(members) do
+            definition[index] = { alphabet = member.alphabet, file = member.file, height = member.height, flags = member.flags }
+        end
+        local ok, font = pcall(CreateFontFamily, name, definition)
+        if ok and font then
+            -- A family's definition has no color or shadow: each member takes Blizzard's.
+            for _, member in ipairs(members) do
+                local target = font:GetFontObjectForAlphabet(member.alphabet)
+                if target then
+                    target:SetTextColor(member.source:GetTextColor())
+                    target:SetShadowColor(member.source:GetShadowColor())
+                    target:SetShadowOffset(member.source:GetShadowOffset())
+                end
+            end
+            fontMembers[key] = members
+            return font
+        end
+    end
+    -- Without font families: one font, in the game's own alphabet.
+    if type(CreateFont) ~= "function" then
+        return nil
+    end
+    local font = CreateFont(name)
+    font:CopyFontObject(template)
+    local file, height, flags = font:GetFont()
+    fontMembers[key] = { { file = file, height = height, flags = spec.flags or flags or "" } }
+    return font
+end
+
+-- The addon's font object for `key`: Highlight, Normal, HighlightSmall, NormalSmall,
+-- NormalLarge, Disable or Vault.
+function Utils.Font(key)
+    return fonts[key] or _G["GameFont" .. key] or GameFontHighlight
+end
+
+-- A font string in the addon's font `key`.
+function Utils.FontString(parent, layer, key)
+    local text = parent:CreateFontString(nil, layer or "OVERLAY")
+    text:SetFontObject(Utils.Font(key))
+    return text
+end
+
+function Utils.ApplyFontSize()
+    local offset = Utils.FontOffset()
+    for key, spec in pairs(FONT_TEMPLATES) do
+        local font = fonts[key]
+        if not font then
+            font = CreateAddonFont(key, spec)
+            fonts[key] = font
+        end
+        for _, member in ipairs(font and fontMembers[key] or {}) do
+            local target = font
+            if member.alphabet and type(font.GetFontObjectForAlphabet) == "function" then
+                target = font:GetFontObjectForAlphabet(member.alphabet) or font
+            end
+            target:SetFont(member.file, math.max(4, member.height + offset), member.flags)
         end
     end
 end
@@ -517,13 +609,41 @@ function Utils.CreateFlatButton(parent, width, height)
     Utils.Border(button, 0.3, 0.3, 0.33, 1)
     local glow = Utils.Pixel(button, "HIGHLIGHT", 1, 1, 1, 0.07)
     glow:SetAllPoints()
-    local text = button:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlightSmall")
+    local text = Utils.FontString(button, "OVERLAY", "HighlightSmall")
     text:SetPoint("LEFT", button, "LEFT", 8, 0)
     text:SetPoint("RIGHT", button, "RIGHT", -8, 0)
     text:SetWordWrap(false)
     button:SetFontString(text)
     button:SetPushedTextOffset(0, -1)
     return button
+end
+
+-- Upper case for the small headings, in any of the addon's languages: string.upper only knows
+-- English letters, so accented Latin (é, ü, ñ) and Cyrillic (ж, і, ї, є, ґ) letters are mapped
+-- here. Other scripts have no case.
+function Utils.Upper(text)
+    -- By byte range, not string.upper: that follows the process locale, which can touch the
+    -- bytes of UTF-8 letters.
+    text = text:gsub("[a-z]", function(letter)
+        return string.char(letter:byte() - 32)
+    end)
+    text = text:gsub("\195([\160-\190])", function(byte)
+        if byte == "\183" then
+            return nil
+        end
+        return "\195" .. string.char(byte:byte() - 32)
+    end)
+    text = text:gsub("\208([\176-\191])", function(byte)
+        return "\208" .. string.char(byte:byte() - 32)
+    end)
+    text = text:gsub("\209([\128-\143])", function(byte)
+        return "\208" .. string.char(byte:byte() + 32)
+    end)
+    text = text:gsub("\209([\144-\159])", function(byte)
+        return "\208" .. string.char(byte:byte() - 16)
+    end)
+    text = text:gsub("\210\145", "\210\144")
+    return text
 end
 
 function Utils.Trim(value)
