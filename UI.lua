@@ -205,65 +205,7 @@ local function EnsureFX(activityFrame)
     activityFrame.bgvFX = fx
 end
 
-local SPEC_LINE = {
-    [250] = { 0.78, 0.06, 0.10 },
-    [251] = { 0.55, 0.86, 1.00 },
-    [252] = { 0.35, 0.82, 0.28 },
-    [577] = { 0.20, 0.85, 0.45 },
-    [581] = { 0.55, 0.20, 0.75 },
-    [1480] = { 0.48, 0.22, 0.90 },
-    [102] = { 0.35, 0.55, 1.00 },
-    [103] = { 1.00, 0.48, 0.12 },
-    [104] = { 0.82, 0.52, 0.16 },
-    [105] = { 0.25, 0.82, 0.38 },
-    [1467] = { 0.90, 0.28, 0.20 },
-    [1468] = { 0.22, 0.75, 0.55 },
-    [1473] = { 0.82, 0.62, 0.28 },
-    [253] = { 0.78, 0.68, 0.28 },
-    [254] = { 0.55, 0.75, 0.92 },
-    [255] = { 0.90, 0.42, 0.16 },
-    [62] = { 0.62, 0.38, 0.95 },
-    [63] = { 1.00, 0.42, 0.12 },
-    [64] = { 0.62, 0.90, 1.00 },
-    [268] = { 0.78, 0.48, 0.16 },
-    [269] = { 0.25, 0.88, 0.68 },
-    [270] = { 0.45, 0.85, 0.70 },
-    [65] = { 1.00, 0.86, 0.42 },
-    [66] = { 0.72, 0.74, 0.86 },
-    [70] = { 1.00, 0.72, 0.22 },
-    [256] = { 0.82, 0.88, 1.00 },
-    [257] = { 1.00, 0.94, 0.70 },
-    [258] = { 0.55, 0.28, 0.85 },
-    [259] = { 0.32, 0.78, 0.22 },
-    [260] = { 0.85, 0.22, 0.16 },
-    [261] = { 0.55, 0.40, 0.75 },
-    [262] = { 0.28, 0.55, 1.00 },
-    [263] = { 0.88, 0.50, 0.16 },
-    [264] = { 0.22, 0.62, 0.90 },
-    [265] = { 0.58, 0.32, 0.85 },
-    [266] = { 0.38, 0.75, 0.28 },
-    [267] = { 0.95, 0.32, 0.12 },
-    [71] = { 0.72, 0.28, 0.16 },
-    [72] = { 0.90, 0.16, 0.14 },
-    [73] = { 0.70, 0.58, 0.42 },
-}
-
-local function AccentColor()
-    if not BetterGreatVaultDB or BetterGreatVaultDB.useSpecAccent ~= false then
-        local specID = Utils.CurrentSpecID()
-        return specID and SPEC_LINE[specID] or { 0.85, 0.65, 0.2 }
-    end
-    local saved = BetterGreatVaultDB.accentColor
-    if type(saved) == "table" then
-        local r = saved.r or saved[1]
-        local g = saved.g or saved[2]
-        local b = saved.b or saved[3]
-        if type(r) == "number" and type(g) == "number" and type(b) == "number" then
-            return { r, g, b }
-        end
-    end
-    return { 0.85, 0.65, 0.2 }
-end
+local AccentColor = Utils.AccentColor
 
 local function ColorMarker(fx)
     local line = fx and fx.markerLine
@@ -1199,7 +1141,7 @@ local function EnsureSpecButton(weeklyRewardsFrame)
     if button then
         return button
     end
-    button = Utils.CreateLootSpecButton(weeklyRewardsFrame)
+    button = Utils.CreateLootSpecButton(weeklyRewardsFrame, true)
     button:SetPoint("TOPLEFT", weeklyRewardsFrame, "TOPLEFT", 18, -34)
     button:SetFrameLevel(weeklyRewardsFrame:GetFrameLevel() + 20)
     weeklyRewardsFrame.bgvSpecButton = button

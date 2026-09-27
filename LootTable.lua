@@ -88,8 +88,23 @@ local linkRows = {}
 local itemCache = {}
 local templateCache = {}
 local Layout
+local RefreshHeaderFilters
 local pendingWatch
 local chunkQueued
+
+-- Smooth scrolling (like the settings panel): the mouse wheel sets a target the list eases to.
+local scrollTarget
+local UpdateScrollThumb
+
+local function JumpScroll(offset)
+    scrollTarget = nil
+    if scroll then
+        scroll:SetVerticalScroll(offset or 0)
+    end
+    if UpdateScrollThumb then
+        UpdateScrollThumb()
+    end
+end
 
 -- "vault": the Great Vault's own slots. "database" (Shift+middle-click on the minimap button):
 -- everything the vault can award this season, as if everything were completed, for any class
@@ -109,6 +124,26 @@ local railTitle
 local dbRows = {}
 
 local Pixel = BGV.Utils.Pixel
+
+-- The addon's accent color (settings: the spec's color or a custom one), on the window's lines,
+-- bars, scroll indicator, active filters and row hover. Text keeps its own colors.
+local accentColor = { 0.85, 0.65, 0.2 }
+local accentTextures = {}
+
+local function Accent(texture, alpha)
+    accentTextures[#accentTextures + 1] = { texture = texture, alpha = alpha or 1 }
+    texture:SetVertexColor(accentColor[1], accentColor[2], accentColor[3], alpha or 1)
+    return texture
+end
+
+-- Dark text on a light accent, light text on a dark one.
+local function OnAccentText()
+    local luminance = 0.299 * accentColor[1] + 0.587 * accentColor[2] + 0.114 * accentColor[3]
+    if luminance > 0.5 then
+        return 0.07, 0.07, 0.08
+    end
+    return 1, 1, 1
+end
 
 local function CategoryFor(slot)
     if type(slot) ~= "table" then
@@ -792,32 +827,38 @@ local function Acquire()
         row = CreateFrame("Button", nil, child)
         row.bgvLootRow = true
         row:RegisterForClicks("AnyUp")
-        row.stripe = Pixel(row, "BACKGROUND", 1, 1, 1, 0.03)
+        row.stripe = Pixel(row, "BACKGROUND", 1, 1, 1, 0.025)
         row.stripe:SetDrawLayer("BACKGROUND", -1)
         row.stripe:SetAllPoints()
         row.stripe:Hide()
-        row.band = Pixel(row, "BACKGROUND", 0.85, 0.65, 0.2, 0.12)
+        row.band = Pixel(row, "BACKGROUND", 1, 1, 1, 0.05)
         row.band:SetDrawLayer("BACKGROUND", -1)
         row.band:SetAllPoints()
         row.band:Hide()
-        row.bandEdge = Pixel(row, "ARTWORK", 0.85, 0.65, 0.2, 0.9)
+        row.bandEdge = Pixel(row, "ARTWORK", 0.85, 0.65, 0.2, 0.95)
         row.bandEdge:SetWidth(2)
         row.bandEdge:SetPoint("TOPLEFT")
         row.bandEdge:SetPoint("BOTTOMLEFT")
         row.bandEdge:Hide()
+        -- A 1px quality-coloured edge around the icon (the icon's own border cropped away).
         row.iconBG = Pixel(row, "BACKGROUND", 1, 1, 1, 1)
-        row.iconBG:SetSize(26, 26)
+        row.iconBG:SetSize(24, 24)
         row.iconBG:Hide()
         row.icon = row:CreateTexture(nil, "ARTWORK")
         row.icon:SetSize(22, 22)
         row.icon:SetPoint("LEFT", 9, 0)
+        row.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
         row.iconBG:SetPoint("CENTER", row.icon, "CENTER", 0, 0)
+        -- The Tier column's coloured badge, with the letter on it.
+        row.tierBadge = Pixel(row, "ARTWORK", 1, 1, 1, 1)
+        row.tierBadge:SetSize(20, 16)
+        row.tierBadge:Hide()
 
         row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         row.name:SetJustifyH("LEFT")
         row.name:SetWordWrap(false)
-        row.tier = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        row.tier:SetJustifyH("LEFT")
+        row.tier = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        row.tier:SetJustifyH("CENTER")
         row.tier:SetWordWrap(false)
         row.level = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         row.level:SetJustifyH("LEFT")
@@ -828,7 +869,10 @@ local function Acquire()
         -- One font string per secondary stat, stacked (see PaintStats).
         row.statLines = {}
 
-        row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestLogTitleHighlight", "ADD")
+        -- Hover: a light accent wash in the HIGHLIGHT layer. (A Button's own highlight texture is
+        -- drawn additively and ignores its alpha, which turned rows solid white.)
+        row.hover = Pixel(row, "HIGHLIGHT", 1, 1, 1, 0.12)
+        row.hover:SetAllPoints()
         row:SetScript("OnEnter", function(self)
             ShowItemTooltip(self, self.entry)
         end)
@@ -851,6 +895,10 @@ local function Acquire()
     row.band:Hide()
     row.bandEdge:Hide()
     row.iconBG:Hide()
+    row.tierBadge:Hide()
+    row.hover:SetVertexColor(accentColor[1], accentColor[2], accentColor[3], 0.12)
+    row.hover:Show()
+    row.bandEdge:SetVertexColor(accentColor[1], accentColor[2], accentColor[3], 0.95)
     row.icon:SetTexture(nil)
     row.name:SetFontObject(GameFontHighlight)
     row.name:SetText("")
@@ -861,9 +909,6 @@ local function Acquire()
     for _, line in ipairs(row.statLines) do
         line:SetText("")
         line:Hide()
-    end
-    if row:GetHighlightTexture() then
-        row:GetHighlightTexture():SetAlpha(1)
     end
     row:Show()
     return row
@@ -907,8 +952,9 @@ local function PaintLinks(model)
         if not link then
             link = CreateFrame("Button", nil, rail)
             link:SetHeight(28)
-            link:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestLogTitleHighlight", "ADD")
-            local bar = Pixel(link, "ARTWORK", 0.85, 0.65, 0.2, 1)
+            link.hover = Pixel(link, "HIGHLIGHT", 1, 1, 1, 0.05)
+            link.hover:SetAllPoints()
+            local bar = Accent(Pixel(link, "ARTWORK", 1, 1, 1, 1))
             bar:SetSize(2, 14)
             bar:SetPoint("LEFT", link, "LEFT", 0, 0)
             bar:Hide()
@@ -949,9 +995,7 @@ local function PaintLinks(model)
         header.kind = "header"
         header.selected = false
         header:SetScript("OnClick", nil)
-        if header:GetHighlightTexture() then
-            header:GetHighlightTexture():SetAlpha(0)
-        end
+        header.hover:Hide()
         header:ClearAllPoints()
         header:SetPoint("TOPLEFT", rail, "TOPLEFT", 16, -y)
         header:SetPoint("TOPRIGHT", rail, "TOPRIGHT", -8, -y)
@@ -965,9 +1009,7 @@ local function PaintLinks(model)
             local selected = section.id == selectedKey
             link.kind = "slot"
             link.selected = selected
-            if link:GetHighlightTexture() then
-                link:GetHighlightTexture():SetAlpha(1)
-            end
+            link.hover:Show()
             link:ClearAllPoints()
             link:SetPoint("TOPLEFT", rail, "TOPLEFT", 28, -y)
             link:SetPoint("TOPRIGHT", rail, "TOPRIGHT", -8, -y)
@@ -1079,8 +1121,10 @@ local function PlaceColumns(row, rowWidth)
     row.name:ClearAllPoints()
     row.name:SetPoint("LEFT", row, "LEFT", NAME_X, 0)
     row.name:SetWidth(math.max(40, tierX - NAME_X - 10))
+    row.tierBadge:ClearAllPoints()
+    row.tierBadge:SetPoint("LEFT", row, "LEFT", tierX, 0)
     row.tier:ClearAllPoints()
-    row.tier:SetPoint("LEFT", row, "LEFT", tierX, 0)
+    row.tier:SetPoint("CENTER", row.tierBadge, "CENTER", 0, 0)
     row.tier:SetWidth(TIER_W - 8)
     row.level:ClearAllPoints()
     row.level:SetPoint("LEFT", row, "LEFT", levelX, 0)
@@ -1188,19 +1232,18 @@ local function AddGroupHeader(group, rowWidth, y)
     row.entry = nil
     row.band:Show()
     row.bandEdge:Show()
-    if row:GetHighlightTexture() then
-        row:GetHighlightTexture():SetAlpha(0)
-    end
+    row.hover:Hide()
     row.name:ClearAllPoints()
     row.name:SetPoint("LEFT", row, "LEFT", 12, 0)
     row.name:SetWidth(rowWidth - 24)
     row.name:SetFontObject(GameFontNormal)
-    row.name:SetText(string.format("%s  |cff8a8a8e%d|r", group.name, #group.entries))
-    row.name:SetTextColor(0.95, 0.8, 0.45)
+    row.name:SetText(string.format("%s   |cff77777b%d|r", group.name, #group.entries))
+    row.name:SetTextColor(0.96, 0.86, 0.6)
 end
 
 local function ShowMessage(text, rowWidth)
     local row = Acquire()
+    row.hover:Hide()
     row:ClearAllPoints()
     row:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -8)
     row:SetWidth(rowWidth)
@@ -1303,6 +1346,17 @@ local function HideDatabaseRail()
     end
 end
 
+local function PaintAccent()
+    local color = BGV.Utils and type(BGV.Utils.AccentColor) == "function" and BGV.Utils.AccentColor()
+    if type(color) == "table" then
+        accentColor = color
+    end
+    for _, item in ipairs(accentTextures) do
+        item.texture:SetVertexColor(accentColor[1], accentColor[2], accentColor[3], item.alpha)
+    end
+    RefreshHeaderFilters()
+end
+
 local function RefreshModeWidgets()
     local database = mode == "database"
     if windowTitle then
@@ -1333,6 +1387,7 @@ function Layout()
     end
     local database = mode == "database"
     statLookups = STAT_LOOKUPS_PER_PASS
+    PaintAccent()
     RefreshModeWidgets()
     ReleaseRows()
     local model, section
@@ -1344,7 +1399,7 @@ function Layout()
     end
     local key = section and section.key or selectedKey
     if scroll.bgvKey ~= key then
-        scroll:SetVerticalScroll(0)
+        JumpScroll(0)
         scroll.bgvKey = key
     end
 
@@ -1457,15 +1512,17 @@ function Layout()
             row.entry = entry
             row.icon:SetTexture(entry.icon)
             local r, g, b = QualityColor(entry)
-            row.iconBG:SetVertexColor(r, g, b, 0.55)
+            row.iconBG:SetVertexColor(r, g, b, 0.9)
             row.iconBG:Show()
             row.name:SetText(entry.name or "Item")
             row.name:SetTextColor(r, g, b)
             local tier = BestTier(entry.itemID, tierSpecs)
             if tier then
                 local color = TIER_TEXT[tier]
+                row.tierBadge:SetVertexColor(color[1], color[2], color[3], 0.95)
+                row.tierBadge:Show()
                 row.tier:SetText(tier)
-                row.tier:SetTextColor(color[1], color[2], color[3])
+                row.tier:SetTextColor(0.07, 0.07, 0.08)
             else
                 row.tier:SetText("-")
                 row.tier:SetTextColor(0.45, 0.45, 0.48)
@@ -1511,8 +1568,8 @@ local function PaintHeaderFilter(button, text, active)
     button.text:SetText(text)
     button:SetWidth(math.max(16, math.ceil(button.text:GetStringWidth() or 0) + 8))
     if active then
-        button.back:SetVertexColor(0.85, 0.65, 0.2, 0.95)
-        button.text:SetTextColor(0.08, 0.08, 0.08)
+        button.back:SetVertexColor(accentColor[1], accentColor[2], accentColor[3], 0.95)
+        button.text:SetTextColor(OnAccentText())
     else
         button.back:SetVertexColor(0.24, 0.24, 0.26, 0.95)
         button.text:SetTextColor(0.85, 0.65, 0.2)
@@ -1528,7 +1585,7 @@ local function GearFilterLabel()
     return FILTERS[1].label
 end
 
-local function RefreshHeaderFilters()
+function RefreshHeaderFilters()
     PaintHeaderFilter(gearFilterButton, filterID == "ALL" and "+" or GearFilterLabel(), filterID ~= "ALL")
     local letters = {}
     for _, stat in ipairs(SelectedStats()) do
@@ -1540,17 +1597,13 @@ end
 local function ApplyFilter(id)
     filterID = id
     RefreshHeaderFilters()
-    if scroll then
-        scroll:SetVerticalScroll(0)
-    end
+    JumpScroll(0)
     Layout()
 end
 
 local function ApplyStatFilter()
     RefreshHeaderFilters()
-    if scroll then
-        scroll:SetVerticalScroll(0)
-    end
+    JumpScroll(0)
     Layout()
 end
 
@@ -1647,9 +1700,7 @@ local function CreateHeaderFilter(label, onClick, describe)
 end
 
 local function ScrollTop()
-    if scroll then
-        scroll:SetVerticalScroll(0)
-    end
+    JumpScroll(0)
 end
 
 local function SelectDatabaseSource(sourceID)
@@ -1775,7 +1826,7 @@ local function Build()
     if frame then
         return frame
     end
-    frame = CreateFrame("Frame", "BetterGreatVaultLootTable", UIParent, "BackdropTemplate")
+    frame = CreateFrame("Frame", "BetterGreatVaultLootTable", UIParent)
     frame:SetSize(1000, 560)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("DIALOG")
@@ -1788,26 +1839,24 @@ local function Build()
         frame:SetResizeBounds(840, 400, 1400, 900)
     end
     frame:Hide()
-    if frame.SetBackdrop then
-        frame:SetBackdrop({
-            bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-            edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-            tile = true,
-            tileSize = 32,
-            edgeSize = 24,
-            insets = { left = 8, right = 8, top = 8, bottom = 8 },
-        })
-        frame:SetBackdropColor(0.05, 0.05, 0.06, 0.98)
-        frame:SetBackdropBorderColor(0.85, 0.65, 0.2, 1)
-    else
-        Pixel(frame, "BACKGROUND", 0.07, 0.07, 0.08, 0.98):SetAllPoints()
+    -- Flat, like the settings panel: a soft shadow, a dark body with a 1px border, and a title
+    -- bar with a thin gold rule.
+    for step, alpha in ipairs({ 0.22, 0.14, 0.07 }) do
+        local shadow = Pixel(frame, "BACKGROUND", 0, 0, 0, alpha)
+        shadow:SetDrawLayer("BACKGROUND", -8)
+        shadow:SetPoint("TOPLEFT", -2 * step, 2 * step)
+        shadow:SetPoint("BOTTOMRIGHT", 2 * step, -2 * step)
     end
+    local body = Pixel(frame, "BACKGROUND", 0.055, 0.055, 0.065, 0.97)
+    body:SetDrawLayer("BACKGROUND", -7)
+    body:SetAllPoints()
+    BGV.Utils.Border(frame, 0.24, 0.24, 0.27, 1)
 
-    local titleBar = Pixel(frame, "BORDER", 0, 0, 0, 0.22)
-    titleBar:SetPoint("TOPLEFT", 8, -8)
-    titleBar:SetPoint("TOPRIGHT", -8, -8)
-    titleBar:SetHeight(34)
-    local titleRule = Pixel(frame, "ARTWORK", 0.85, 0.65, 0.2, 0.8)
+    local titleBar = Pixel(frame, "BACKGROUND", 0.085, 0.085, 0.097, 1)
+    titleBar:SetPoint("TOPLEFT", 1, -1)
+    titleBar:SetPoint("TOPRIGHT", -1, -1)
+    titleBar:SetHeight(39)
+    local titleRule = Accent(Pixel(frame, "ARTWORK", 1, 1, 1, 1), 0.6)
     titleRule:SetHeight(1)
     titleRule:SetPoint("TOPLEFT", titleBar, "BOTTOMLEFT", 0, 0)
     titleRule:SetPoint("TOPRIGHT", titleBar, "BOTTOMRIGHT", 0, 0)
@@ -1830,19 +1879,42 @@ local function Build()
         frame:StopMovingOrSizing()
     end)
 
-    local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
-    close:SetPoint("TOPRIGHT", -2, -2)
+    -- A flat close button: two thin crossed lines, red glow on hover.
+    local close = CreateFrame("Button", nil, frame)
+    close:SetSize(26, 26)
+    close:SetPoint("TOPRIGHT", -7, -7)
+    local closeGlow = Pixel(close, "HIGHLIGHT", 0.85, 0.2, 0.2, 0.35)
+    closeGlow:SetAllPoints()
+    local cross = {}
+    for index, angle in ipairs({ 45, -45 }) do
+        local line = Pixel(close, "ARTWORK", 0.62, 0.62, 0.65, 1)
+        line:SetSize(14, 2)
+        line:SetPoint("CENTER", close, "CENTER", 0, 0)
+        if line.SetRotation then
+            line:SetRotation(math.rad(angle))
+        end
+        cross[index] = line
+    end
+    close:SetScript("OnEnter", function()
+        for _, line in ipairs(cross) do
+            line:SetVertexColor(1, 1, 1, 1)
+        end
+    end)
+    close:SetScript("OnLeave", function()
+        for _, line in ipairs(cross) do
+            line:SetVertexColor(0.62, 0.62, 0.65, 1)
+        end
+    end)
     close:SetScript("OnClick", function()
         frame:Hide()
     end)
 
-    specButton = BGV.Utils.CreateLootSpecButton(frame)
-    specButton:SetPoint("TOPRIGHT", -46, -12)
+    specButton = BGV.Utils.CreateLootSpecButton(frame, true)
+    specButton:SetPoint("TOPRIGHT", -42, -9)
 
     -- Database mode: the class and spec to list loot for, in the loot spec button's place.
-    classButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    classButton:SetSize(200, 22)
-    classButton:SetPoint("TOPRIGHT", -46, -12)
+    classButton = BGV.Utils.CreateFlatButton(frame, 200, 22)
+    classButton:SetPoint("TOPRIGHT", -42, -9)
     classButton:SetScript("OnClick", function(self)
         OpenClassMenu(self)
     end)
@@ -1857,7 +1929,9 @@ local function Build()
     rail:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -40)
     rail:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 0, 0)
     rail:SetWidth(LEFT_W)
-    Pixel(rail, "BACKGROUND", 0, 0, 0, 0.18):SetAllPoints()
+    local railBack = Pixel(rail, "BACKGROUND", 0.035, 0.035, 0.042, 0.8)
+    railBack:SetPoint("TOPLEFT", rail, "TOPLEFT", 1, 0)
+    railBack:SetPoint("BOTTOMRIGHT", rail, "BOTTOMRIGHT", 0, 1)
     local contents = rail:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     contents:SetPoint("TOPLEFT", rail, "TOPLEFT", 16, -12)
     contents:SetText("Contents")
@@ -1868,8 +1942,9 @@ local function Build()
     for _, source in ipairs(DB_SOURCES) do
         local row = CreateFrame("Button", nil, rail)
         row:SetHeight(54)
-        row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestLogTitleHighlight", "ADD")
-        row.bar = Pixel(row, "ARTWORK", 0.85, 0.65, 0.2, 1)
+        row.hover = Pixel(row, "HIGHLIGHT", 1, 1, 1, 0.05)
+        row.hover:SetAllPoints()
+        row.bar = Accent(Pixel(row, "ARTWORK", 1, 1, 1, 1))
         row.bar:SetSize(2, 40)
         row.bar:SetPoint("LEFT", row, "LEFT", 0, 0)
         row.bar:Hide()
@@ -1878,8 +1953,7 @@ local function Build()
         row.label:SetPoint("RIGHT", row, "RIGHT", -8, 0)
         row.label:SetJustifyH("LEFT")
         row.label:SetWordWrap(false)
-        row.level = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-        row.level:SetHeight(20)
+        row.level = BGV.Utils.CreateFlatButton(row, 120, 20)
         row.level:SetPoint("TOPLEFT", row, "TOPLEFT", 12, -26)
         row.level:SetPoint("RIGHT", row, "RIGHT", -8, 0)
         local sourceID = source.id
@@ -1892,10 +1966,10 @@ local function Build()
         row:Hide()
         dbRows[sourceID] = row
     end
-    local divider = Pixel(frame, "BORDER", 0.22, 0.22, 0.24, 1)
+    local divider = Pixel(frame, "BORDER", 0.18, 0.18, 0.2, 1)
     divider:SetWidth(1)
     divider:SetPoint("TOPLEFT", rail, "TOPRIGHT", 0, 0)
-    divider:SetPoint("BOTTOMLEFT", rail, "BOTTOMRIGHT", 0, 0)
+    divider:SetPoint("BOTTOMLEFT", rail, "BOTTOMRIGHT", 0, 1)
     rail.divider = divider
 
     headerTitle = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -1908,7 +1982,7 @@ local function Build()
     headerReward:SetJustifyH("LEFT")
     headerReward:SetWordWrap(false)
     headerReward:SetTextColor(1, 0.82, 0)
-    local rule = Pixel(frame, "ARTWORK", 0.85, 0.65, 0.2, 0.9)
+    local rule = Accent(Pixel(frame, "ARTWORK", 1, 1, 1, 1), 0.9)
     rule:SetSize(36, 2)
     rule:SetPoint("TOPLEFT", headerReward, "BOTTOMLEFT", 0, -6)
 
@@ -1921,8 +1995,8 @@ local function Build()
     columnHeader:SetHeight(24)
     columnHeader:SetPoint("BOTTOMLEFT", scroll, "TOPLEFT", 0, 4)
     columnHeader:SetPoint("BOTTOMRIGHT", scroll, "TOPRIGHT", 0, 4)
-    Pixel(columnHeader, "BACKGROUND", 0, 0, 0, 0.35):SetAllPoints()
-    local headerRule = Pixel(columnHeader, "ARTWORK", 0.85, 0.65, 0.2, 0.6)
+    Pixel(columnHeader, "BACKGROUND", 0.1, 0.1, 0.112, 1):SetAllPoints()
+    local headerRule = Accent(Pixel(columnHeader, "ARTWORK", 1, 1, 1, 1), 0.45)
     headerRule:SetHeight(1)
     headerRule:SetPoint("BOTTOMLEFT")
     headerRule:SetPoint("BOTTOMRIGHT")
@@ -1930,7 +2004,7 @@ local function Build()
     for _, column in ipairs({ { "item", "Item" }, { "tier", "Tier" }, { "level", "Item Level" }, { "stats", "Secondary stats" }, { "slot", "Slot" } }) do
         local label = columnHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         label:SetText(column[2]:upper())
-        label:SetTextColor(0.85, 0.65, 0.2)
+        label:SetTextColor(0.66, 0.66, 0.7)
         label:SetJustifyH("LEFT")
         columnHeader.labels[column[1]] = label
     end
@@ -1952,25 +2026,60 @@ local function Build()
     child = CreateFrame("Frame", nil, scroll)
     child:SetSize(520, 40)
     scroll:SetScrollChild(child)
+    -- A thin scroll indicator in the right margin, shown only when the list overflows.
+    local track = Pixel(frame, "ARTWORK", 1, 1, 1, 0.05)
+    track:SetWidth(3)
+    track:SetPoint("TOPLEFT", scroll, "TOPRIGHT", 6, 0)
+    track:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", 6, 0)
+    local thumb = Accent(Pixel(frame, "OVERLAY", 1, 1, 1, 1), 0.7)
+    thumb:SetWidth(3)
+    UpdateScrollThumb = function()
+        local range = scroll:GetVerticalScrollRange() or 0
+        local height = scroll:GetHeight() or 0
+        if range <= 0 or height <= 0 then
+            track:Hide()
+            thumb:Hide()
+            return
+        end
+        local thumbHeight = math.max(24, height * height / (height + range))
+        local offset = (scroll:GetVerticalScroll() or 0) / range * (height - thumbHeight)
+        thumb:SetHeight(thumbHeight)
+        thumb:ClearAllPoints()
+        thumb:SetPoint("TOP", track, "TOP", 0, -offset)
+        track:Show()
+        thumb:Show()
+    end
+    scroll:SetScript("OnScrollRangeChanged", function()
+        UpdateScrollThumb()
+    end)
+    scroll:SetScript("OnVerticalScroll", function()
+        UpdateScrollThumb()
+    end)
     scroll:SetScript("OnMouseWheel", function(self, delta)
-        local offset = self:GetVerticalScroll() - delta * 48
-        local maxScroll = self:GetVerticalScrollRange()
-        if offset < 0 then
-            offset = 0
+        local maxScroll = self:GetVerticalScrollRange() or 0
+        local target = (scrollTarget or self:GetVerticalScroll()) - delta * 64
+        scrollTarget = math.max(0, math.min(maxScroll, target))
+    end)
+    scroll:SetScript("OnUpdate", function(self, elapsed)
+        if not scrollTarget then
+            return
         end
-        if offset > maxScroll then
-            offset = maxScroll
+        local current = self:GetVerticalScroll()
+        local distance = scrollTarget - current
+        if math.abs(distance) < 0.5 then
+            self:SetVerticalScroll(scrollTarget)
+            scrollTarget = nil
+        else
+            self:SetVerticalScroll(current + distance * math.min(1, elapsed * 14))
         end
-        self:SetVerticalScroll(offset)
     end)
 
     local sizer = CreateFrame("Button", nil, frame)
-    sizer:SetSize(18, 18)
-    sizer:SetPoint("BOTTOMRIGHT")
-    local grip = sizer:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    grip:SetPoint("CENTER")
-    grip:SetText("..")
-    grip:SetTextColor(0.45, 0.45, 0.48)
+    sizer:SetSize(14, 14)
+    sizer:SetPoint("BOTTOMRIGHT", -3, 3)
+    sizer:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    sizer:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    sizer:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
     sizer:SetScript("OnMouseDown", function()
         frame:StartSizing("BOTTOMRIGHT")
     end)
@@ -2076,10 +2185,15 @@ function BGV.LootTable.Show(slot)
     PlaceHeaders()
     window:Show()
     window:Raise()
-    if scroll then
-        scroll:SetVerticalScroll(0)
-    end
+    JumpScroll(0)
     Layout()
+end
+
+-- Repaints an open table (the accent color changed in the settings).
+function BGV.LootTable.RefreshStyle()
+    if frame and frame:IsShown() then
+        Layout()
+    end
 end
 
 function BGV.LootTable.ShowSlot(slot)
