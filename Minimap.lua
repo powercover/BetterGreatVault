@@ -1,13 +1,26 @@
-local _, BGV = ...
+local addonName, BGV = ...
 
 BGV.Minimap = {}
 
 local Utils = BGV.Utils
 local MEDIA = "Interface\\AddOns\\BetterGreatVault\\Media\\"
 local RADIUS = 80
+local DEFAULT_ANGLE = 220
 
 local function ShowMinimap()
     return not BetterGreatVaultDB or BetterGreatVaultDB.showMinimap ~= false
+end
+
+local function Independent()
+    return BetterGreatVaultDB and BetterGreatVaultDB.independentMinimap == true
+end
+
+local function Fading()
+    return BetterGreatVaultDB and BetterGreatVaultDB.fadeMinimap == true
+end
+
+local function PopupOnHover()
+    return not BetterGreatVaultDB or BetterGreatVaultDB.minimapPopup ~= false
 end
 
 local function LoadVaultUI()
@@ -18,10 +31,9 @@ local function VaultShown()
     return WeeklyRewardsFrame and type(WeeklyRewardsFrame.IsShown) == "function" and WeeklyRewardsFrame:IsShown()
 end
 
-function BGV.Minimap.ToggleVault()
+function BGV.Minimap.ShowVault()
     LoadVaultUI()
     if VaultShown() then
-        WeeklyRewardsFrame:Hide()
         return
     end
     if type(WeeklyRewards_Show) == "function" then
@@ -29,6 +41,15 @@ function BGV.Minimap.ToggleVault()
     elseif WeeklyRewardsFrame and type(WeeklyRewardsFrame.Show) == "function" then
         WeeklyRewardsFrame:Show()
     end
+end
+
+function BGV.Minimap.ToggleVault()
+    LoadVaultUI()
+    if VaultShown() then
+        WeeklyRewardsFrame:Hide()
+        return
+    end
+    BGV.Minimap.ShowVault()
 end
 
 function BGV.Minimap.ToggleSettings()
@@ -44,6 +65,19 @@ button:SetFrameLevel(8)
 button:RegisterForClicks("AnyUp")
 button:RegisterForDrag("LeftButton")
 button:Hide()
+
+-- "Unaffected by other addons" (settings) moves the button into a frame of its own: minimap button
+-- addons gather the minimap's children, not this. It follows the minimap's visibility and scale.
+local container = CreateFrame("Frame", nil, UIParent)
+container:SetSize(1, 1)
+container:SetPoint("CENTER", Minimap, "CENTER")
+container:SetShown(Minimap:IsShown())
+Minimap:HookScript("OnShow", function()
+    container:Show()
+end)
+Minimap:HookScript("OnHide", function()
+    container:Hide()
+end)
 
 -- The vault door emblem in layers: the rim and door, the handle (turns a quarter on hover, like
 -- unlocking), the gem, the gem's pulse (rewards waiting to be claimed), and a glow behind it in
@@ -91,22 +125,31 @@ end)
 
 -- Hover: the handle eases a quarter turn and the glow fades in, and back on leave. Driven by an
 -- OnUpdate that only runs while something is still moving.
-local motion = { angle = 0, target = 0, glow = 0, glowTarget = 0 }
+-- With fading on, the button's alpha eases the same way.
+local motion = { angle = 0, target = 0, glow = 0, glowTarget = 0, alpha = 1, alphaTarget = 1, fading = false }
 local animator = CreateFrame("Frame", nil, button)
 
 local function Step(_, elapsed)
     motion.angle = motion.angle + (motion.target - motion.angle) * math.min(1, elapsed * 9)
     motion.glow = motion.glow + (motion.glowTarget - motion.glow) * math.min(1, elapsed * 12)
-    if math.abs(motion.target - motion.angle) < 0.2 and math.abs(motion.glowTarget - motion.glow) < 0.01 then
-        motion.angle, motion.glow = motion.target, motion.glowTarget
+    motion.alpha = motion.alpha + (motion.alphaTarget - motion.alpha) * math.min(1, elapsed * 10)
+    if math.abs(motion.target - motion.angle) < 0.2 and math.abs(motion.glowTarget - motion.glow) < 0.01
+        and math.abs(motion.alphaTarget - motion.alpha) < 0.01 then
+        motion.angle, motion.glow, motion.alpha = motion.target, motion.glowTarget, motion.alphaTarget
         animator:SetScript("OnUpdate", nil)
     end
     wheel:SetRotation(math.rad(motion.angle))
     glow:SetAlpha(motion.glow)
+    if motion.fading then
+        button:SetAlpha(motion.alpha)
+    end
 end
 
-local function AnimateTo(angle, glowAlpha)
+local function AnimateTo(angle, glowAlpha, alpha)
     motion.target, motion.glowTarget = angle, glowAlpha
+    if alpha then
+        motion.alphaTarget = alpha
+    end
     animator:SetScript("OnUpdate", Step)
 end
 
@@ -133,30 +176,95 @@ function BGV.Minimap.RefreshAttention()
         pulse:Stop()
         gemPulse:SetAlpha(0)
     end
+    if BGV.Minimap.UpdateFade then
+        BGV.Minimap.UpdateFade()
+    end
 end
 
--- The button is ours to place while it sits on the minimap. A minimap button addon can move it
--- into a frame of its own (EllesmereUI's button group), which places it from then on.
+-- The button is ours to place while it sits on the minimap or in its own frame. A minimap button
+-- addon can move it into a frame of its own (EllesmereUI's button group), which places it then.
 local function OnMinimap()
-    return button:GetParent() == Minimap
+    local parent = button:GetParent()
+    return parent == Minimap or parent == container
 end
 
 local function Place()
     if not OnMinimap() then
         return
     end
-    local angle = BetterGreatVaultDB and BetterGreatVaultDB.minimapAngle or 220
+    if button:GetParent() == container then
+        -- The minimap's scale, so the button looks and sits as it would on the minimap.
+        local scale = Minimap:GetEffectiveScale() / UIParent:GetEffectiveScale()
+        if scale and scale > 0 then
+            container:SetScale(scale)
+        end
+    end
+    local angle = BetterGreatVaultDB and BetterGreatVaultDB.minimapAngle or DEFAULT_ANGLE
     local rad = math.rad(angle)
     button:ClearAllPoints()
     button:SetPoint("CENTER", Minimap, "CENTER", math.cos(rad) * RADIUS, math.sin(rad) * RADIUS)
 end
 
 local placed = false
+local hovered = false
+
+-- The button's home: the minimap, or its own frame while unaffected by other addons. Taking it
+-- back from a minimap button addon undoes that addon's size, anchors and locks where it can; its
+-- other touches go with a reload.
+local function Rehome()
+    local parent = button:GetParent()
+    local home
+    if Independent() then
+        home = parent ~= container and container or nil
+    elseif parent == container then
+        home = Minimap
+    end
+    if not home then
+        return false
+    end
+    if button.SetFixedFrameStrata then
+        button:SetFixedFrameStrata(false)
+    end
+    if button.SetFixedFrameLevel then
+        button:SetFixedFrameLevel(false)
+    end
+    button:SetParent(home)
+    button:SetFrameStrata("MEDIUM")
+    button:SetFrameLevel(8)
+    button:SetSize(32, 32)
+    button.icon:ClearAllPoints()
+    button.icon:SetAllPoints(button)
+    button.icon:SetTexCoord(0, 1, 0, 1)
+    return true
+end
+
+-- Faded (settings): the button rests faint and shows fully while pointed at, or while rewards are
+-- waiting. Only while it's ours: a minimap button addon sets its buttons' alpha itself.
+local function RestAlpha()
+    if RewardsWaiting() then
+        return 1
+    end
+    return 0.25
+end
+
+local function UpdateFade()
+    if Fading() and OnMinimap() then
+        motion.fading = true
+        AnimateTo(motion.target, motion.glowTarget, hovered and 1 or RestAlpha())
+    elseif motion.fading then
+        motion.fading = false
+        motion.alpha, motion.alphaTarget = 1, 1
+        button:SetAlpha(1)
+    end
+end
 
 -- Shows or hides the button as the settings say. It's placed the first time it's shown, and
 -- again with `reposition` (settings reset); turning it off and on leaves it where it is, which a
 -- minimap button addon may have chosen.
 function BGV.Minimap.Apply(reposition)
+    if Rehome() then
+        reposition = true
+    end
     if ShowMinimap() then
         if not placed or reposition then
             Place()
@@ -166,13 +274,59 @@ function BGV.Minimap.Apply(reposition)
         -- hook can zero the alpha until that addon lays the frame out again (EllesmereUI's does).
         local alpha = button:GetAlpha()
         button:Show()
-        if not OnMinimap() and button:GetAlpha() < alpha then
+        if button:GetParent() ~= Minimap and button:GetAlpha() < alpha then
             button:SetAlpha(alpha)
         end
         BGV.Minimap.RefreshAttention()
+        UpdateFade()
     else
         button:Hide()
     end
+end
+
+BGV.Minimap.UpdateFade = UpdateFade
+
+-- "Add to the AddOns menu" (settings). The menu lists the addon from its .toc; turning this off
+-- takes the entry out of the menu's list, and turning it on puts it back (as Narcissus does).
+local compartmentEntry
+
+function BGV.Minimap.ApplyCompartment()
+    local menu = AddonCompartmentFrame
+    if not (menu and type(menu.registeredAddons) == "table") then
+        return
+    end
+    local wanted = not BetterGreatVaultDB or BetterGreatVaultDB.useCompartment ~= false
+    local title = C_AddOns and type(C_AddOns.GetAddOnMetadata) == "function"
+        and C_AddOns.GetAddOnMetadata(addonName, "Title") or nil
+    local index
+    for i, data in ipairs(menu.registeredAddons) do
+        if data == compartmentEntry or (type(data) == "table" and title and data.text == title) then
+            index = i
+            break
+        end
+    end
+    if wanted and not index and compartmentEntry then
+        table.insert(menu.registeredAddons, compartmentEntry)
+    elseif not wanted and index then
+        compartmentEntry = table.remove(menu.registeredAddons, index)
+    else
+        return
+    end
+    if type(menu.UpdateDisplay) == "function" then
+        menu:UpdateDisplay()
+    end
+end
+
+-- Back to its first spot on the minimap (settings).
+function BGV.Minimap.ResetPosition()
+    if BetterGreatVaultDB then
+        BetterGreatVaultDB.minimapAngle = DEFAULT_ANGLE
+    end
+    Place()
+end
+
+local function Locked()
+    return BetterGreatVaultDB and BetterGreatVaultDB.lockMinimap == true
 end
 
 -- The hover popup, in the loot table's flat style: this week's vault slots (the reward's item
@@ -192,7 +346,7 @@ local ACTIONS = {
     { key = "Middle-click", text = "Possible loot from your slots" },
     { key = "Shift + middle-click", text = "Loot database, any class" },
     { key = "Right-click", text = "Settings" },
-    { key = "Drag", text = "Move this button" },
+    { key = "Drag", text = "Move this button", buttonOnly = true },
 }
 
 local popup
@@ -216,6 +370,12 @@ local function BuildPopup()
     popup:SetClampedToScreen(true)
     popup:SetWidth(POPUP_W)
     popup:Hide()
+    -- It goes when its owner does: a menu row whose menu closed sends no leave event.
+    popup:SetScript("OnUpdate", function(self)
+        if self.owner and not self.owner:IsVisible() then
+            self:Hide()
+        end
+    end)
     for step, alpha in ipairs({ 0.22, 0.14, 0.07 }) do
         local shadow = Pixel(popup, "BACKGROUND", 0, 0, 0, alpha)
         shadow:SetDrawLayer("BACKGROUND", -8)
@@ -514,12 +674,18 @@ function LayoutPopup()
         y = HEADER_H + 10
     end
     popup.actions[1].text:SetText(VaultShown() and "Close the Great Vault" or "Open the Great Vault")
-    for _, line in ipairs(popup.actions) do
-        PlaceAt(line.text, PAD, y)
-        line.key:ClearAllPoints()
-        line.key:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -PAD, -y)
-        line.key:SetTextColor(r, g, b)
-        y = y + 17
+    for index, line in ipairs(popup.actions) do
+        -- From the AddOns menu there's no button to drag.
+        local shown = not (popup.compartment and ACTIONS[index].buttonOnly)
+        line.text:SetShown(shown)
+        line.key:SetShown(shown)
+        if shown then
+            PlaceAt(line.text, PAD, y)
+            line.key:ClearAllPoints()
+            line.key:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -PAD, -y)
+            line.key:SetTextColor(r, g, b)
+            y = y + 17
+        end
     end
     popup:SetHeight(y + PAD - 5)
 end
@@ -535,8 +701,12 @@ local function AnchorPopup(owner)
     popup:SetPoint(vertical .. (right and "RIGHT" or "LEFT"), owner, vertical .. (right and "LEFT" or "RIGHT"), right and -8 or 8, 0)
 end
 
-local function ShowPopup(owner)
+-- `compartment`: shown for the minimap's AddOns menu rather than the button.
+local function ShowPopup(owner, compartment)
     BuildPopup()
+    popup.owner = owner
+    popup.compartment = compartment == true
+    popup:SetScale(Utils.FontScale(10))
     LayoutPopup()
     AnchorPopup(owner)
     popup:Show()
@@ -548,11 +718,7 @@ local function HidePopup()
     end
 end
 
-button:SetScript("OnClick", function(self, mouseButton)
-    if self.dragged then
-        self.dragged = false
-        return
-    end
+local function RunClick(mouseButton)
     if mouseButton == "RightButton" then
         BGV.Minimap.ToggleSettings()
     elseif mouseButton == "MiddleButton" then
@@ -567,15 +733,49 @@ button:SetScript("OnClick", function(self, mouseButton)
     else
         BGV.Minimap.ToggleVault()
     end
+end
+
+-- The minimap's AddOns menu (the addon compartment; the .toc names these functions): the same
+-- clicks and hover popup as the minimap button.
+function BetterGreatVault_OnAddonCompartmentClick(_, mouseButton)
+    HidePopup()
+    RunClick(mouseButton)
+end
+
+function BetterGreatVault_OnAddonCompartmentEnter(_, menuButton)
+    if menuButton and PopupOnHover() then
+        ShowPopup(menuButton, true)
+    end
+end
+
+function BetterGreatVault_OnAddonCompartmentLeave()
+    HidePopup()
+end
+
+-- The release that ends a drag isn't a click. Only a click from that same release is ignored: a
+-- flag cleared by the next click would eat the next real click whenever the game sends none.
+local function DragRelease(self)
+    local stopped = self.dragStopped
+    self.dragStopped = nil
+    return self.dragging or (stopped ~= nil and GetTime() - stopped < 0.2)
+end
+
+button:SetScript("OnClick", function(self, mouseButton)
+    if DragRelease(self) then
+        return
+    end
+    RunClick(mouseButton)
     if popup and popup:IsShown() then
         LayoutPopup()
     end
 end)
 
 button:SetScript("OnDragStart", function(self)
+    if Locked() then
+        return
+    end
     HidePopup()
     self.dragging = true
-    self.dragged = true
     self:SetScript("OnUpdate", function(buttonFrame)
         if not buttonFrame.dragging or not Minimap then
             buttonFrame:SetScript("OnUpdate", nil)
@@ -595,19 +795,24 @@ end)
 
 button:SetScript("OnDragStop", function(self)
     self.dragging = false
+    self.dragStopped = GetTime()
     self:SetScript("OnUpdate", nil)
 end)
 
 button:SetScript("OnEnter", function(self)
     local accent = Utils.AccentColor()
     glow:SetVertexColor(accent[1], accent[2], accent[3])
-    AnimateTo(-90, 0.6)
-    ShowPopup(self)
+    hovered = true
+    AnimateTo(-90, 0.6, motion.fading and 1 or nil)
+    if PopupOnHover() then
+        ShowPopup(self)
+    end
 end)
 
 button:SetScript("OnLeave", function()
     Press(false)
-    AnimateTo(0, 0)
+    hovered = false
+    AnimateTo(0, 0, motion.fading and RestAlpha() or nil)
     HidePopup()
 end)
 

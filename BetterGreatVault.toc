@@ -7,6 +7,9 @@
 ## AllowLoadGameType: mainline
 ## Category: Character Advancement
 ## IconTexture: Interface\AddOns\BetterGreatVault\Icon
+## AddonCompartmentFunc: BetterGreatVault_OnAddonCompartmentClick
+## AddonCompartmentFuncOnEnter: BetterGreatVault_OnAddonCompartmentEnter
+## AddonCompartmentFuncOnLeave: BetterGreatVault_OnAddonCompartmentLeave
 
 Utils.lua
 WorldLoot.lua

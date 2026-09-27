@@ -1,4 +1,4 @@
-local _, BGV = ...
+local addonName, BGV = ...
 
 BGV.Settings = {}
 
@@ -7,6 +7,15 @@ local FRAME_H = 460
 local LEFT_W = 188
 local PAD = 22
 local TEXT_W = FRAME_W - LEFT_W - PAD * 2 - 16
+local BUTTON_H = 24
+local ICON = "Interface\\AddOns\\BetterGreatVault\\Icon"
+
+-- Where to find the addon online, listed in About. A link without an address yet shows "Coming
+-- soon"; set its `url` once the page exists.
+BGV.Settings.LINKS = {
+    { name = "CurseForge" },
+    { name = "Wago" },
+}
 
 local panel
 local scroll
@@ -55,9 +64,17 @@ local function RefreshAccent()
     end
 end
 
+BGV.Settings.RefreshAccent = RefreshAccent
+
 local function SpecAccentOn()
     local saved = DB()
     return not saved or saved.useSpecAccent ~= false
+end
+
+local function Call(func, ...)
+    if type(func) == "function" then
+        return func(...)
+    end
 end
 
 local Pixel = BGV.Utils.Pixel
@@ -128,11 +145,17 @@ local function ScrollTo(id)
     scrollAnim.play = true
 end
 
-local function MakeLink(parent, text, id)
+-- A link in the left menu, to a section of the page. `bottom` pins it to the bottom of the menu.
+local function MakeLink(parent, text, id, bottom)
     local link = CreateFrame("Button", nil, parent)
     link:SetSize(LEFT_W - 28, 28)
-    link:SetPoint("TOPLEFT", parent, "TOPLEFT", 18, -78 - (id - 1) * 32)
+    if bottom then
+        link:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", 18, 16)
+    else
+        link:SetPoint("TOPLEFT", parent, "TOPLEFT", 18, -78 - (id - 1) * 32)
+    end
     link.id = id
+    link.bottom = bottom
 
     local bar = Accent(Pixel(link, "ARTWORK", 0.85, 0.65, 0.2, 1))
     bar:SetSize(2, 14)
@@ -140,7 +163,7 @@ local function MakeLink(parent, text, id)
     bar:Hide()
     link.bar = bar
 
-    local label = link:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    local label = link:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
     label:SetPoint("LEFT", link, "LEFT", 12, 0)
     label:SetJustifyH("LEFT")
     label:SetText(text)
@@ -171,7 +194,7 @@ local function MakeLink(parent, text, id)
 end
 
 local function MakeHeader(parent, text, section)
-    local header = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    local header = parent:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormalLarge")
     header:SetJustifyH("LEFT")
     header:SetText(text)
     header:SetTextColor(0.96, 0.96, 0.96)
@@ -182,22 +205,49 @@ local function MakeHeader(parent, text, section)
     return header
 end
 
+-- A small heading for a group of options within a section.
+local function MakeSubheader(parent, text)
+    local label = parent:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormalSmall")
+    label:SetJustifyH("LEFT")
+    label:SetText(text:upper())
+    label:SetTextColor(0.62, 0.62, 0.66)
+    layout[#layout + 1] = { widget = label, x = PAD, height = 22 }
+    return label
+end
+
 local function MakeGap(gap)
     layout[#layout + 1] = { gap = gap or 18 }
 end
 
-local function MakeNote(parent, text)
-    local note = parent:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+-- Help text: under a checkbox's label (default), `true` flush with the section's left edge, or a
+-- number of steps in (2: under a nested checkbox's label).
+local function MakeNote(parent, text, depth)
+    local note = parent:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontDisable")
     note:SetJustifyH("LEFT")
     note:SetJustifyV("TOP")
     note:SetWordWrap(true)
     note:SetText(text)
     note:SetTextColor(0.58, 0.58, 0.6)
-    layout[#layout + 1] = { widget = note, x = PAD + 28, note = true }
+    local x = PAD + 28
+    if depth == true then
+        x = PAD
+    elseif type(depth) == "number" then
+        x = PAD + 28 * depth
+    end
+    layout[#layout + 1] = { widget = note, x = x, note = true }
     return note
 end
 
-local function MakeCheckbox(parent, label, y, getter, setter)
+local function MakeParagraph(parent, text)
+    local note = MakeNote(parent, text, true)
+    note:SetFontObject(BetterGreatVaultFontHighlight)
+    note:SetTextColor(0.84, 0.84, 0.86)
+    return note
+end
+
+-- `options`: indent (steps in, under another checkbox) and requires (a check that enables it).
+local function MakeCheckbox(parent, label, getter, setter, options)
+    options = options or {}
     local row = CreateFrame("Button", nil, parent)
     row:SetSize(TEXT_W, 22)
 
@@ -210,17 +260,22 @@ local function MakeCheckbox(parent, label, y, getter, setter)
     fill:SetSize(10, 10)
     fill:SetPoint("CENTER", box, "CENTER", 0, 0)
     fill:Hide()
+    row.fill = fill
 
-    local text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    local text = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
     text:SetPoint("LEFT", box, "RIGHT", 10, 0)
     text:SetPoint("RIGHT", row, "RIGHT", -4, 0)
     text:SetJustifyH("LEFT")
     text:SetWordWrap(true)
     text:SetText(label)
     text:SetTextColor(0.92, 0.92, 0.92)
+    row.label = text
 
     function row:Refresh()
         fill:SetShown(getter() and true or false)
+        local enabled = not options.requires or options.requires()
+        self:SetAlpha(enabled and 1 or 0.4)
+        self:EnableMouse(enabled)
     end
 
     row:SetScript("OnClick", function(self)
@@ -235,7 +290,166 @@ local function MakeCheckbox(parent, label, y, getter, setter)
     end)
 
     widgets[#widgets + 1] = row
-    layout[#layout + 1] = { widget = row, x = PAD, height = 26, stretch = true }
+    layout[#layout + 1] = { widget = row, x = PAD + 28 * (options.indent or 0), height = 26, stretch = true,
+        resize = function(offset)
+            row:SetHeight(22 + offset)
+        end }
+    return row
+end
+
+-- For something that can't be undone: the first click asks, and a second click within a few
+-- seconds does it.
+local function ConfirmClicks(button, text, question, action)
+    local armed, token = false, 0
+    local function Paint(r, g, b)
+        local label = button:GetFontString()
+        if label then
+            label:SetTextColor(r, g, b)
+        end
+    end
+    local function Disarm()
+        armed = false
+        button:SetText(text)
+        Paint(1, 1, 1)
+    end
+    button:SetScript("OnClick", function()
+        if armed then
+            Disarm()
+            action()
+            return
+        end
+        armed = true
+        token = token + 1
+        local mine = token
+        button:SetText(question)
+        Paint(1, 0.38, 0.32)
+        if C_Timer and type(C_Timer.After) == "function" then
+            C_Timer.After(4, function()
+                if armed and token == mine then
+                    Disarm()
+                end
+            end)
+        end
+    end)
+    button:SetScript("OnHide", Disarm)
+end
+
+-- A row of flat buttons, each { text, width, onClick, confirm }. `options` as for checkboxes.
+local function MakeButtons(parent, specs, options)
+    options = options or {}
+    local row = CreateFrame("Frame", nil, parent)
+    row.buttons = {}
+    for index, spec in ipairs(specs) do
+        local button = BGV.Utils.CreateFlatButton(row, spec.width or 124, BUTTON_H)
+        button.baseWidth = spec.width or 124
+        button:SetText(spec.text)
+        if spec.confirm then
+            ConfirmClicks(button, spec.text, spec.confirm, spec.onClick)
+        else
+            button:SetScript("OnClick", spec.onClick)
+        end
+        row.buttons[index] = button
+    end
+    -- Wider and taller with the text size.
+    local function Size(scale, height)
+        local x = 0
+        for _, button in ipairs(row.buttons) do
+            local width = math.floor(button.baseWidth * scale + 0.5)
+            button:SetSize(width, height)
+            button:ClearAllPoints()
+            button:SetPoint("LEFT", row, "LEFT", x, 0)
+            x = x + width + 8
+        end
+        row:SetSize(math.max(1, x - 8), height)
+    end
+    Size(1, BUTTON_H)
+    if options.requires then
+        function row:Refresh()
+            local enabled = options.requires()
+            self:SetAlpha(enabled and 1 or 0.4)
+            for _, button in ipairs(self.buttons) do
+                button:EnableMouse(enabled)
+            end
+        end
+        widgets[#widgets + 1] = row
+    end
+    layout[#layout + 1] = { widget = row, x = PAD + 28 * (options.indent or 0), height = BUTTON_H + 10,
+        resize = function(offset, scale10)
+            Size(scale10, BUTTON_H + offset)
+        end }
+    return row
+end
+
+-- A slider over whole steps from `min` to `max`, the default (0) marked on it. The stretch
+-- between the default and the value is drawn in the accent color. spec: { min, max, getter,
+-- setter, format }.
+local SLIDER_W = 220
+local THUMB_W = 10
+
+local function MakeSlider(parent, spec)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetHeight(28)
+    local slider = CreateFrame("Slider", nil, row)
+    slider:SetOrientation("HORIZONTAL")
+    slider:SetSize(SLIDER_W, 20)
+    slider:SetPoint("LEFT", row, "LEFT", 0, 0)
+    slider:SetMinMaxValues(spec.min, spec.max)
+    slider:SetValueStep(1)
+    if slider.SetObeyStepOnDrag then
+        slider:SetObeyStepOnDrag(true)
+    end
+    slider:EnableMouseWheel(true)
+    local function X(value)
+        return THUMB_W / 2 + (value - spec.min) / (spec.max - spec.min) * (SLIDER_W - THUMB_W)
+    end
+    local track = Pixel(slider, "BACKGROUND", 0.16, 0.16, 0.17, 1)
+    track:SetHeight(4)
+    track:SetPoint("LEFT", slider, "LEFT", 0, 0)
+    track:SetPoint("RIGHT", slider, "RIGHT", 0, 0)
+    for step = spec.min, spec.max do
+        local tick = Pixel(slider, "BORDER", 0.34, 0.34, 0.38, 1)
+        tick:SetSize(1, step == 0 and 12 or 6)
+        tick:SetPoint("CENTER", slider, "LEFT", X(step), 0)
+    end
+    local fill = Accent(Pixel(slider, "ARTWORK", 1, 1, 1, 1))
+    fill:SetHeight(4)
+    local thumb = slider:CreateTexture(nil, "OVERLAY")
+    thumb:SetTexture("Interface\\Buttons\\WHITE8X8")
+    thumb:SetSize(THUMB_W, 18)
+    Accent(thumb)
+    slider:SetThumbTexture(thumb)
+    local value = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
+    value:SetPoint("LEFT", slider, "RIGHT", 14, 0)
+    row.slider, row.value = slider, value
+
+    local quiet = false
+    local function Paint(current)
+        local from, to = X(0), X(current)
+        fill:ClearAllPoints()
+        fill:SetPoint("LEFT", slider, "LEFT", math.min(from, to), 0)
+        fill:SetWidth(math.max(1, math.abs(to - from)))
+        fill:SetShown(current ~= 0)
+        value:SetText(spec.format(current))
+    end
+    slider:SetScript("OnValueChanged", function(_, raw)
+        local current = math.floor(raw + 0.5)
+        Paint(current)
+        if not quiet and current ~= spec.getter() then
+            spec.setter(current)
+        end
+    end)
+    slider:SetScript("OnMouseWheel", function(self, delta)
+        local current = math.floor(self:GetValue() + 0.5)
+        self:SetValue(math.max(spec.min, math.min(spec.max, current + delta)))
+    end)
+    function row:Refresh()
+        quiet = true
+        slider:SetValue(spec.getter())
+        quiet = false
+        Paint(spec.getter())
+    end
+    widgets[#widgets + 1] = row
+    layout[#layout + 1] = { widget = row, x = PAD + 4, height = 30 }
     return row
 end
 
@@ -247,11 +461,11 @@ local function AccentRGB()
     return r, g, b
 end
 
-local function MakeColorRow(parent, y)
+local function MakeColorRow(parent)
     local row = CreateFrame("Frame", nil, parent)
     row:SetSize(TEXT_W, 22)
 
-    local label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    local label = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
     label:SetPoint("LEFT", row, "LEFT", 28, 0)
     label:SetText("Custom")
     label:SetTextColor(0.92, 0.92, 0.92)
@@ -320,8 +534,390 @@ local function MakeColorRow(parent, y)
     end
 
     widgets[#widgets + 1] = row
-    layout[#layout + 1] = { widget = row, x = PAD, height = 28, stretch = true }
+    layout[#layout + 1] = { widget = row, x = PAD, height = 28, stretch = true,
+        resize = function(offset)
+            row:SetHeight(22 + offset)
+        end }
     return row
+end
+
+local function Metadata(field, fallback)
+    local get = C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata
+    local value = type(get) == "function" and get(addonName, field) or nil
+    if BGV.Utils.IsUsableString(value) then
+        return value
+    end
+    return fallback
+end
+
+-- About: the emblem, the addon's name, its version and author.
+local function MakeAboutCard(parent)
+    local card = CreateFrame("Frame", nil, parent)
+    card:SetHeight(52)
+    local emblem = card:CreateTexture(nil, "ARTWORK")
+    emblem:SetTexture(ICON)
+    emblem:SetSize(48, 48)
+    emblem:SetPoint("LEFT", card, "LEFT", 0, 0)
+    local name = card:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormalLarge")
+    name:SetPoint("TOPLEFT", emblem, "TOPRIGHT", 12, -7)
+    name:SetText("Better Great Vault")
+    name:SetTextColor(0.85, 0.65, 0.2)
+    card.meta = card:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlightSmall")
+    card.meta:SetPoint("TOPLEFT", name, "BOTTOMLEFT", 0, -6)
+    card.meta:SetText(string.format("Version %s  ·  by %s", Metadata("Version", BGV.VERSION or "?"),
+        Metadata("Author", BGV.AUTHOR or "?")))
+    card.meta:SetTextColor(0.62, 0.62, 0.66)
+    layout[#layout + 1] = { widget = card, x = PAD, height = 64, stretch = true,
+        resize = function(offset)
+            card:SetHeight(52 + offset)
+        end }
+    return card
+end
+
+-- A link in About. The game can't open a browser, so the address sits in a box to copy it from.
+local function MakeLinkRow(parent, link)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetHeight(BUTTON_H)
+    local name = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
+    name:SetPoint("LEFT", row, "LEFT", 0, 0)
+    name:SetJustifyH("LEFT")
+    name:SetText(link.name)
+    name:SetTextColor(0.92, 0.92, 0.92)
+    row.name = name
+    if BGV.Utils.IsUsableString(link.url) then
+        local box = CreateFrame("EditBox", nil, row)
+        box:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        box:SetHeight(BUTTON_H)
+        box:SetFontObject(BetterGreatVaultFontHighlightSmall)
+        box:SetAutoFocus(false)
+        box:SetTextInsets(8, 8, 0, 0)
+        box:SetText(link.url)
+        box:SetCursorPosition(0)
+        Pixel(box, "BACKGROUND", 0.12, 0.12, 0.135, 1):SetAllPoints()
+        BoxBorder(box, box)
+        box:SetScript("OnEditFocusGained", function(self)
+            self:HighlightText()
+        end)
+        box:SetScript("OnEditFocusLost", function(self)
+            self:HighlightText(0, 0)
+            self:SetCursorPosition(0)
+        end)
+        -- Read only: typing puts the address back.
+        box:SetScript("OnTextChanged", function(self, userInput)
+            if userInput then
+                self:SetText(link.url)
+                self:HighlightText()
+            end
+        end)
+        box:SetScript("OnEscapePressed", box.ClearFocus)
+        box:SetScript("OnEnterPressed", box.ClearFocus)
+        row.box = box
+    else
+        local soon = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlightSmall")
+        soon:SetText("Coming soon")
+        soon:SetTextColor(0.5, 0.5, 0.53)
+        row.soon = soon
+    end
+    layout[#layout + 1] = { widget = row, x = PAD, height = BUTTON_H + 6, stretch = true,
+        resize = function(offset, _, scale12)
+            local x = math.floor(110 * scale12 + 0.5)
+            row:SetHeight(BUTTON_H + offset)
+            if row.box then
+                row.box:SetPoint("LEFT", row, "LEFT", x, 0)
+                row.box:SetHeight(BUTTON_H + offset)
+            else
+                row.soon:ClearAllPoints()
+                row.soon:SetPoint("LEFT", row, "LEFT", x, 0)
+            end
+        end }
+    return row
+end
+
+-- Opens one of the addon's windows from the settings. The settings close first, so the window
+-- isn't left behind them.
+local function Launch(open)
+    BGV.Settings.Hide()
+    open()
+end
+
+local function BuildGreatVault()
+    MakeHeader(child, "Great Vault", 1)
+    MakeCheckbox(child, "Animated slots", function()
+        local saved = DB()
+        return not (saved and saved.disableAnimations == true)
+    end, function(value)
+        DB().disableAnimations = not value
+        RefreshAccent()
+    end)
+    MakeNote(child, "Hovering an unlocked slot opens its gates and spins a reel of the loot it can give. Off: the gates stay closed and the slot shows its caption.")
+    MakeCheckbox(child, "Best-in-Slot tiers", function()
+        return BGV.Utils.ShowBisTiers()
+    end, function(value)
+        DB().showBisTiers = value and true or false
+        RefreshAccent()
+    end)
+    MakeNote(child, "Colors the reel's items by their Best-in-Slot tier for your loot spec (S, A, B, C, D, from Wowhead's guides), and shows the loot table's Tier column.")
+    MakeCheckbox(child, "Open the loot table from a slot", function()
+        local saved = DB()
+        return not saved or saved.openLootTable ~= false
+    end, function(value)
+        DB().openLootTable = value and true or false
+    end)
+    MakeNote(child, "Left-click an unlocked slot to list every reward it can give.")
+    MakeCheckbox(child, "Loot spec button", function()
+        local saved = DB()
+        return not saved or saved.showLootSpecButton ~= false
+    end, function(value)
+        DB().showLootSpecButton = value and true or false
+        RefreshAccent()
+        if BGV.LootTable and type(BGV.LootTable.Invalidate) == "function" then
+            BGV.LootTable.Invalidate()
+        end
+    end)
+    MakeNote(child, "On the Great Vault and the loot table: shows the spec your loot is filtered by, and lets you change it.")
+    MakeCheckbox(child, "Reward reminder", function()
+        local saved = DB()
+        return not saved or saved.remindRewards ~= false
+    end, function(value)
+        DB().remindRewards = value and true or false
+    end)
+    MakeNote(child, "At login, a line in chat when rewards are waiting in the Great Vault.")
+end
+
+local function ButtonShown()
+    local saved = DB()
+    return not saved or saved.showMinimap ~= false
+end
+
+local function BuildMinimap()
+    MakeHeader(child, "Minimap button", 2)
+    MakeCheckbox(child, "Add to the AddOns menu", function()
+        local saved = DB()
+        return not saved or saved.useCompartment ~= false
+    end, function(value)
+        DB().useCompartment = value and true or false
+        Call(BGV.Minimap and BGV.Minimap.ApplyCompartment)
+    end)
+    MakeNote(child, "Lists Better Great Vault in the minimap's AddOns menu, with the same clicks as the button.")
+    MakeCheckbox(child, "Show minimap button", ButtonShown, function(value)
+        DB().showMinimap = value and true or false
+        BGV.Minimap.Apply()
+        BGV.Settings.Refresh()
+    end)
+    MakeNote(child, "Left-click: Great Vault. Middle-click: loot table. Shift + middle-click: loot database. Right-click: these settings.")
+    local nested = { indent = 1, requires = ButtonShown }
+    MakeButtons(child, {
+        { text = "Reset position", onClick = function()
+            Call(BGV.Minimap and BGV.Minimap.ResetPosition)
+        end },
+    }, nested)
+    MakeCheckbox(child, "Show popup on mouseover", function()
+        local saved = DB()
+        return not saved or saved.minimapPopup ~= false
+    end, function(value)
+        DB().minimapPopup = value and true or false
+    end, nested)
+    MakeCheckbox(child, "Lock position", function()
+        local saved = DB()
+        return saved and saved.lockMinimap == true
+    end, function(value)
+        DB().lockMinimap = value and true or false
+    end, nested)
+    MakeCheckbox(child, "Unaffected by other addons", function()
+        local saved = DB()
+        return saved and saved.independentMinimap == true
+    end, function(value)
+        DB().independentMinimap = value and true or false
+        BGV.Minimap.Apply()
+    end, nested)
+    MakeNote(child, "Keeps the button on the minimap when another addon gathers minimap buttons, such as EllesmereUI. A change takes full effect after a reload.", 2)
+    MakeCheckbox(child, "Fade out when not hovered", function()
+        local saved = DB()
+        return saved and saved.fadeMinimap == true
+    end, function(value)
+        DB().fadeMinimap = value and true or false
+        Call(BGV.Minimap and BGV.Minimap.UpdateFade)
+    end, nested)
+    MakeNote(child, "The button stays faint until you point at it. It shows fully while rewards are waiting.", 2)
+end
+
+-- Text size: the addon's fonts, then everything that lays text out.
+local function SetTextSize(value)
+    DB().fontSize = value
+    BGV.Utils.ApplyFontSize()
+    if panel and panel.bgvFit then
+        panel.bgvFit()
+    end
+    RefreshAccent()
+end
+
+local function BuildAppearance()
+    MakeHeader(child, "Appearance", 3)
+    MakeSubheader(child, "Text size")
+    MakeSlider(child, {
+        min = -5,
+        max = 5,
+        getter = function()
+            return BGV.Utils.FontOffset()
+        end,
+        setter = SetTextSize,
+        format = function(value)
+            if value == 0 then
+                return "Default"
+            end
+            return value > 0 and ("+" .. value) or tostring(value)
+        end,
+    })
+    MakeNote(child, "Resizes the addon's text: on the Great Vault's slots, in the loot table, in the minimap popup and on this page.", true)
+    MakeGap(8)
+    MakeSubheader(child, "Accent color")
+    MakeCheckbox(child, "Class specialization", SpecAccentOn, function(value)
+        DB().useSpecAccent = value and true or false
+        BGV.Settings.Refresh()
+        RefreshAccent()
+    end)
+    MakeNote(child, "Use your specialization's color for the addon's highlights. Uncheck this to pick your own.")
+    MakeColorRow(child)
+    MakeNote(child, "Your color, used while class specialization is off.")
+end
+
+local function KeyText(command)
+    if type(GetBindingKey) ~= "function" then
+        return nil
+    end
+    local names = {}
+    local key1, key2 = GetBindingKey(command)
+    for _, key in ipairs({ key1 or false, key2 or false }) do
+        if BGV.Utils.IsUsableString(key) then
+            names[#names + 1] = type(GetBindingText) == "function" and GetBindingText(key) or key
+        end
+    end
+    return #names > 0 and table.concat(names, ", ") or nil
+end
+
+-- One of the addon's key bindings (Bindings.xml) and the keys bound to it.
+local function MakeKeyRow(parent, text, command)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetHeight(22)
+    local name = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
+    name:SetPoint("LEFT", row, "LEFT", 0, 0)
+    name:SetJustifyH("LEFT")
+    name:SetText(text)
+    name:SetTextColor(0.92, 0.92, 0.92)
+    row.name = name
+    local key = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlightSmall")
+    key:SetJustifyH("LEFT")
+    row.key = key
+    function row:Refresh()
+        local bound = KeyText(command)
+        key:SetText(bound or "Not bound")
+        if bound then
+            key:SetTextColor(1, 1, 1)
+        else
+            key:SetTextColor(0.5, 0.5, 0.53)
+        end
+    end
+    widgets[#widgets + 1] = row
+    layout[#layout + 1] = { widget = row, x = PAD, height = 24, stretch = true,
+        resize = function(offset, _, scale12)
+            row:SetHeight(22 + offset)
+            key:ClearAllPoints()
+            key:SetPoint("LEFT", row, "LEFT", math.floor(170 * scale12 + 0.5), 0)
+        end }
+    return row
+end
+
+local function BuildKeyBindings()
+    MakeHeader(child, "Key bindings", 4)
+    MakeKeyRow(child, "Great Vault", "BETTERGREATVAULT_VAULT")
+    MakeKeyRow(child, "Loot table", "BETTERGREATVAULT_LOOT")
+    MakeKeyRow(child, "Loot database", "BETTERGREATVAULT_DATABASE")
+    MakeKeyRow(child, "Settings", "BETTERGREATVAULT_SETTINGS")
+    MakeGap(6)
+    MakeButtons(child, {
+        { text = "Open Key Bindings", width = 150, onClick = function()
+            if Settings and Settings.KEYBINDINGS_CATEGORY_ID and type(Settings.OpenToCategory) == "function" then
+                Settings.OpenToCategory(Settings.KEYBINDINGS_CATEGORY_ID)
+            end
+        end },
+    })
+    MakeNote(child, "No keys are bound until you pick them. In the game's Key Bindings they're in the Better Great Vault section, and each key opens or closes its window.", true)
+end
+
+local function BuildTools()
+    MakeHeader(child, "Tools", 5)
+    MakeSubheader(child, "Open")
+    MakeButtons(child, {
+        { text = "Great Vault", onClick = function()
+            Launch(function()
+                Call(BGV.Minimap and BGV.Minimap.ShowVault)
+            end)
+        end },
+        { text = "Loot table", onClick = function()
+            Launch(function()
+                Call(BGV.LootTable and BGV.LootTable.Show, nil)
+            end)
+        end },
+        { text = "Loot database", onClick = function()
+            Launch(function()
+                Call(BGV.LootTable and BGV.LootTable.ShowDatabase)
+            end)
+        end },
+    })
+    MakeNote(child, "The loot table lists what your unlocked slots can give. The loot database lists every reward the Great Vault can give this season, for any class.", true)
+
+    MakeGap(10)
+    MakeSubheader(child, "Troubleshooting")
+    MakeCheckbox(child, "Debug mode", function()
+        local saved = DB()
+        return saved and saved.debug == true
+    end, function(value)
+        DB().debug = value and true or false
+    end)
+    MakeNote(child, "Prints loading details to chat while the reels and the loot table load, for bug reports.")
+    MakeButtons(child, {
+        { text = "Print vault data", width = 140, onClick = function()
+            Call(BGV.PrintVaultData)
+        end },
+        { text = "Refresh vault data", width = 140, onClick = function()
+            Call(BGV.RefreshVault)
+        end },
+    })
+    MakeNote(child, "Print lists each Great Vault slot in chat, with its progress and reward item level. Refresh reads the Great Vault again.", true)
+
+    MakeGap(10)
+    MakeSubheader(child, "Reset")
+    MakeButtons(child, {
+        { text = "Reset settings", width = 140, confirm = "Click again to reset", onClick = function()
+            Call(BGV.ResetSettings)
+        end },
+    })
+    MakeNote(child, "Puts every option back to its default. What the addon learned about this season's rewards is kept.", true)
+
+    MakeGap(10)
+    MakeSubheader(child, "Chat commands")
+    MakeNote(child, table.concat({
+        "|cffe6e6e6/bgv db|r   loot database",
+        "|cffe6e6e6/bgv debug|r   debug mode, and print vault data",
+        "|cffe6e6e6/bgv refresh|r   read the Great Vault again",
+        "|cffe6e6e6/bgv reset|r   reset settings",
+    }, "\n"), true)
+end
+
+local function BuildAbout()
+    MakeHeader(child, "About", 6)
+    MakeAboutCard(child)
+    MakeParagraph(child, "See what your Great Vault can give before you choose. Each slot shows the loot it can award at the exact item level, and the loot table and loot database let you browse every reward, for any class, to plan what to run next.")
+    MakeGap(4)
+    MakeSubheader(child, "Links")
+    local copyable = false
+    for _, link in ipairs(BGV.Settings.LINKS) do
+        MakeLinkRow(child, link)
+        copyable = copyable or BGV.Utils.IsUsableString(link.url)
+    end
+    if copyable then
+        MakeNote(child, "Click an address, then press Ctrl+C to copy it.", true)
+    end
 end
 
 local function Build()
@@ -348,14 +944,22 @@ local function Build()
     divider:SetPoint("TOP", left, "TOPRIGHT", 0, -1)
     divider:SetPoint("BOTTOM", left, "BOTTOMRIGHT", 0, 1)
 
-    local title = left:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    local title = left:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormal")
     title:SetPoint("TOPLEFT", left, "TOPLEFT", 18, -22)
     title:SetJustifyH("LEFT")
     title:SetText("Better Great Vault")
     title:SetTextColor(0.85, 0.65, 0.2)
 
-    MakeLink(left, "General", 1)
-    MakeLink(left, "Accent color", 2)
+    MakeLink(left, "Great Vault", 1)
+    MakeLink(left, "Minimap button", 2)
+    MakeLink(left, "Appearance", 3)
+    MakeLink(left, "Key bindings", 4)
+    MakeLink(left, "Tools", 5)
+    local aboutRule = Pixel(left, "ARTWORK", 1, 1, 1, 0.07)
+    aboutRule:SetHeight(1)
+    aboutRule:SetPoint("BOTTOMLEFT", left, "BOTTOMLEFT", 18, 52)
+    aboutRule:SetPoint("BOTTOMRIGHT", left, "BOTTOMRIGHT", -18, 52)
+    MakeLink(left, "About", 6, true)
     SelectLink(1)
 
     scroll = CreateFrame("ScrollFrame", nil, panel)
@@ -367,54 +971,28 @@ local function Build()
     child:SetWidth(FRAME_W - LEFT_W)
     scroll:SetScrollChild(child)
 
-    MakeHeader(child, "General", 1)
-    MakeCheckbox(child, "Open loot table", nil, function()
-        local saved = DB()
-        return not saved or saved.openLootTable ~= false
-    end, function(value)
-        DB().openLootTable = value and true or false
-    end)
-    MakeNote(child, "Left-click a completed slot to open the loot table with every reward that slot can give.")
-    MakeCheckbox(child, "Show loot spec button", nil, function()
-        local saved = DB()
-        return not saved or saved.showLootSpecButton ~= false
-    end, function(value)
-        DB().showLootSpecButton = value and true or false
-        RefreshAccent()
-        if BGV.LootTable and type(BGV.LootTable.Invalidate) == "function" then
-            BGV.LootTable.Invalidate()
-        end
-    end)
-    MakeNote(child, "Shows the Loot Spec button on the Great Vault and the loot table, letting you see and change the spec loot is filtered by.")
-    MakeCheckbox(child, "Show minimap button", nil, function()
-        local saved = DB()
-        return not saved or saved.showMinimap ~= false
-    end, function(value)
-        DB().showMinimap = value and true or false
-        BGV.Minimap.Apply()
-    end)
-    MakeNote(child, "Left-click toggles the Great Vault. Right-click opens these settings.")
-    MakeCheckbox(child, "Disable animations", nil, function()
-        local saved = DB()
-        return saved and saved.disableAnimations == true
-    end, function(value)
-        DB().disableAnimations = value and true or false
-        RefreshAccent()
-    end)
-    MakeNote(child, "Keep the vault slots closed. Mouseover shows the short caption only, with no reel.")
-
+    BuildGreatVault()
     MakeGap(18)
-    MakeHeader(child, "Accent color", 2)
-    MakeCheckbox(child, "Class specialization", nil, SpecAccentOn, function(value)
-        DB().useSpecAccent = value and true or false
-        BGV.Settings.Refresh()
-        RefreshAccent()
-    end)
-    MakeNote(child, "Use your specialization color for the vertical line. Uncheck this to pick a custom color.")
-    MakeColorRow(child, nil)
-    MakeNote(child, "Used for the vertical line when class specialization is off.")
+    BuildMinimap()
+    MakeGap(18)
+    BuildAppearance()
+    MakeGap(18)
+    BuildKeyBindings()
+    MakeGap(18)
+    BuildTools()
+    MakeGap(18)
+    BuildAbout()
 
     local function Fit()
+        local offset = BGV.Utils.FontOffset()
+        local scale10, scale12 = BGV.Utils.FontScale(10), BGV.Utils.FontScale(12)
+        for id, link in ipairs(links) do
+            link:SetHeight(28 + offset)
+            if not link.bottom then
+                link:ClearAllPoints()
+                link:SetPoint("TOPLEFT", link:GetParent(), "TOPLEFT", 18, -78 - (id - 1) * (32 + offset))
+            end
+        end
         local width = scroll:GetWidth()
         if not width or width < 80 then
             width = panel:GetWidth() - LEFT_W
@@ -423,10 +1001,6 @@ local function Build()
             width = FRAME_W - LEFT_W
         end
         child:SetWidth(width)
-        local noteWidth = width - (PAD + 28) - 28
-        if noteWidth < 140 then
-            noteWidth = 140
-        end
         local y = 20
         for _, item in ipairs(layout) do
             if item.section then
@@ -442,7 +1016,7 @@ local function Build()
                 item.widget:SetPoint("TOPLEFT", child, "TOPLEFT", item.x, -y)
                 local height
                 if item.note then
-                    item.widget:SetWidth(noteWidth)
+                    item.widget:SetWidth(math.max(140, width - item.x - 28))
                     height = item.widget:GetStringHeight()
                     if not height or height < 16 then
                         height = 16
@@ -452,7 +1026,10 @@ local function Build()
                     if item.stretch then
                         item.widget:SetWidth(math.max(160, width - item.x - 24))
                     end
-                    height = item.height
+                    if item.resize then
+                        item.resize(offset, scale10, scale12)
+                    end
+                    height = item.height + offset
                 end
                 y = y + height
             end
@@ -513,6 +1090,13 @@ local function Build()
     return panel
 end
 
+-- Lays the page out again (the text size changed).
+function BGV.Settings.Relayout()
+    if panel and panel.bgvFit then
+        panel.bgvFit()
+    end
+end
+
 function BGV.Settings.Refresh()
     if not panel then
         return
@@ -523,6 +1107,13 @@ function BGV.Settings.Refresh()
         end
     end
 end
+
+-- The keys shown under Key bindings follow changes made in the game's Key Bindings.
+local bindingEvents = CreateFrame("Frame")
+bindingEvents:RegisterEvent("UPDATE_BINDINGS")
+bindingEvents:SetScript("OnEvent", function()
+    BGV.Settings.Refresh()
+end)
 
 function BGV.Settings.Show()
     BGV.Settings.Toggle()
