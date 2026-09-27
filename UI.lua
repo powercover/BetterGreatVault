@@ -13,10 +13,10 @@ local function OpenLootTableOnClick()
     return not BetterGreatVaultDB or BetterGreatVaultDB.openLootTable ~= false
 end
 
+-- The addon's outlined small font, sized by the text size setting (Utils.ApplyFontSize).
 local function ApplyFont(fontString)
-    local font = GameFontHighlightSmall:GetFont()
-    if font then
-        fontString:SetFont(font, 10, "OUTLINE")
+    if BetterGreatVaultFontVault then
+        fontString:SetFontObject(BetterGreatVaultFontVault)
     else
         fontString:SetFontObject(GameFontHighlightSmall)
     end
@@ -597,14 +597,15 @@ function PaintReel(fx)
         end
         return
     end
-    local specID = BGV.Bis and Utils.LootSpecID()
+    local showTiers = BGV.Bis and Utils.ShowBisTiers()
+    local specID = showTiers and Utils.LootSpecID() or nil
     for index, cell in ipairs(fx.cells) do
         local entry = icons[((fx.cursor + index - 2) % #icons) + 1]
         local itemID = type(entry) == "table" and entry.itemID or nil
         local icon = type(entry) == "table" and entry.icon or entry
         cell.icon:SetTexture(icon)
         cell.icon:SetSize(CASE_ICON, CASE_ICON)
-        local tier = itemID and BGV.Bis and BGV.Bis.Tier(itemID, specID) or nil
+        local tier = itemID and showTiers and BGV.Bis.Tier(itemID, specID) or nil
         local color = tier and TIER_BACK[tier] or nil
         if color then
             ColorTexture(cell.back, color[1], color[2], color[3], 1)

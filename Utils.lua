@@ -288,6 +288,11 @@ function Utils.LootSpecButtonEnabled()
     return not BetterGreatVaultDB or BetterGreatVaultDB.showLootSpecButton ~= false
 end
 
+-- Best-in-Slot tiers (Bis.lua) color the reels' items and fill the loot table's Tier column.
+function Utils.ShowBisTiers()
+    return not BetterGreatVaultDB or BetterGreatVaultDB.showBisTiers ~= false
+end
+
 -- The Loot Spec button used by both the Great Vault and the loot table; callers only position it.
 -- `flat`: the addon's own flat style (the loot table) instead of Blizzard's red button.
 function Utils.CreateLootSpecButton(parent, flat)
@@ -449,6 +454,59 @@ function Utils.Border(parent, r, g, b, a, target)
     return edges
 end
 
+-- The addon's fonts: Blizzard's, at their size plus the text size offset chosen in the settings
+-- (-5 to +5). The addon's text uses these, so a new offset resizes all of it at once.
+local FONTS = {
+    { name = "BetterGreatVaultFontHighlight", template = "GameFontHighlight" },
+    { name = "BetterGreatVaultFontNormal", template = "GameFontNormal" },
+    { name = "BetterGreatVaultFontHighlightSmall", template = "GameFontHighlightSmall" },
+    { name = "BetterGreatVaultFontNormalSmall", template = "GameFontNormalSmall" },
+    { name = "BetterGreatVaultFontNormalLarge", template = "GameFontNormalLarge" },
+    { name = "BetterGreatVaultFontDisable", template = "GameFontDisable" },
+    -- The Great Vault slots' text: small and outlined.
+    { name = "BetterGreatVaultFontVault", template = "GameFontHighlightSmall", size = 10, flags = "OUTLINE" },
+}
+local fontBase = {}
+
+function Utils.FontOffset()
+    local value = BetterGreatVaultDB and BetterGreatVaultDB.fontSize
+    if type(value) ~= "number" then
+        return 0
+    end
+    return math.max(-5, math.min(5, math.floor(value + 0.5)))
+end
+
+-- The text size as a ratio to Blizzard's, for a text of `base` size (default 10).
+function Utils.FontScale(base)
+    base = base or 10
+    return (base + Utils.FontOffset()) / base
+end
+
+function Utils.ApplyFontSize()
+    if type(CreateFont) ~= "function" then
+        return
+    end
+    local offset = Utils.FontOffset()
+    for _, spec in ipairs(FONTS) do
+        local font = _G[spec.name]
+        if not font then
+            font = CreateFont(spec.name)
+            local template = _G[spec.template]
+            if template then
+                font:CopyFontObject(template)
+            end
+            local file, size, flags = font:GetFont()
+            fontBase[spec.name] = { file = file, size = spec.size or size, flags = spec.flags or flags }
+        end
+        local base = fontBase[spec.name]
+        if base and base.file and base.size then
+            font:SetFont(base.file, math.max(4, base.size + offset), base.flags or "")
+        end
+    end
+end
+
+Utils.ApplyFontSize()
+
 -- A flat button in the addon's own style (dark fill, 1px border, soft hover glow), with a font
 -- string so :SetText works as on Blizzard's buttons.
 function Utils.CreateFlatButton(parent, width, height)
@@ -459,7 +517,7 @@ function Utils.CreateFlatButton(parent, width, height)
     Utils.Border(button, 0.3, 0.3, 0.33, 1)
     local glow = Utils.Pixel(button, "HIGHLIGHT", 1, 1, 1, 0.07)
     glow:SetAllPoints()
-    local text = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    local text = button:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlightSmall")
     text:SetPoint("LEFT", button, "LEFT", 8, 0)
     text:SetPoint("RIGHT", button, "RIGHT", -8, 0)
     text:SetWordWrap(false)

@@ -15,8 +15,16 @@ local function SavedDefaults()
         openLootTable = true,
         showLootSpecButton = true,
         showMinimap = true,
+        useCompartment = true,
+        minimapPopup = true,
+        independentMinimap = false,
+        fadeMinimap = false,
+        lockMinimap = false,
         minimapAngle = 220,
         disableAnimations = false,
+        showBisTiers = true,
+        remindRewards = true,
+        fontSize = 0,
         useSpecAccent = true,
         accentColor = { r = 0.85, g = 0.65, b = 0.2 },
     })
@@ -25,6 +33,46 @@ end
 
 local function LoadVaultUI()
     Utils.LoadAddon("Blizzard_WeeklyRewards")
+end
+
+-- Key bindings (Bindings.xml). No key is bound until the player picks one in the game's Key
+-- Bindings, where these show in a section of their own.
+BINDING_HEADER_BETTERGREATVAULT = "Better Great Vault"
+BINDING_NAME_BETTERGREATVAULT_VAULT = "Toggle the Great Vault"
+BINDING_NAME_BETTERGREATVAULT_LOOT = "Toggle the loot table"
+BINDING_NAME_BETTERGREATVAULT_DATABASE = "Toggle the loot database"
+BINDING_NAME_BETTERGREATVAULT_SETTINGS = "Toggle Better Great Vault settings"
+
+function BetterGreatVault_OnBinding(action)
+    if action == "vault" then
+        BGV.Minimap.ToggleVault()
+    elseif action == "loot" then
+        BGV.LootTable.Toggle()
+    elseif action == "database" then
+        BGV.LootTable.ToggleDatabase()
+    elseif action == "settings" then
+        BGV.Minimap.ToggleSettings()
+    end
+end
+
+-- At login, a line in chat if rewards are waiting in the Great Vault (settings). The vault's data
+-- can arrive a little after login, so it's looked at again for a short while.
+local REMIND_FOR = 60
+local remindUntil
+
+local function RemindRewards()
+    if not remindUntil then
+        return
+    end
+    if GetTime() > remindUntil or not (BetterGreatVaultDB and BetterGreatVaultDB.remindRewards ~= false) then
+        remindUntil = nil
+        return
+    end
+    if C_WeeklyRewards and type(C_WeeklyRewards.HasAvailableRewards) == "function"
+        and C_WeeklyRewards.HasAvailableRewards() == true then
+        remindUntil = nil
+        Utils.Print("Rewards are waiting in your Great Vault.")
+    end
 end
 
 local function RefreshLootLists()
@@ -78,7 +126,8 @@ local function PrintHelp()
     Utils.Print("/bgv reset - clear saved settings")
 end
 
-local function PrintDebug()
+-- Lists every Great Vault slot in chat: progress, requirement and reward item level.
+function BGV.PrintVaultData()
     BGV.GreatVault.Invalidate()
     local ok, snapshot = pcall(BGV.GreatVault.GetSnapshot)
     if not ok then
@@ -110,6 +159,42 @@ local function PrintDebug()
     end
 end
 
+-- Reads the Great Vault again, and redraws it if it's open.
+function BGV.RefreshVault()
+    BGV.GreatVault.Invalidate()
+    if WeeklyRewardsFrame and type(WeeklyRewardsFrame.Refresh) == "function" and WeeklyRewardsFrame:IsShown() then
+        local ok, err = pcall(WeeklyRewardsFrame.Refresh, WeeklyRewardsFrame)
+        if not ok then
+            BGV.lastError = err
+            BGV.UI.RefreshOpenFrame()
+        end
+    else
+        BGV.UI.RefreshOpenFrame()
+        Utils.Print("Great Vault data refreshed. Open the Great Vault to see it.")
+    end
+end
+
+-- Puts every option back to its default. What the addon learned about this season's rewards is
+-- kept: it isn't a setting, and the loot database reads item levels from it.
+function BGV.ResetSettings()
+    local learned = type(BetterGreatVaultDB) == "table" and BetterGreatVaultDB.rewardData or nil
+    BetterGreatVaultDB = nil
+    BetterGreatVaultCharDB = nil
+    SavedDefaults()
+    BetterGreatVaultDB.rewardData = learned
+    Utils.ApplyFontSize()
+    BGV.Minimap.Apply(true)
+    BGV.Minimap.ApplyCompartment()
+    if BGV.Settings and type(BGV.Settings.Refresh) == "function" then
+        BGV.Settings.Refresh()
+        BGV.Settings.Relayout()
+    end
+    if BGV.Settings and type(BGV.Settings.RefreshAccent) == "function" then
+        BGV.Settings.RefreshAccent()
+    end
+    Utils.Print("Settings reset.")
+end
+
 local function HandleSlash(message)
     local command = Utils.Trim(message):lower()
     if command == "" or command == "help" then
@@ -119,33 +204,19 @@ local function HandleSlash(message)
         BetterGreatVaultDB.debug = not BetterGreatVaultDB.debug
         Utils.Print(BetterGreatVaultDB.debug and "Debug enabled." or "Debug disabled.")
         if BetterGreatVaultDB.debug then
-            PrintDebug()
+            BGV.PrintVaultData()
+        end
+        if BGV.Settings and type(BGV.Settings.Refresh) == "function" then
+            BGV.Settings.Refresh()
         end
     elseif command == "db" or command == "database" then
         if BGV.LootTable and type(BGV.LootTable.ToggleDatabase) == "function" then
             BGV.LootTable.ToggleDatabase()
         end
     elseif command == "refresh" then
-        BGV.GreatVault.Invalidate()
-        if WeeklyRewardsFrame and type(WeeklyRewardsFrame.Refresh) == "function" and WeeklyRewardsFrame:IsShown() then
-            local ok, err = pcall(WeeklyRewardsFrame.Refresh, WeeklyRewardsFrame)
-            if not ok then
-                BGV.lastError = err
-                BGV.UI.RefreshOpenFrame()
-            end
-        else
-            BGV.UI.RefreshOpenFrame()
-            Utils.Print("Great Vault data refreshed. Open the Great Vault to see it.")
-        end
+        BGV.RefreshVault()
     elseif command == "reset" then
-        BetterGreatVaultDB = nil
-        BetterGreatVaultCharDB = nil
-        SavedDefaults()
-        BGV.Minimap.Apply(true)
-        if BGV.Settings and type(BGV.Settings.Refresh) == "function" then
-            BGV.Settings.Refresh()
-        end
-        Utils.Print("Settings reset.")
+        BGV.ResetSettings()
     else
         Utils.Print("Unknown command.")
         PrintHelp()
@@ -156,6 +227,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" then
         if arg1 == addonName then
             SavedDefaults()
+            Utils.ApplyFontSize()
             BGV.Minimap.RegisterSettings()
         elseif arg1 == "Blizzard_WeeklyRewards" then
             AttachToVault()
@@ -190,6 +262,16 @@ frame:SetScript("OnEvent", function(_, event, arg1)
         if BGV.LootTable and type(BGV.LootTable.OnCharacterChanged) == "function" then
             BGV.LootTable.OnCharacterChanged()
         end
+        -- The AddOns menu lists the addon on entering the world; then take it out if it's off.
+        if C_Timer and type(C_Timer.After) == "function" then
+            C_Timer.After(0, BGV.Minimap.ApplyCompartment)
+        end
+        if arg1 == true then
+            remindUntil = GetTime() + REMIND_FOR
+            if C_Timer and type(C_Timer.After) == "function" then
+                C_Timer.After(5, RemindRewards)
+            end
+        end
         return
     end
 
@@ -211,6 +293,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
     end
 
     if event == "WEEKLY_REWARDS_UPDATE" then
+        RemindRewards()
         if BGV.Minimap and type(BGV.Minimap.RefreshAttention) == "function" then
             BGV.Minimap.RefreshAttention()
         end

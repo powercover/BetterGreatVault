@@ -35,22 +35,40 @@ local CATEGORIES = {
 }
 
 local LEFT_W = 188
-local LIST_TOP = 132
-local ROW_H = 30
 local NAME_X = 40
-local TIER_W = 44
-local LEVEL_W = 80
-local STATS_W = 150
-local SLOT_W = 130
-local GROUP_H = 26
-local STAT_LINE_H = 12
+
+-- Sizes that follow the text size setting (Utils.FontOffset), set by UpdateMetrics before each
+-- layout: row and line heights grow with the text, and the text columns widen with it.
+local LIST_TOP, ROW_H, TIER_W, LEVEL_W, STATS_W, SLOT_W, GROUP_H, STAT_LINE_H
+local SOURCE_H, HEADER_H, LINK_H, SOURCE_ROW_H, SOURCE_GAP
+
+local function UpdateMetrics()
+    local offset = BGV.Utils.FontOffset()
+    local scale = BGV.Utils.FontScale(10)
+    LIST_TOP = 132 + 2 * offset
+    ROW_H = 30 + offset
+    TIER_W = 44 + offset
+    LEVEL_W = math.floor(80 * scale + 0.5)
+    STATS_W = math.floor(150 * scale + 0.5)
+    SLOT_W = math.floor(130 * scale + 0.5)
+    GROUP_H = 26 + offset
+    STAT_LINE_H = 12 + offset
+    SOURCE_H = 22 + offset
+    HEADER_H = 24 + offset
+    LINK_H = 28 + offset
+    SOURCE_ROW_H = 54 + 2 * offset
+    SOURCE_GAP = 8
+end
+
+UpdateMetrics()
 
 -- Column x offsets within a row of the given width; the header uses the same geometry.
+-- Without Best-in-Slot tiers (settings) the Tier column takes no room.
 local function Columns(width)
     local slotX = width - SLOT_W - 8
     local statsX = slotX - STATS_W
     local levelX = statsX - LEVEL_W
-    local tierX = levelX - TIER_W
+    local tierX = BGV.Utils.ShowBisTiers() and levelX - TIER_W or levelX
     return tierX, levelX, statsX, slotX
 end
 
@@ -864,16 +882,16 @@ local function Acquire()
         row.tierBadge:SetSize(20, 16)
         row.tierBadge:Hide()
 
-        row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        row.name = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
         row.name:SetJustifyH("LEFT")
         row.name:SetWordWrap(false)
-        row.tier = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        row.tier = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormalSmall")
         row.tier:SetJustifyH("CENTER")
         row.tier:SetWordWrap(false)
-        row.level = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        row.level = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
         row.level:SetJustifyH("LEFT")
         row.level:SetWordWrap(false)
-        row.slot = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row.slot = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlightSmall")
         row.slot:SetJustifyH("LEFT")
         row.slot:SetWordWrap(false)
         -- One font string per secondary stat, stacked (see PaintStats).
@@ -910,7 +928,7 @@ local function Acquire()
     row.hover:Show()
     row.bandEdge:SetVertexColor(accentColor[1], accentColor[2], accentColor[3], 0.95)
     row.icon:SetTexture(nil)
-    row.name:SetFontObject(GameFontHighlight)
+    row.name:SetFontObject(BetterGreatVaultFontHighlight)
     row.name:SetText("")
     row.tier:SetText("")
     row.level:SetText("")
@@ -969,7 +987,7 @@ local function PaintLinks(model)
             bar:SetPoint("LEFT", link, "LEFT", 0, 0)
             bar:Hide()
             link.bar = bar
-            local label = link:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            local label = link:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
             label:SetPoint("LEFT", link, "LEFT", 12, 0)
             label:SetPoint("RIGHT", link, "RIGHT", -8, 0)
             label:SetJustifyH("LEFT")
@@ -995,6 +1013,7 @@ local function PaintLinks(model)
             end)
             linkRows[shown] = link
         end
+        link:SetHeight(LINK_H)
         link:Show()
         return link
     end
@@ -1013,7 +1032,7 @@ local function PaintLinks(model)
         header.underline:Hide()
         header.label:SetText(group.title)
         header.label:SetTextColor(0.85, 0.65, 0.2)
-        y = y + 28
+        y = y + LINK_H
         for _, section in ipairs(group.slots) do
             local link = Take()
             local selected = section.id == selectedKey
@@ -1036,7 +1055,7 @@ local function PaintLinks(model)
                 selectedKey = sectionID
                 Layout()
             end)
-            y = y + 28
+            y = y + LINK_H
         end
         y = y + 8
     end
@@ -1133,6 +1152,7 @@ local function PlaceColumns(row, rowWidth)
     row.name:SetWidth(math.max(40, tierX - NAME_X - 10))
     row.tierBadge:ClearAllPoints()
     row.tierBadge:SetPoint("LEFT", row, "LEFT", tierX, 0)
+    row.tierBadge:SetSize(20 + BGV.Utils.FontOffset(), 16 + BGV.Utils.FontOffset())
     row.tier:ClearAllPoints()
     row.tier:SetPoint("CENTER", row.tierBadge, "CENTER", 0, 0)
     row.tier:SetWidth(TIER_W - 8)
@@ -1151,7 +1171,7 @@ local function PaintStats(row, texts, r, g, b)
     for index, text in ipairs(texts) do
         local line = row.statLines[index]
         if not line then
-            line = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            line = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlightSmall")
             line:SetJustifyH("LEFT")
             line:SetWordWrap(false)
             row.statLines[index] = line
@@ -1173,6 +1193,7 @@ local function PlaceHeader(rowWidth)
     local labels = columnHeader.labels
     labels.item:SetPoint("LEFT", columnHeader, "LEFT", 4 + 9, 0)
     labels.tier:SetPoint("LEFT", columnHeader, "LEFT", 4 + tierX, 0)
+    labels.tier:SetShown(BGV.Utils.ShowBisTiers())
     labels.level:SetPoint("LEFT", columnHeader, "LEFT", 4 + levelX, 0)
     labels.stats:SetPoint("LEFT", columnHeader, "LEFT", 4 + statsX, 0)
     labels.slot:SetPoint("LEFT", columnHeader, "LEFT", 4 + slotX, 0)
@@ -1250,12 +1271,11 @@ local function AddGroupHeader(group, rowWidth, y)
     row.name:ClearAllPoints()
     row.name:SetPoint("LEFT", row, "LEFT", 12, 0)
     row.name:SetWidth(rowWidth - 24)
-    row.name:SetFontObject(GameFontNormal)
+    row.name:SetFontObject(BetterGreatVaultFontNormal)
     row.name:SetText(string.format("%s   |cff77777b%d|r", group.name, #group.entries))
     row.name:SetTextColor(0.96, 0.86, 0.6)
 end
 
-local SOURCE_H = 22
 
 -- Heads one source's groups when several sources are listed: "RAID · MYTHIC · 334/344".
 local function AddSourceHeader(text, rowWidth, y)
@@ -1269,7 +1289,7 @@ local function AddSourceHeader(text, rowWidth, y)
     row.name:ClearAllPoints()
     row.name:SetPoint("LEFT", row, "LEFT", 2, 0)
     row.name:SetWidth(rowWidth - 8)
-    row.name:SetFontObject(GameFontNormalSmall)
+    row.name:SetFontObject(BetterGreatVaultFontNormalSmall)
     row.name:SetText(text:upper())
     row.name:SetTextColor(accentColor[1], accentColor[2], accentColor[3])
 end
@@ -1389,6 +1409,11 @@ local function PaintDatabaseRail()
             row:ClearAllPoints()
             row:SetPoint("TOPLEFT", rail, "TOPLEFT", 16, -y)
             row:SetPoint("TOPRIGHT", rail, "TOPRIGHT", -8, -y)
+            row:SetHeight(SOURCE_ROW_H)
+            row.level:ClearAllPoints()
+            row.level:SetPoint("TOPLEFT", row, "TOPLEFT", 12, -(SOURCE_ROW_H - 28))
+            row.level:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+            row.level:SetHeight(20 + BGV.Utils.FontOffset())
             row.bar:SetShown(selected)
             row.fill:SetShown(selected)
             -- The level picker only works for a listed source.
@@ -1410,7 +1435,7 @@ local function PaintDatabaseRail()
             row.level:SetText(levelText)
             row:Show()
         end
-        y = y + 62
+        y = y + SOURCE_ROW_H + SOURCE_GAP
     end
 end
 
@@ -1461,6 +1486,7 @@ function Layout()
     end
     local database = mode == "database"
     statLookups = STAT_LOOKUPS_PER_PASS
+    UpdateMetrics()
     PaintAccent()
     RefreshModeWidgets()
     ReleaseRows()
@@ -1483,6 +1509,9 @@ function Layout()
     end
     scroll:ClearAllPoints()
     scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", showRail and (LEFT_W + 16) or 16, -LIST_TOP)
+    if columnHeader then
+        columnHeader:SetHeight(HEADER_H)
+    end
     scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 16)
     if database then
         PaintDatabaseRail()
@@ -1569,6 +1598,7 @@ function Layout()
         return
     end
 
+    local showTiers = BGV.Utils.ShowBisTiers()
     local tierSpecs = TierSpecs()
     local y = 2
     local function RenderGroup(group, first)
@@ -1590,7 +1620,7 @@ function Layout()
             row.iconBG:Show()
             row.name:SetText(entry.name or "Item")
             row.name:SetTextColor(r, g, b)
-            local tier = BestTier(entry.itemID, tierSpecs)
+            local tier = showTiers and BestTier(entry.itemID, tierSpecs) or nil
             if tier then
                 local color = TIER_TEXT[tier]
                 row.tierBadge:SetVertexColor(color[1], color[2], color[3], 0.95)
@@ -1598,7 +1628,7 @@ function Layout()
                 row.tier:SetText(tier)
                 row.tier:SetTextColor(0.07, 0.07, 0.08)
             else
-                row.tier:SetText("-")
+                row.tier:SetText(showTiers and "-" or "")
                 row.tier:SetTextColor(0.45, 0.45, 0.48)
             end
             row.level:SetText(BGV.Utils.IsUsableNumber(entry.itemLevel) and tostring(entry.itemLevel) or "-")
@@ -1777,7 +1807,7 @@ local function CreateHeaderFilter(label, onClick, describe)
     button.back:SetAllPoints()
     local shine = Pixel(button, "HIGHLIGHT", 1, 1, 1, 0.18)
     shine:SetAllPoints()
-    button.text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    button.text = button:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormalSmall")
     button.text:SetPoint("CENTER", button, "CENTER", 0, 0)
     button:SetScript("OnClick", onClick)
     button:SetScript("OnEnter", function(self)
@@ -1973,7 +2003,7 @@ local function Build()
     titleRule:SetPoint("TOPLEFT", titleBar, "BOTTOMLEFT", 0, 0)
     titleRule:SetPoint("TOPRIGHT", titleBar, "BOTTOMRIGHT", 0, 0)
 
-    local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    local title = frame:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormal")
     title:SetPoint("TOPLEFT", 16, -14)
     title:SetText("Great Vault loot")
     title:SetTextColor(0.85, 0.65, 0.2)
@@ -2044,7 +2074,7 @@ local function Build()
     local railBack = Pixel(rail, "BACKGROUND", 0.035, 0.035, 0.042, 0.8)
     railBack:SetPoint("TOPLEFT", rail, "TOPLEFT", 1, 0)
     railBack:SetPoint("BOTTOMRIGHT", rail, "BOTTOMRIGHT", 0, 1)
-    local contents = rail:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    local contents = rail:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormal")
     contents:SetPoint("TOPLEFT", rail, "TOPLEFT", 16, -12)
     contents:SetText("Contents")
     contents:SetTextColor(0.85, 0.65, 0.2)
@@ -2069,7 +2099,7 @@ local function Build()
         row.fill:SetSize(6, 6)
         row.fill:SetPoint("CENTER", row.box, "CENTER", 0, 0)
         row.fill:Hide()
-        row.label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        row.label = row:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
         row.label:SetPoint("TOPLEFT", row, "TOPLEFT", 30, -6)
         row.label:SetPoint("RIGHT", row, "RIGHT", -8, 0)
         row.label:SetJustifyH("LEFT")
@@ -2093,12 +2123,12 @@ local function Build()
     divider:SetPoint("BOTTOMLEFT", rail, "BOTTOMRIGHT", 0, 1)
     rail.divider = divider
 
-    headerTitle = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    headerTitle = frame:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormalLarge")
     headerTitle:SetPoint("TOPLEFT", frame, "TOPLEFT", LEFT_W + 20, -46)
     headerTitle:SetJustifyH("LEFT")
     headerTitle:SetWordWrap(false)
     headerTitle:SetTextColor(0.96, 0.96, 0.96)
-    headerReward = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    headerReward = frame:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontHighlight")
     headerReward:SetPoint("TOPLEFT", headerTitle, "BOTTOMLEFT", 0, -4)
     headerReward:SetJustifyH("LEFT")
     headerReward:SetWordWrap(false)
@@ -2123,7 +2153,7 @@ local function Build()
     headerRule:SetPoint("BOTTOMRIGHT")
     columnHeader.labels = {}
     for _, column in ipairs({ { "item", "Item" }, { "tier", "Tier" }, { "level", "Item Level" }, { "stats", "Secondary stats" }, { "slot", "Slot" } }) do
-        local label = columnHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        local label = columnHeader:CreateFontString(nil, "OVERLAY", "BetterGreatVaultFontNormalSmall")
         label:SetText(column[2]:upper())
         label:SetTextColor(0.66, 0.66, 0.7)
         label:SetJustifyH("LEFT")

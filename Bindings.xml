@@ -1,0 +1,15 @@
+<Bindings>
+    <!-- No default keys: nothing is bound until the player picks keys in the game's Key Bindings. -->
+    <Binding name="BETTERGREATVAULT_VAULT" category="BINDING_HEADER_BETTERGREATVAULT">
+        BetterGreatVault_OnBinding("vault")
+    </Binding>
+    <Binding name="BETTERGREATVAULT_LOOT" category="BINDING_HEADER_BETTERGREATVAULT">
+        BetterGreatVault_OnBinding("loot")
+    </Binding>
+    <Binding name="BETTERGREATVAULT_DATABASE" category="BINDING_HEADER_BETTERGREATVAULT">
+        BetterGreatVault_OnBinding("database")
+    </Binding>
+    <Binding name="BETTERGREATVAULT_SETTINGS" category="BINDING_HEADER_BETTERGREATVAULT">
+        BetterGreatVault_OnBinding("settings")
+    </Binding>
+</Bindings>
