@@ -402,7 +402,8 @@ local function MakeSlider(parent, spec)
         slider:SetObeyStepOnDrag(true)
     end
     slider:EnableMouse(true)
-    slider:EnableMouseWheel(true)
+    -- No mouse wheel: the wheel scrolls the settings page, even with the pointer over a slider.
+    slider:EnableMouseWheel(false)
     local function X(value)
         return THUMB_W / 2 + (value - spec.min) / (spec.max - spec.min) * (SLIDER_W - THUMB_W)
     end
@@ -441,10 +442,6 @@ local function MakeSlider(parent, spec)
         if not quiet and current ~= spec.getter() then
             spec.setter(current)
         end
-    end)
-    slider:SetScript("OnMouseWheel", function(self, delta)
-        local current = math.floor(self:GetValue() + 0.5)
-        self:SetValue(math.max(spec.min, math.min(spec.max, current + delta)))
     end)
     function row:Refresh()
         quiet = true
@@ -667,11 +664,20 @@ local function OpenStyleMenu(anchor, onPick)
     local Case = BGV.Case
     MenuUtil.CreateContextMenu(anchor, function(_, root)
         local function Radio(text, value)
-            root:CreateRadio(text, function()
+            local entry = root:CreateRadio(text, function()
                 return Case.Choice() == value
             end, function()
                 onPick(value)
             end)
+            -- Pointing at a style plays it beside the menu (Case.ShowPreview).
+            if entry and type(entry.SetOnEnter) == "function" and type(entry.SetOnLeave) == "function" then
+                entry:SetOnEnter(function(frame)
+                    Case.ShowPreview(frame, value)
+                end)
+                entry:SetOnLeave(function()
+                    Case.HidePreview()
+                end)
+            end
         end
         Radio(string.format(L["Match specialization (%s)"], Case.StyleName(Case.SpecStyle())), Case.SPEC)
         root:CreateDivider()

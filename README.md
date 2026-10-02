@@ -24,7 +24,7 @@ this season, for any class, so you can plan what to run next.
   Shatter for frost mages and frost death knights, Fel Fire for demon hunters and warlocks, Arcane
   Portal for arcane mages and Devourer demon hunters, One-Armed Bandit for outlaw rogues, Old
   Cartoon for brewmasters, Vault Door for everyone else); you can also pick one, or a random one
-  each time.
+  each time. In the settings' style menu, pointing at a style plays it beside the menu.
 - **Detailed tooltips.** A slot's tooltip lists what counts toward it (bosses killed, Mythic+ runs,
   world activity tiers), what the next slot needs, and the next step up in reward.
 - **Best-in-Slot tiers.** Reel items are colored by their Best-in-Slot tier for your loot
