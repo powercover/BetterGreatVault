@@ -183,7 +183,8 @@ end
 
 -- The style for this opening, and its id: Random never repeats the slot's last one.
 local function PickStyle(fx)
-    local choice = Case.Choice()
+    -- The settings' preview plays the choice it was given (Case.ShowPreview).
+    local choice = fx.previewChoice or Case.Choice()
     local id
     if choice == Case.RANDOM then
         for _ = 1, 8 do
@@ -316,7 +317,7 @@ Case.RaiseAboveGlow = RaiseAboveGlow
 local function FaceAtlas(activityFrame)
     local atlas = DEFAULT_ATLAS
     local bg = activityFrame and activityFrame.Background
-    if bg and type(bg.GetAtlas) == "function" then
+    if type(bg) == "table" and type(bg.GetAtlas) == "function" then
         local current = bg:GetAtlas()
         if type(current) == "string" and current ~= "" then
             atlas = current
@@ -478,7 +479,7 @@ end
 local function Levels(fx, doorsBelow)
     local activityFrame = fx.owner
     local level = activityFrame:GetFrameLevel() + 2
-    if activityFrame.ItemFrame and type(activityFrame.ItemFrame.GetFrameLevel) == "function" then
+    if type(activityFrame.ItemFrame) == "table" and type(activityFrame.ItemFrame.GetFrameLevel) == "function" then
         level = math.max(level, activityFrame.ItemFrame:GetFrameLevel() + 1)
     end
     fx.level = level
@@ -2262,7 +2263,8 @@ function Tick(fx, elapsed)
     elseif dt < 0 then
         dt = 0
     end
-    if not VaultIsOpen() then
+    -- The settings' preview plays without the vault, and opens and closes on its own clock.
+    if not fx.preview and not VaultIsOpen() then
         Case.Shut(owner)
         return
     end
@@ -2278,7 +2280,7 @@ function Tick(fx, elapsed)
         StopTicker(fx)
         return
     end
-    if fx.want and not PointerOnSlot(owner) then
+    if fx.want and not fx.preview and not PointerOnSlot(owner) then
         fx.want = false
     end
     local style = fx.style
@@ -2435,4 +2437,122 @@ function Case.RepaintAccent(activityFrame)
     if fx and fx.phase == "closed" then
         ColorMarker(fx)
     end
+end
+
+-- --- the settings' preview -----------------------------------------------------------------------------------
+
+-- Pointing at an opening style in the settings' menu plays it beside the menu, on a stand-in slot
+-- whose reel holds empty gear slots in place of items: it opens, spins a moment, closes and
+-- starts again (Random picks another style each time). It runs only while shown.
+local PREVIEW_ICONS = {
+    "Interface\\PaperDoll\\UI-PaperDoll-Slot-Head",
+    "Interface\\PaperDoll\\UI-PaperDoll-Slot-Shoulder",
+    "Interface\\PaperDoll\\UI-PaperDoll-Slot-Chest",
+    "Interface\\PaperDoll\\UI-PaperDoll-Slot-Hands",
+    "Interface\\PaperDoll\\UI-PaperDoll-Slot-Waist",
+    "Interface\\PaperDoll\\UI-PaperDoll-Slot-Legs",
+    "Interface\\PaperDoll\\UI-PaperDoll-Slot-Feet",
+    "Interface\\PaperDoll\\UI-PaperDoll-Slot-Wrists",
+    "Interface\\PaperDoll\\UI-PaperDoll-Slot-Neck",
+    "Interface\\PaperDoll\\UI-PaperDoll-Slot-Finger",
+    "Interface\\PaperDoll\\UI-PaperDoll-Slot-Trinket",
+    "Interface\\PaperDoll\\UI-PaperDoll-Slot-MainHand",
+}
+-- Seconds the preview stays open, and closed before it opens again.
+local PREVIEW_OPEN, PREVIEW_PAUSE = 1.8, 0.6
+local PREVIEW_PAD = 10
+local preview
+
+local function PreviewOpen(panel)
+    Case.Open(panel.slot)
+    local fx = panel.fx
+    if fx.styleID then
+        panel.title:SetText(Case.StyleName(fx.styleID))
+    end
+    panel.wait, panel.phase = 0, fx.phase
+end
+
+local function PreviewTick(panel, elapsed)
+    -- The menu closed (its entry no longer shows): the preview goes with it.
+    if not (panel.anchor and panel.anchor:IsVisible()) then
+        Case.HidePreview()
+        return
+    end
+    local fx = panel.fx
+    if fx.phase ~= panel.phase then
+        panel.wait, panel.phase = 0, fx.phase
+    end
+    panel.wait = panel.wait + (elapsed or 0)
+    if fx.phase == "open" and panel.wait >= PREVIEW_OPEN then
+        fx.want = false
+    elseif (fx.phase == "closed" or fx.phase == "tail") and panel.wait >= PREVIEW_PAUSE then
+        PreviewOpen(panel)
+    end
+end
+
+local function PreviewPanel()
+    if preview then
+        return preview
+    end
+    local panel = CreateFrame("Frame", nil, UIParent)
+    panel:SetFrameStrata("TOOLTIP")
+    if panel.SetClampedToScreen then
+        panel:SetClampedToScreen(true)
+    end
+    panel:EnableMouse(false)
+    local body = Utils.Pixel(panel, "BACKGROUND", 0.055, 0.055, 0.065, 0.97)
+    body:SetAllPoints()
+    Utils.Border(panel, 0.24, 0.24, 0.27, 1)
+    local title = Utils.FontString(panel, "OVERLAY", "Normal")
+    title:SetPoint("TOPLEFT", panel, "TOPLEFT", PREVIEW_PAD, -PREVIEW_PAD)
+    title:SetJustifyH("LEFT")
+    local slot = CreateFrame("Frame", nil, panel)
+    slot:SetSize(SLOT_W, SLOT_H)
+    slot:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", PREVIEW_PAD, PREVIEW_PAD)
+    local fx = EnsureFX(slot)
+    fx.preview = true
+    fx.icons, fx.iconKey, fx.iconCount = PREVIEW_ICONS, PREVIEW_ICONS, #PREVIEW_ICONS
+    panel.title, panel.slot, panel.fx = title, slot, fx
+    panel:Hide()
+    panel:SetScript("OnUpdate", PreviewTick)
+    preview = panel
+    return panel
+end
+
+-- Plays `choice` (a style's id, Case.SPEC or Case.RANDOM) beside `anchor`, the menu entry being
+-- pointed at: to the right of the menu when the screen has room, else to its left.
+function Case.ShowPreview(anchor, choice)
+    if not anchor or AnimationsDisabled() then
+        return
+    end
+    local panel = PreviewPanel()
+    Case.Rest(panel.slot)
+    panel.fx.previewChoice = choice
+    panel.anchor = anchor
+    local width = SLOT_W + 2 * PREVIEW_PAD
+    panel:SetSize(width, SLOT_H + 3 * PREVIEW_PAD + 14)
+    panel:ClearAllPoints()
+    -- Room right of the entry, in screen pixels (each frame's coordinates times its scale).
+    local right, screen = anchor:GetRight(), UIParent:GetRight()
+    local room = 0
+    if right and screen then
+        room = screen * (UIParent:GetEffectiveScale() or 1) - right * (anchor:GetEffectiveScale() or 1)
+    end
+    if room >= (width + 20) * (panel:GetEffectiveScale() or 1) then
+        panel:SetPoint("LEFT", anchor, "RIGHT", 16, 0)
+    else
+        panel:SetPoint("RIGHT", anchor, "LEFT", -16, 0)
+    end
+    panel:Show()
+    PreviewOpen(panel)
+end
+
+function Case.HidePreview()
+    if not preview then
+        return
+    end
+    preview.anchor = nil
+    preview.fx.previewChoice = nil
+    Case.Rest(preview.slot)
+    preview:Hide()
 end
