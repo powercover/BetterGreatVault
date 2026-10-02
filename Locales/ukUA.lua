@@ -196,7 +196,6 @@ BGV.Locale.Register("ukUA", {
     ["Secondary stats"] = "Другорядні характеристики",
     ["Secondary stats filter"] = "Фільтр другорядних характеристик",
     ["See what your Great Vault can give before you choose. Each slot shows the loot it can award at the exact item level, and the loot table and loot database let you browse every reward, for any class, to plan what to run next."] = "Дізнайтеся, що може дати ваше Велике сховище, ще до вибору. Кожна комірка показує здобич, яку може дати, з точним рівнем предмета, а таблиця й база здобичі дають змогу переглянути всі нагороди для будь-якого класу, щоб спланувати, що проходити далі.",
-    ["Set bonuses: %s"] = "Бонуси комплекту: %s",
     ["Settings"] = "Налаштування",
     ["Settings reset."] = "Налаштування скинуто.",
     ["Shield"] = "Щит",

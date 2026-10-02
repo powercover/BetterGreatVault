@@ -196,7 +196,6 @@ BGV.Locale.Register("zhTW", {
     ["Secondary stats"] = "次要屬性",
     ["Secondary stats filter"] = "次要屬性篩選",
     ["See what your Great Vault can give before you choose. Each slot shows the loot it can award at the exact item level, and the loot table and loot database let you browse every reward, for any class, to plan what to run next."] = "在選擇之前看看宏偉寶庫能給你什麼。每個欄位都以準確的物品等級顯示可能的戰利品，戰利品表和戰利品資料庫可以瀏覽任意職業的所有獎勵，幫助你規劃下一步。",
-    ["Set bonuses: %s"] = "套裝效果：%s",
     ["Settings"] = "設定",
     ["Settings reset."] = "設定已重置。",
     ["Shield"] = "盾牌",

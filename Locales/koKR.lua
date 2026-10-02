@@ -196,7 +196,6 @@ BGV.Locale.Register("koKR", {
     ["Secondary stats"] = "2차 능력치",
     ["Secondary stats filter"] = "2차 능력치 필터",
     ["See what your Great Vault can give before you choose. Each slot shows the loot it can award at the exact item level, and the loot table and loot database let you browse every reward, for any class, to plan what to run next."] = "선택하기 전에 위대한 금고가 무엇을 줄 수 있는지 확인하세요. 각 칸은 받을 수 있는 전리품을 정확한 아이템 레벨로 보여 주고, 전리품 표와 전리품 데이터베이스로 모든 직업의 모든 보상을 살펴보며 다음에 할 콘텐츠를 계획할 수 있습니다.",
-    ["Set bonuses: %s"] = "세트 효과: %s",
     ["Settings"] = "설정",
     ["Settings reset."] = "설정을 초기화했습니다.",
     ["Shield"] = "방패",
