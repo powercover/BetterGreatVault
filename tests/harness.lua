@@ -154,6 +154,17 @@ function H.SlotDifficulty(slot)
 end
 
 -- Item IDs the slot can award for the loot spec: pool + difficulty + spec, gear only.
+-- The journal difficulty a season dungeon's loot is read at: Mythic Keystone, or Mythic for a
+-- dungeon brought back from an older expansion without it (in game: Kings' Rest).
+function H.DungeonDifficulty(instance, difficultyID)
+    if instance.diffSet[difficultyID] then
+        return difficultyID
+    end
+    if difficultyID == 8 and instance.diffSet[23] then
+        return 23
+    end
+end
+
 function H.Truth(slot, specID)
     local set, list = {}, {}
     local function Usable(item)
@@ -173,12 +184,17 @@ function H.Truth(slot, specID)
     elseif slot.type == T.Activities then
         for _, instanceID in ipairs(M.ids.seasonDungeons) do
             local instance = M.instances[instanceID]
-            if instance.diffSet[difficultyID] then
-                for _, bossID in ipairs(instance.bosses) do
-                    bosses[#bosses + 1] = bossID
+            local dungeonDifficulty = H.DungeonDifficulty(instance, difficultyID)
+            for _, bossID in ipairs(dungeonDifficulty and instance.bosses or {}) do
+                for _, itemID in ipairs(M.bosses[bossID].loot) do
+                    local item = M.items[itemID]
+                    if not item.nonGear and M.Drops(item, dungeonDifficulty) and Usable(item) then
+                        Add(itemID)
+                    end
                 end
             end
         end
+        return set, list
     elseif slot.type == T.World then
         for _, itemID in ipairs(BGV.WorldLoot or {}) do
             local item = M.items[itemID]
@@ -1166,10 +1182,11 @@ function H.DbTruth(source, level, classID, specID)
     elseif source == "mplus" then
         for _, instanceID in ipairs(M.ids.seasonDungeons) do
             local instance = M.instances[instanceID]
-            if instance.diffSet[8] then
+            local dungeonDifficulty = H.DungeonDifficulty(instance, 8)
+            if dungeonDifficulty then
                 for _, bossID in ipairs(instance.bosses) do
                     for _, itemID in ipairs(M.bosses[bossID].loot) do
-                        if not set[itemID] and Wanted(M.items[itemID], 8) then
+                        if not set[itemID] and Wanted(M.items[itemID], dungeonDifficulty) then
                             Add(itemID, { source = instance.name })
                         end
                     end

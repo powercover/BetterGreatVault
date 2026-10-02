@@ -170,7 +170,12 @@ end
 local function ReadInstance(instanceID, difficultyID, bossSet)
     EJ_SelectInstance(instanceID)
     if not EJ_IsValidInstanceDifficulty(difficultyID) then
-        return {}, false
+        -- A dungeon without Mythic Keystone (Kings' Rest) gives its Mythic loot.
+        if difficultyID == 8 and EJ_IsValidInstanceDifficulty(23) then
+            difficultyID = 23
+        else
+            return {}, false
+        end
     end
     if EJ_GetDifficulty() ~= difficultyID then
         EJ_SetDifficulty(difficultyID)

@@ -28,7 +28,9 @@ this season, for any class, so you can plan what to run next.
 - **Detailed tooltips.** A slot's tooltip lists what counts toward it (bosses killed, Mythic+ runs,
   world activity tiers), what the next slot needs, and the next step up in reward.
 - **Best-in-Slot tiers.** Reel items are colored by their Best-in-Slot tier for your loot
-  specialization (S, A, B, C, D), taken from Wowhead's class guides.
+  specialization (S, A, B, C, D), taken from Wowhead's class guides. Catalyzed items keep their
+  stats this season, so where a guide catalyzes a raid or Mythic+ piece into your class set, that
+  piece is S and the set piece as it drops is A.
 - **Loot spec button.** See and change the specialization your vault loot is filtered by, right on
   the vault.
 - **Claim week stays Blizzard's.** While rewards are waiting to be claimed, the addon leaves the
@@ -38,7 +40,9 @@ this season, for any class, so you can plan what to run next.
 
 Left-click an unlocked slot, or middle-click the minimap button, to list every reward it can give:
 
-- grouped by raid boss or dungeon, with each item at the exact item level the slot awards;
+- your class set (tier) pieces first: any slot can award them, raid, Mythic+ or world, whichever
+  bosses you killed. Hover the set's header for its bonuses for your loot specialization;
+- then grouped by raid boss or dungeon, with each item at the exact item level the slot awards;
 - columns for Best-in-Slot tier, item level, secondary stats, and slot with armor type;
 - a search box for item names, and filters for gear slot and secondary stats (one stat: items
   with it; two: items with both; three or more: items with any of them);
@@ -53,12 +57,14 @@ specialization or all of them at once. Pick your sources and their levels:
 
 | Source | Covers | Level |
 | --- | --- | --- |
+| Tier set | Your class's set pieces (or every class's), which any vault slot can award | Any raid difficulty, keystone level or world tier |
 | Raid | Every boss of the season's raids, killed or not | Difficulty |
 | Mythic+ keystones | Every dungeon of the season | Keystone level |
 | World | Delve, prey and world boss gear | Tier |
 
-Sources can be listed together. A level whose exact item level isn't known can't be picked: the
-database never guesses.
+The tier set, Raid and Mythic+ are listed to start with, and sources can be listed together. A
+level whose exact item level isn't known can't be picked: the database never guesses. With a
+specialization chosen, hover the tier set's header for that specialization's set bonuses.
 
 ### Minimap button and addon compartment
 

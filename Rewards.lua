@@ -1149,12 +1149,33 @@ end
 -- item gets its source. Mythic+ dungeons are read whole. Returns { entries, bosses, rows,
 -- missing (items whose info hasn't loaded), problem (why the read can't be trusted),
 -- unsupported (the instance has no such difficulty) }.
+-- Journal difficulties: Mythic+ loot is read at Mythic Keystone; a dungeon brought back from an
+-- older expansion can lack it (Kings' Rest has only Mythic), and its keystone loot is its Mythic
+-- loot.
+local KEYSTONE_DIFFICULTY = 8
+local MYTHIC_DUNGEON_DIFFICULTY = DifficultyUtil and DifficultyUtil.ID and DifficultyUtil.ID.DungeonMythic or 23
+
 local function ReadInstance(instanceID, difficultyID, encounterSet, names, anyClass)
     local read = { entries = {}, bosses = 0, rows = 0, missing = 0, missingItems = {} }
     -- Mythic+ reads the whole dungeon: the journal lists no bosses for keystone dungeons (in game,
     -- EJ_GetEncounterInfoByIndex returns nothing for them, with or without the instance ID), and
     -- nothing needs a per-boss source there. Raids read boss by boss for their kill pool.
     local byBoss = encounterSet ~= nil and type(EJ_GetEncounterInfoByIndex) == "function" and type(EJ_SelectEncounter) == "function"
+    -- Judged against this instance first: a difficulty it doesn't have is ignored by
+    -- EJ_SetDifficulty, and the journal keeps whatever the last instance had, which can be the very
+    -- one asked for (Kings' Rest then listed one stray row at Mythic Keystone).
+    if type(EJ_IsValidInstanceDifficulty) == "function" then
+        EJ_SelectInstance(instanceID)
+        KeepGuideDetached()
+        if not EJ_IsValidInstanceDifficulty(difficultyID) then
+            if difficultyID == KEYSTONE_DIFFICULTY and EJ_IsValidInstanceDifficulty(MYTHIC_DUNGEON_DIFFICULTY) then
+                difficultyID = MYTHIC_DUNGEON_DIFFICULTY
+            else
+                read.unsupported = true
+                return read
+            end
+        end
+    end
     local function UseDifficulty()
         EJ_SelectInstance(instanceID)
         SetDifficultyIfNeeded(difficultyID)
@@ -1453,7 +1474,6 @@ local function JournalInstanceName(instanceID)
     end
 end
 
-local KEYSTONE_DIFFICULTY = 8
 
 -- /bgv debug: one line per load pass (printed only when it changes) with what each instance's
 -- read found. `names` maps instanceID -> display name.
@@ -1593,7 +1613,218 @@ local function WorldEntries(specs, answerKey)
     return entries, pending
 end
 
-local function SlotItems(slot)
+----------------------------------------------------------------------------------------------------
+-- Tier set (class set) pieces
+--
+-- In Midnight Season 2 every Great Vault slot, raid, Mythic+ and world alike, can roll a piece of
+-- the season's class set, at that slot's item level, whichever bosses were killed. The game lists
+-- each class's sets in the Adventure Guide's Item Sets tab (C_LootJournal), PvP sets among them at a
+-- higher item level; the season's is the set of all five set slots whose pieces the class's
+-- Best-in-Slot lists (this season's guides) name, and no set shows if they name none. In raids the
+-- pieces drop as tokens (not gear, so the boss lists leave them out) and the last boss drops an
+-- omni-token.
+----------------------------------------------------------------------------------------------------
+
+local TIER_SLOTS = {
+    INVTYPE_HEAD = "head",
+    INVTYPE_SHOULDER = "shoulder",
+    INVTYPE_CHEST = "chest",
+    INVTYPE_ROBE = "chest",
+    INVTYPE_HAND = "hands",
+    INVTYPE_LEGS = "legs",
+}
+
+-- classID -> the season set's pieces (itemIDs) and its name; classID -> the pieces' entries once
+-- all have loaded.
+local tierSetItems = {}
+local tierSetNames = {}
+local tierEntries = {}
+
+-- Whether the Best-in-Slot list of one of `specs` names `itemID`, at any rank.
+local function InClassBis(itemID, specs)
+    for _, spec in ipairs(specs) do
+        if BGV.Bis.Tier(itemID, spec.id) then
+            return true
+        end
+    end
+    return false
+end
+
+local function SeasonSetItems(classID)
+    local known = tierSetItems[classID]
+    if known then
+        return known
+    end
+    local journal = C_LootJournal
+    if not (journal and type(journal.GetItemSets) == "function" and type(journal.GetItemSetItems) == "function")
+        or type(GetItemInfoInstant) ~= "function" or not (BGV.Bis and type(BGV.Bis.Tier) == "function") then
+        return {}
+    end
+    local sets = Utils.Call(journal.GetItemSets, classID)
+    local specs = Utils.ClassSpecs(classID)
+    if type(sets) ~= "table" or #sets == 0 or #specs == 0 then
+        return {}
+    end
+    -- The set with the most pieces named, then the highest item level, then the newest.
+    local best, bestNamed, bestLevel, bestSetID, bestName
+    for _, set in ipairs(sets) do
+        local level = Utils.IsUsableNumber(set.itemLevel) and set.itemLevel or 0
+        local setID = Utils.IsUsableNumber(set.setID) and set.setID or 0
+        local pieces, slots, named = {}, {}, 0
+        local items = Utils.Call(journal.GetItemSetItems, setID)
+        for _, item in ipairs(type(items) == "table" and items or {}) do
+            local itemID = type(item) == "table" and item.itemID
+            if Utils.IsUsableNumber(itemID) then
+                local _, _, _, equipLoc = GetItemInfoInstant(itemID)
+                local slot = TIER_SLOTS[equipLoc]
+                if slot and not slots[slot] then
+                    slots[slot] = true
+                    pieces[#pieces + 1] = itemID
+                    if InClassBis(itemID, specs) then
+                        named = named + 1
+                    end
+                end
+            end
+        end
+        if #pieces == 5 and named > 0 and (not best or named > bestNamed
+            or (named == bestNamed and (level > bestLevel or (level == bestLevel and setID > bestSetID)))) then
+            best, bestNamed, bestLevel, bestSetID, bestName = pieces, named, level, setID, set.name
+        end
+    end
+    -- Kept even when no set is named, so the sets aren't read again on every pass.
+    tierSetItems[classID] = best or {}
+    tierSetNames[classID] = best and Utils.IsUsableString(bestName) and bestName or nil
+    return tierSetItems[classID]
+end
+
+-- The season set's pieces for each of `classIDs` (unstamped, like a journal batch), and whether
+-- some are still loading. The entries stay the same tables once complete.
+local function TierEntries(classIDs)
+    local all, pending = {}, false
+    for _, classID in ipairs(classIDs) do
+        local entries = tierEntries[classID]
+        if not entries then
+            local built, missing = {}, false
+            for _, itemID in ipairs(SeasonSetItems(classID)) do
+                if IsVaultGear(itemID) then
+                    local equipLoc, icon, name, quality = ItemFields(itemID)
+                    if icon and icon ~= 0 and type(name) == "string" and name ~= "" then
+                        built[#built + 1] = {
+                            itemID = itemID,
+                            name = name,
+                            icon = icon,
+                            equipLoc = equipLoc,
+                            equipLabel = EQUIP_LABEL[equipLoc] or "Gear",
+                            quality = quality,
+                            source = BGV.L["Tier set"],
+                            -- Before every boss, dungeon and world source in the lists.
+                            bossOrder = 0,
+                            tierClass = classID,
+                        }
+                    else
+                        missing = true
+                    end
+                end
+            end
+            if missing then
+                pending = true
+            elseif #built > 0 then
+                tierEntries[classID] = built
+            end
+            entries = built
+        end
+        for _, entry in ipairs(entries) do
+            all[#all + 1] = entry
+        end
+    end
+    return all, pending
+end
+
+-- A Lua pattern for one of the game's tooltip lines in the client's language, from its format
+-- string ("(%d) Set: %s" -> "^%((%d+)%) Set: (.-)$"), or nil.
+local function LinePattern(format)
+    if not Utils.IsUsableString(format) then
+        return nil
+    end
+    local parts, index = {}, 1
+    while true do
+        local first, last, kind = format:find("%%%d*%$?([ds])", index)
+        local literal = format:sub(index, first and first - 1 or -1)
+        parts[#parts + 1] = (literal:gsub("%W", "%%%0"))
+        if not first then
+            break
+        end
+        parts[#parts + 1] = kind == "d" and "(%d+)" or "(.-)"
+        index = last + 1
+    end
+    return "^" .. table.concat(parts) .. "$"
+end
+
+-- The season set's bonuses for one of the class's specializations, as the game's own tooltip
+-- for a set piece shows them for that class and spec (the Adventure Guide's Item Sets tab does
+-- the same): { name = the set's name, lines = { { text, r, g, b } }, pending = true while a
+-- bonus's text loads }, or nil if the set or its bonuses aren't known. A bonus already active
+-- on the player reads "Set: ..." without its piece count, as in the game.
+function Rewards.SetBonuses(classID, specID)
+    local itemID = SeasonSetItems(classID)[1]
+    local item, spell, tooltip = C_Item, C_Spell, C_TooltipInfo
+    if not (itemID and Utils.IsUsableNumber(specID) and item and type(item.GetSetBonusesForSpecializationByItemID) == "function") then
+        return nil
+    end
+    local spells = Utils.Call(item.GetSetBonusesForSpecializationByItemID, specID, itemID)
+    if type(spells) ~= "table" or #spells == 0 then
+        return nil
+    end
+    local result = { name = tierSetNames[classID], lines = {}, pending = false }
+    -- The game fills a bonus's text in only once its spell has loaded.
+    for _, spellID in ipairs(spells) do
+        if spell and Utils.Call(spell.IsSpellDataCached, spellID) == false then
+            result.pending = true
+            Utils.Call(spell.RequestLoadSpellData, spellID)
+        end
+    end
+    if result.pending then
+        return result
+    end
+    local data = tooltip and type(tooltip.GetHyperlink) == "function"
+        and Utils.Call(tooltip.GetHyperlink, "item:" .. itemID, classID, specID)
+    local inactive, active = LinePattern(ITEM_SET_BONUS_GRAY), LinePattern(ITEM_SET_BONUS)
+    for _, line in ipairs(type(data) == "table" and type(data.lines) == "table" and data.lines or {}) do
+        local text = line.leftText
+        if Utils.IsUsableString(text) then
+            local bonus
+            if inactive then
+                bonus = select(2, text:match(inactive))
+            end
+            if not bonus and active then
+                bonus = text:match(active)
+            end
+            if bonus and bonus:find("%S") then
+                local color = line.leftColor
+                local r, g, b = 0.5, 0.5, 0.5
+                if type(color) == "table" and type(color.GetRGB) == "function" then
+                    r, g, b = color:GetRGB()
+                end
+                result.lines[#result.lines + 1] = { text = text, r = r, g = g, b = b }
+            end
+        end
+    end
+    if #result.lines < #spells then
+        -- Lines the tooltip didn't give: the bonuses' own descriptions instead (no piece counts).
+        result.lines = {}
+        for _, spellID in ipairs(spells) do
+            local text = spell and type(spell.GetSpellDescription) == "function" and Utils.Call(spell.GetSpellDescription, spellID)
+            if Utils.IsUsableString(text) then
+                result.lines[#result.lines + 1] = { text = text, r = 0.8, g = 0.8, b = 0.8 }
+            else
+                result.pending = true
+            end
+        end
+    end
+    return result
+end
+
+local function SourceSlotItems(slot)
     Rewards.EnsureJournal()
 
     if Utils.SameType(slot.type, Utils.ThresholdType("Raid")) then
@@ -1664,6 +1895,29 @@ local function SlotItems(slot)
     end
 
     return {}
+end
+
+-- A slot's list: its class set pieces first (raid slots cap them like loot from a boss that isn't
+-- one of the raid's last two), then its own loot.
+local function SlotItems(slot)
+    local list, pending = SourceSlotItems(slot)
+    local known = false
+    for _, kind in ipairs({ "Raid", "Activities", "World" }) do
+        known = known or Utils.SameType(slot.type, Utils.ThresholdType(kind))
+    end
+    if not known then
+        return list, pending
+    end
+    local tier, tierPending = TierEntries({ Utils.PlayerClassID() })
+    if #tier == 0 then
+        return list, pending or tierPending
+    end
+    local raid = Utils.SameType(slot.type, Utils.ThresholdType("Raid"))
+    local stamped = StampReward(tier, slot, raid and {} or nil)
+    for _, entry in ipairs(list or {}) do
+        stamped[#stamped + 1] = entry
+    end
+    return stamped, pending or tierPending
 end
 
 local scanDepth = 0
@@ -1901,6 +2155,17 @@ local function SourceSteps(kind, data)
     return {}, nil
 end
 
+-- The sources a set piece's item level can come from (the tier source's levels), and how a
+-- level of theirs is named there: "Raid Mythic", "Mythic +10+", "World Tier 8".
+local TIER_FROM = { "raid", "mplus", "world" }
+
+local function TierLevelLabel(from, label)
+    if from == "mplus" then
+        return string.format(BGV.L["Mythic %s"], label)
+    end
+    return (from == "raid" and BGV.L["Raid"] or BGV.L["World"]) .. " " .. label
+end
+
 local function BuildDatabaseLevels(source)
     local data = LearnFromVault()
     local learned = type(data.levels[source]) == "table" and data.levels[source] or {}
@@ -1945,6 +2210,28 @@ local function BuildDatabaseLevels(source)
             end
             Add(level, string.format(BGV.L["Tier %d"], level), itemLevel)
         end
+    elseif source == "tier" then
+        -- Any vault slot can award a set piece, at that slot's item level: the levels of every
+        -- other source, under their source (`from`). Raid Mythic's is the normal level: the
+        -- ceiling is only the raid's last two bosses' loot.
+        for _, from in ipairs(TIER_FROM) do
+            for _, info in ipairs(Rewards.DatabaseLevels(from)) do
+                levels[#levels + 1] = {
+                    level = from .. ":" .. tostring(info.level),
+                    label = TierLevelLabel(from, info.label),
+                    menuLabel = info.label,
+                    from = from,
+                    itemLevel = info.itemLevel,
+                }
+            end
+        end
+        -- Default: the highest item level known.
+        for _, info in ipairs(levels) do
+            if info.itemLevel and (not levels.default or info.itemLevel > levels.defaultItemLevel) then
+                levels.default, levels.defaultItemLevel = info.level, info.itemLevel
+            end
+        end
+        return levels
     end
 
     -- Default: the highest level whose item level is known (none if no level is known).
@@ -1959,6 +2246,8 @@ end
 
 -- The levels offered for a database source ("raid", "mplus", "world"), lowest first: { level,
 -- label, itemLevel (nil if unknown), ceiling (raid Mythic's last two bosses) }, plus .default.
+-- The "tier" source's are every other source's levels, keyed "source:level", each with `from`
+-- (its source) and `menuLabel` (its name within that source).
 function Rewards.DatabaseLevels(source)
     local levels = dbLevels[source]
     if not levels then
@@ -2101,7 +2390,7 @@ local function CopiesFor(key)
     return copies
 end
 
-local function DatabaseEntries(source, level, classID, specID, budget)
+local function SourceDatabaseEntries(source, level, classID, specID, budget)
     Rewards.EnsureJournal()
     local filter = { classID = classID, specID = specID or 0, cache = dbBatches, prefix = DB_PREFIX }
     local info = DatabaseLevel(source, level)
@@ -2180,11 +2469,39 @@ local function DatabaseEntries(source, level, classID, specID, budget)
     return {}, false
 end
 
--- Items the vault can award from `source` ("raid", "mplus", "world") at `level` (difficulty ID,
--- keystone level or world tier) for any class and spec (classID 0: all classes, the journal's own
--- "All classes" filter; specID 0: all of the class's specs). `budget` (optional, from
--- Rewards.NewReadBudget) caps the journal reading this call shares with others. The list and
--- its entries may be the same tables as last time's.
+-- The database's "tier" source: the class set pieces of the chosen class, or of every class, at
+-- the item level of the chosen vault slot kind and level, a group per class. The other sources
+-- don't list them, so each piece shows once.
+local function TierDatabaseEntries(level, classID)
+    local classIDs, classNames = {}, {}
+    for _, class in ipairs(Utils.Classes()) do
+        if classID == 0 or class.id == classID then
+            classIDs[#classIDs + 1] = class.id
+            classNames[class.id] = class.name
+        end
+    end
+    local tier, pending = TierEntries(classIDs)
+    local info = DatabaseLevel("tier", level)
+    local key = table.concat({ "tier", tostring(level), tostring(classID), tostring(info and info.itemLevel) }, ":")
+    local stamped = StampDatabase(tier, info, nil, nil, CopiesFor(key))
+    for _, entry in ipairs(stamped) do
+        entry.source = classNames[entry.tierClass] or BGV.L["Tier set"]
+    end
+    return stamped, pending
+end
+
+local function DatabaseEntries(source, level, classID, specID, budget)
+    if source == "tier" then
+        return TierDatabaseEntries(level, classID)
+    end
+    return SourceDatabaseEntries(source, level, classID, specID, budget)
+end
+
+-- Items the vault can award from `source` ("raid", "mplus", "world", or "tier": the class set) at
+-- `level` (difficulty ID, keystone level or world tier; for "tier", a "source:level" key) for any
+-- class and spec (classID 0: all classes, the journal's own "All classes" filter; specID 0: all
+-- of the class's specs). `budget` (optional, from Rewards.NewReadBudget) caps the journal reading
+-- this call shares with others. The list and its entries may be the same tables as last time's.
 function Rewards.DatabaseItems(source, level, classID, specID, budget)
     if not Utils.IsUsableNumber(classID) then
         return {}, false
