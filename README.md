@@ -41,7 +41,8 @@ this season, for any class, so you can plan what to run next.
 Left-click an unlocked slot, or middle-click the minimap button, to list every reward it can give:
 
 - your class set (tier) pieces first: any slot can award them, raid, Mythic+ or world, whichever
-  bosses you killed. Hover the set's header for its bonuses for your loot specialization;
+  bosses you killed. Their tooltips, and the set's header, show the set's bonuses for your loot
+  specialization (the Great Vault's loot spec button);
 - then grouped by raid boss or dungeon, with each item at the exact item level the slot awards;
 - columns for Best-in-Slot tier, item level, secondary stats, and slot with armor type;
 - a search box for item names, and filters for gear slot and secondary stats (one stat: items
@@ -63,8 +64,9 @@ specialization or all of them at once. Pick your sources and their levels:
 | World | Delve, prey and world boss gear | Tier |
 
 The tier set, Raid and Mythic+ are listed to start with, and sources can be listed together. A
-level whose exact item level isn't known can't be picked: the database never guesses. With a
-specialization chosen, hover the tier set's header for that specialization's set bonuses.
+level whose exact item level isn't known can't be picked: the database never guesses. The tier
+set's pieces and header show the set's bonuses for the chosen specialization, or for each of the
+class's specializations with All specs or All classes.
 
 ### Minimap button and addon compartment
 

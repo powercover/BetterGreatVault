@@ -196,7 +196,6 @@ BGV.Locale.Register("frFR", {
     ["Secondary stats"] = "Caractéristiques secondaires",
     ["Secondary stats filter"] = "Filtre des caractéristiques secondaires",
     ["See what your Great Vault can give before you choose. Each slot shows the loot it can award at the exact item level, and the loot table and loot database let you browse every reward, for any class, to plan what to run next."] = "Voyez ce que votre Grande chambre forte peut donner avant de choisir. Chaque emplacement montre son butin possible au niveau d'objet exact, et la table et la base du butin permettent de parcourir chaque récompense, pour toute classe, afin de planifier la suite.",
-    ["Set bonuses: %s"] = "Bonus d'ensemble : %s",
     ["Settings"] = "Options",
     ["Settings reset."] = "Options réinitialisées.",
     ["Shield"] = "Bouclier",

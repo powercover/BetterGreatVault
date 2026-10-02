@@ -961,14 +961,84 @@ local function PaintTitle(tooltip, entry)
     end
 end
 
+-- The class set's bonuses as tooltip lines, worded as the game's own tooltip words them: a spec's
+-- name, then its bonuses ("(4) Set: ..." before they're active on you, "Set: ..." once they are).
+-- Whose: in a vault slot's list, the loot spec's (the Great Vault's loot spec button); in the
+-- database, the chosen spec's, or every spec of the class (All specs, All classes). Returns the
+-- lines ({ text, r, g, b }), whether a bonus's text is still loading and the set's name, or nil.
+local function BonusLines(classID)
+    if not (BGV.Rewards and type(BGV.Rewards.SetBonuses) == "function") then
+        return nil
+    end
+    local specs = {}
+    if mode ~= "database" then
+        specs[1] = BGV.Utils.LootSpecID()
+    elseif BGV.Utils.IsUsableNumber(db.specID) and db.specID > 0 then
+        specs[1] = db.specID
+    else
+        for _, spec in ipairs(BGV.Utils.ClassSpecs(classID)) do
+            specs[#specs + 1] = spec.id
+        end
+    end
+    local lines, pending, name = {}, false, nil
+    for _, specID in ipairs(specs) do
+        local bonuses = BGV.Rewards.SetBonuses(classID, specID)
+        if bonuses then
+            name = name or bonuses.name
+            local specName = BGV.Utils.LootSpecName(specID)
+            if specName then
+                lines[#lines + 1] = { text = specName, r = 1, g = 1, b = 1 }
+            end
+            for _, line in ipairs(bonuses.lines) do
+                lines[#lines + 1] = line
+            end
+            if #bonuses.lines == 0 then
+                lines[#lines + 1] = { text = "...", r = 0.55, g = 0.55, b = 0.58 }
+            end
+            pending = pending or bonuses.pending
+        end
+    end
+    if #lines == 0 then
+        return nil
+    end
+    return lines, pending, name
+end
+
 if TooltipDataProcessor and type(TooltipDataProcessor.AddTooltipPostCall) == "function" and Enum and Enum.TooltipDataType then
     TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tooltip)
         if tooltip ~= GameTooltip then
             return
         end
         local owner = tooltip:GetOwner()
-        if owner and owner.bgvLootRow and owner.entry then
-            PaintTitle(tooltip, owner.entry)
+        if not (owner and owner.bgvLootRow and owner.entry) then
+            return
+        end
+        PaintTitle(tooltip, owner.entry)
+        -- A tooltip by item level has no spec, so for a set piece the game writes "Bonus effects
+        -- vary based on the player's specialization." where the set's bonuses go: the bonuses
+        -- (BonusLines) go there instead.
+        owner.bgvBonusPending = nil
+        local lines, pending
+        if owner.entry.tierClass and BGV.Utils.IsUsableString(ITEM_SET_BONUS_NO_VALID_SPEC) then
+            lines, pending = BonusLines(owner.entry.tierClass)
+        end
+        if not lines then
+            return
+        end
+        owner.bgvBonusPending = pending or nil
+        for index = 1, tooltip:NumLines() do
+            local left = _G[tooltip:GetName() .. "TextLeft" .. index]
+            local text = left and left:GetText()
+            if BGV.Utils.IsUsableString(text) and text == ITEM_SET_BONUS_NO_VALID_SPEC then
+                local parts = {}
+                for _, line in ipairs(lines) do
+                    parts[#parts + 1] = string.format("|cff%02x%02x%02x%s|r", math.floor(line.r * 255 + 0.5),
+                        math.floor(line.g * 255 + 0.5), math.floor(line.b * 255 + 0.5), line.text)
+                end
+                left:SetText(table.concat(parts, "\n"))
+                tooltip:Show()
+                return
+            end
         end
     end)
 end
@@ -996,34 +1066,21 @@ local function ShowItemTooltip(owner, entry)
     end
 end
 
--- The tier set header's tooltip: the set's bonuses, worded as the game's own tooltip words them,
--- for the loot spec in a vault slot's list (the spec its loot is for) and for the chosen spec in
--- the database (none for All specs).
+-- The tier set header's tooltip: the set's name and the bonuses its pieces' tooltips show
+-- (BonusLines).
 local function ShowSetBonusTooltip(row)
-    local specID
-    if mode == "database" then
-        specID = BGV.Utils.IsUsableNumber(db.specID) and db.specID > 0 and db.specID or nil
-    else
-        specID = BGV.Utils.LootSpecID()
+    local lines, pending, name
+    if row.bgvTierClass then
+        lines, pending, name = BonusLines(row.bgvTierClass)
     end
-    specID = row.bgvTierClass and specID
-    local bonuses = specID and BGV.Rewards and type(BGV.Rewards.SetBonuses) == "function"
-        and BGV.Rewards.SetBonuses(row.bgvTierClass, specID)
-    row.bgvBonusPending = bonuses and bonuses.pending or nil
-    if not bonuses or not GameTooltip then
+    row.bgvBonusPending = pending or nil
+    if not lines or not GameTooltip then
         return
     end
     GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
-    GameTooltip:AddLine(bonuses.name or L["Tier set"], 1, 0.82, 0)
-    local specName = BGV.Utils.LootSpecName(specID)
-    if specName then
-        GameTooltip:AddLine(string.format(L["Set bonuses: %s"], specName), 0.7, 0.7, 0.72)
-    end
-    for _, line in ipairs(bonuses.lines) do
+    GameTooltip:AddLine(name or L["Tier set"], 1, 0.82, 0)
+    for _, line in ipairs(lines) do
         GameTooltip:AddLine(line.text, line.r, line.g, line.b, true)
-    end
-    if #bonuses.lines == 0 then
-        GameTooltip:AddLine("...", 0.55, 0.55, 0.58)
     end
     GameTooltip:Show()
 end
@@ -1037,6 +1094,11 @@ local function UpdateRowTooltip(row)
         if row.bgvBonusPending then
             ShowSetBonusTooltip(row)
         end
+        return
+    end
+    -- A set piece whose bonuses' text was still loading: its tooltip again, now with them.
+    if row.bgvBonusPending then
+        ShowItemTooltip(row, row.entry)
         return
     end
     if GameTooltip.shouldRefreshData and type(GameTooltip.RefreshData) == "function" then

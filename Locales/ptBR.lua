@@ -196,7 +196,6 @@ BGV.Locale.Register("ptBR", {
     ["Secondary stats"] = "Atributos secundários",
     ["Secondary stats filter"] = "Filtro de atributos secundários",
     ["See what your Great Vault can give before you choose. Each slot shows the loot it can award at the exact item level, and the loot table and loot database let you browse every reward, for any class, to plan what to run next."] = "Veja o que seu Grande Cofre pode dar antes de escolher. Cada espaço mostra o saque possível no nível de item exato, e a tabela e o banco de saque permitem explorar cada recompensa, para qualquer classe, para planejar o que fazer a seguir.",
-    ["Set bonuses: %s"] = "Bônus de conjunto: %s",
     ["Settings"] = "Configurações",
     ["Settings reset."] = "Configurações redefinidas.",
     ["Shield"] = "Escudo",
