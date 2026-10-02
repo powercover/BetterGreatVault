@@ -151,15 +151,20 @@ end
 -- everything the vault can award this season, as if everything were completed, for any class
 -- and spec, at the vault's item level for a chosen difficulty, keystone level or world tier.
 local mode = "vault"
+-- "tier": the class set pieces, which any vault slot can award, listed once here rather than
+-- under every source, at the item level of a level picked from the other sources.
 local DB_SOURCES = {
+    { id = "tier", title = "Tier set", header = "Tier set", order = 0 },
     { id = "raid", title = "Raid", header = "Raid", order = 1 },
     { id = "mplus", title = "M+ keystones", header = "Mythic+", order = 2 },
     { id = "world", title = "World", header = "World", order = 3 },
 }
+-- The tier source's level menu heads each source's levels with its name.
+local TIER_FROM_TITLES = { raid = "Raid", mplus = "Mythic+", world = "World" }
 -- The database's choices, kept for the session: the sources listed (any number, never none;
--- Raid and M+ to start with), the level per source, class and spec (classID 0: all classes;
--- specID 0: all of the class's specs).
-local db = { sources = { raid = true, mplus = true }, levels = {} }
+-- the tier set, Raid and M+ to start with), the level per source, class and spec (classID 0:
+-- all classes; specID 0: all of the class's specs).
+local db = { sources = { tier = true, raid = true, mplus = true }, levels = {} }
 local classButton
 local windowTitle
 local railTitle
@@ -467,6 +472,18 @@ local function FiltersActive()
     return filterID ~= "ALL" or #SelectedStats() > 0 or searchText ~= ""
 end
 
+-- Why a filtered list is empty: nothing matches what was searched for, or the filters.
+local function NoMatchText()
+    local otherFilters = filterID ~= "ALL" or #SelectedStats() > 0
+    if searchText ~= "" and otherFilters then
+        return L["No items match the search and filters."]
+    elseif searchText ~= "" then
+        local typed = BGV.Utils.Trim(searchBox and searchBox:GetText() or searchText)
+        return string.format(L["No items match \"%s\"."], (typed:gsub("|", "||")))
+    end
+    return L["No items match these filters."]
+end
+
 local function SlotItems(slot)
     local key = CacheKey(slot)
     local cached = itemCache[key]
@@ -623,9 +640,6 @@ end
 local POLL_DELAY = 0.25
 local MAX_STALLS = 40
 local stalls = 0
--- While a list loads, it's redrawn at most this often (seconds): item data arrives in bursts of
--- events, and each redraw reads the journal again.
-local PASS_GAP = 0.1
 
 local function ResetWatch()
     pendingWatch = nil
@@ -661,6 +675,9 @@ function BGV.LootTable.RefreshPending(delay)
     if not (C_Timer and type(C_Timer.After) == "function") then
         return
     end
+    -- While a list loads, it's redrawn at most this often (seconds): item data arrives in bursts
+    -- of events, and each redraw reads the journal again.
+    local PASS_GAP = 0.1
     local wait = delay or 0
     if lastLayoutAt and type(GetTime) == "function" then
         wait = math.max(wait, PASS_GAP - (GetTime() - lastLayoutAt))
@@ -871,6 +888,45 @@ local function EntryLink(entry)
     return entry.tipLink
 end
 
+-- The item's own chat link with `itemString` ("item:...") in it, so it shows that version.
+local function FullLink(itemString, itemID)
+    local _, link = BGV.Utils.Call(C_Item.GetItemInfo, itemID)
+    if type(link) ~= "string" or link == "" then
+        return nil
+    end
+    local body = type(itemString) == "string" and itemString:match("item:[^|]+")
+    if not body then
+        return link
+    end
+    return (link:gsub("item:[^|]+", function()
+        return body
+    end, 1))
+end
+
+-- The link Shift-click puts in chat: at the exact item level the row shows when the game can
+-- give one (the vault reward's own bonuses, or the link behind the row's tooltip), measured
+-- to be sure; else the item itself. Nil while the item's data loads.
+local function ChatLink(entry)
+    local itemID = entry.itemID
+    if not (BGV.Utils.IsUsableNumber(itemID) and C_Item and type(C_Item.GetItemInfo) == "function") then
+        return nil
+    end
+    local want = entry.itemLevel
+    if BGV.Utils.IsUsableNumber(want) then
+        local candidate = EntryLink(entry)
+        if candidate and Measure(candidate) == want then
+            return FullLink(candidate, itemID)
+        end
+        local info = C_TooltipInfo
+        local data = info and type(info.GetItemKey) == "function" and BGV.Utils.Call(info.GetItemKey, itemID, want, 0)
+        local hyperlink = type(data) == "table" and data.hyperlink
+        if type(hyperlink) == "string" and not BGV.Utils.IsSecret(hyperlink) and Measure(hyperlink) == want then
+            return hyperlink:find("|H", 1, true) and hyperlink or FullLink(hyperlink, itemID)
+        end
+    end
+    return FullLink(nil, itemID)
+end
+
 -- The vault preview link can't be reliably re-scaled to an arbitrary rank (e.g. its ceiling
 -- bonus doesn't map to the normal cap by removing or shifting bonus IDs), so render the item
 -- by ID at the exact level the slot will award, the same way the Auction House does.
@@ -940,10 +996,49 @@ local function ShowItemTooltip(owner, entry)
     end
 end
 
+-- The tier set header's tooltip: the set's bonuses, worded as the game's own tooltip words them,
+-- for the loot spec in a vault slot's list (the spec its loot is for) and for the chosen spec in
+-- the database (none for All specs).
+local function ShowSetBonusTooltip(row)
+    local specID
+    if mode == "database" then
+        specID = BGV.Utils.IsUsableNumber(db.specID) and db.specID > 0 and db.specID or nil
+    else
+        specID = BGV.Utils.LootSpecID()
+    end
+    specID = row.bgvTierClass and specID
+    local bonuses = specID and BGV.Rewards and type(BGV.Rewards.SetBonuses) == "function"
+        and BGV.Rewards.SetBonuses(row.bgvTierClass, specID)
+    row.bgvBonusPending = bonuses and bonuses.pending or nil
+    if not bonuses or not GameTooltip then
+        return
+    end
+    GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+    GameTooltip:AddLine(bonuses.name or L["Tier set"], 1, 0.82, 0)
+    local specName = BGV.Utils.LootSpecName(specID)
+    if specName then
+        GameTooltip:AddLine(string.format(L["Set bonuses: %s"], specName), 0.7, 0.7, 0.72)
+    end
+    for _, line in ipairs(bonuses.lines) do
+        GameTooltip:AddLine(line.text, line.r, line.g, line.b, true)
+    end
+    if #bonuses.lines == 0 then
+        GameTooltip:AddLine("...", 0.55, 0.55, 0.58)
+    end
+    GameTooltip:Show()
+end
+
 -- The game calls this every 0.2s while a row owns the tooltip (GameTooltip_OnUpdate): pressing
 -- or letting go of the compare key shows or hides the comparisons. It stands in for the game's
 -- own refresh of changed tooltip data, so that's passed on.
 local function UpdateRowTooltip(row)
+    if not row.entry then
+        -- The tier set header: its bonuses' text arrives a moment after the first hover.
+        if row.bgvBonusPending then
+            ShowSetBonusTooltip(row)
+        end
+        return
+    end
     if GameTooltip.shouldRefreshData and type(GameTooltip.RefreshData) == "function" then
         GameTooltip:RefreshData()
         row.bgvCompare = ShouldCompare()
@@ -964,10 +1059,9 @@ end
 -- While the list scrolls, rows slide under the pointer one after another, and each would build
 -- an item tooltip (with its comparisons, the costliest thing the loot table does). Their
 -- tooltips wait instead, and the row under the pointer gets its tooltip once the list has
--- nearly stopped (the scroll's OnUpdate).
-local SETTLING_PX = 8
-
+-- nearly stopped (the scroll's OnUpdate): within SETTLING_PX of where it's going.
 local function ListMoving()
+    local SETTLING_PX = 8
     return scrollTarget ~= nil and math.abs(scrollTarget - (scroll:GetVerticalScroll() or 0)) > SETTLING_PX
 end
 
@@ -988,6 +1082,9 @@ local function ShowTipUnderPointer()
     for _, row in pairs(painted) do
         if row.entry and UnderPointer(row) then
             ShowItemTooltip(row, row.entry)
+            return
+        elseif row.bgvTierClass and UnderPointer(row) then
+            ShowSetBonusTooltip(row)
             return
         end
     end
@@ -1050,7 +1147,11 @@ local function Acquire()
                 tipWaiting = true
                 return
             end
-            ShowItemTooltip(self, self.entry)
+            if self.entry then
+                ShowItemTooltip(self, self.entry)
+            else
+                ShowSetBonusTooltip(self)
+            end
         end)
         row.UpdateTooltip = UpdateRowTooltip
         row:SetScript("OnLeave", function(self)
@@ -1059,15 +1160,19 @@ local function Acquire()
             end
         end)
         row:SetScript("OnClick", function(self, button)
+            -- Shift-click links the item in chat, Ctrl-click previews it, like the game's items.
             if button == "LeftButton" and IsModifiedClick() and self.entry and type(HandleModifiedItemClick) == "function" then
-                local link = EntryLink(self.entry)
+                local link = ChatLink(self.entry)
                 if link then
                     HandleModifiedItemClick(link)
+                elseif C_Item and type(C_Item.RequestLoadItemDataByID) == "function" then
+                    C_Item.RequestLoadItemDataByID(self.entry.itemID)
                 end
             end
         end)
     end
     row:SetHeight(ROW_H)
+    row.bgvTierClass, row.bgvBonusPending = nil, nil
     row.stripe:Hide()
     row.band:Hide()
     row.bandEdge:Hide()
@@ -1479,6 +1584,8 @@ local function Groups(items, slot)
     return grouped.groups
 end
 
+-- A group's header. The tier set's (its pieces carry their class) shows the set's bonuses when
+-- hovered (ShowSetBonusTooltip).
 local function AddGroupHeader(group, rowWidth, y)
     local row = Acquire()
     row:SetHeight(GROUP_H)
@@ -1486,6 +1593,7 @@ local function AddGroupHeader(group, rowWidth, y)
     row:ClearAllPoints()
     row:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -y)
     row.entry = nil
+    row.bgvTierClass = group.entries[1] and group.entries[1].tierClass or nil
     row.band:Show()
     row.bandEdge:Show()
     row.hover:Hide()
@@ -1633,9 +1741,6 @@ local function AddLine(kind, y, height)
     return line
 end
 
--- Painted beyond the visible area, so rows are ready before they scroll into view.
-local OVERSCAN = 64
-
 local function ViewHeight()
     local height = scroll:GetHeight()
     if type(height) ~= "number" or height < 40 then
@@ -1657,6 +1762,8 @@ local function PaintVisible(recheck)
         ReleaseRows()
         return
     end
+    -- Painted beyond the visible area, so rows are ready before they scroll into view.
+    local OVERSCAN = 64
     local top = scroll:GetVerticalScroll() or 0
     local from, to = top - OVERSCAN, top + ViewHeight() + OVERSCAN
     -- The first line reaching below `from` (lines are in order, top to bottom), then every line
@@ -1684,6 +1791,8 @@ local function PaintVisible(recheck)
         elseif recheck then
             -- The same item, maybe in a new copy: tooltips and clicks use the current one.
             row.entry = lines[index].entry
+            local group = lines[index].kind == "group" and lines[index].group
+            row.bgvTierClass = group and group.entries[1] and group.entries[1].tierClass or nil
         end
     end
     for index = first, last do
@@ -1736,16 +1845,16 @@ local function SourceName(source, info)
     return L[source.header] .. " • " .. info.label
 end
 
--- The journal reading time (ms) all the database's sources share in one redraw: a source still
--- loading reads the rest on the next redraws, so opening the database doesn't stall a frame.
--- `passReads`: how many instances the last redraw read.
-local DB_READ_MS = 3
+-- How many instances the last redraw read from the journal (DatabaseSection's budget).
 local passReads = 0
 
 -- The database mode's section: every selected source at its chosen level, for the chosen class
 -- and spec. A source whose item level isn't known yet lists nothing rather than items at a
 -- guessed one. With several sources, `parts` heads each source's groups in the list.
 local function DatabaseSection()
+    -- The journal reading time (ms) all the sources share in one redraw: a source still loading
+    -- reads the rest on the next redraws, so opening the database doesn't stall a frame.
+    local DB_READ_MS = 3
     local budget = BGV.Rewards and type(BGV.Rewards.NewReadBudget) == "function" and BGV.Rewards.NewReadBudget(DB_READ_MS) or nil
     local sources = SelectedSources()
     local keys = { "database", tostring(db.classID), tostring(db.specID) }
@@ -2021,11 +2130,14 @@ function Layout(keepRows)
         elseif section.pending and stalls >= MAX_STALLS then
             Message(L["Loot didn't finish loading. Close and reopen this window to try again."])
         elseif section.pending then
-            Message(L["Loading loot..."])
-        elseif section.database and not FiltersActive() then
+            -- Filters may still match items whose data hasn't arrived yet.
+            Message(FiltersActive() and L["Nothing matches so far. Still loading loot..."] or L["Loading loot..."])
+        elseif FiltersActive() then
+            Message(NoMatchText())
+        elseif section.database then
             Message(L["No loot found here for this class."])
         else
-            Message(L["No items for this filter."])
+            Message(L["No loot found for this slot."])
         end
         return
     end
@@ -2360,10 +2472,15 @@ local function OpenLevelMenu(anchor, sourceID)
     end
     MenuUtil.CreateContextMenu(anchor, function(_, root)
         root:CreateTitle(L["Vault reward item level"])
+        local lastFrom
         for _, info in ipairs(levels) do
             local level = info.level
             local itemLevel = ItemLevelText(info)
-            local text = info.label .. "  |cff8a8a8e" .. (itemLevel or L["unknown"]) .. "|r"
+            if info.from and info.from ~= lastFrom then
+                lastFrom = info.from
+                root:CreateTitle(L[TIER_FROM_TITLES[info.from] or info.from])
+            end
+            local text = (info.menuLabel or info.label) .. "  |cff8a8a8e" .. (itemLevel or L["unknown"]) .. "|r"
             local radio = root:CreateRadio(text, function()
                 return db.levels[sourceID] == level
             end, function()
@@ -2769,6 +2886,11 @@ local function Build()
         BGV.LootTable.Invalidate()
     end)
 
+    -- Escape closes the window through the game's list of windows to close, with the others.
+    -- Never replace or wrap the game's CloseWindows to close it first (an earlier version did):
+    -- the game closes windows that way on Escape, on death and on loading screens, and with the
+    -- addon's function in the chain, everything it closed was tainted. The Group Finder then
+    -- failed on protected values ("execution tainted by BetterGreatVault").
     if type(UISpecialFrames) == "table" then
         local listed = false
         for _, name in ipairs(UISpecialFrames) do
@@ -2782,19 +2904,6 @@ local function Build()
         end
     end
     return frame
-end
-
-if type(CloseWindows) == "function" and not BGV.LootTable.closeHooked then
-    local originalCloseWindows = CloseWindows
-    function CloseWindows(ignoreCenter, frameToIgnore)
-        local loot = _G.BetterGreatVaultLootTable
-        if loot and loot:IsShown() then
-            loot:Hide()
-            return 1
-        end
-        return originalCloseWindows(ignoreCenter, frameToIgnore)
-    end
-    BGV.LootTable.closeHooked = true
 end
 
 local function PlaceHeaders()
