@@ -662,9 +662,10 @@ local function OpenStyleMenu(anchor, onPick)
         return
     end
     local Case = BGV.Case
+    local Utils = BGV.Utils
     MenuUtil.CreateContextMenu(anchor, function(_, root)
-        local function Radio(text, value)
-            local entry = root:CreateRadio(text, function()
+        local function Radio(parent, text, value)
+            local entry = parent:CreateRadio(text, function()
                 return Case.Choice() == value
             end, function()
                 onPick(value)
@@ -679,13 +680,36 @@ local function OpenStyleMenu(anchor, onPick)
                 end)
             end
         end
-        Radio(string.format(L["Match specialization (%s)"], Case.StyleName(Case.SpecStyle())), Case.SPEC)
+        Radio(root, string.format(L["Match specialization (%s)"], Case.StyleName(Case.SpecStyle())), Case.SPEC)
         root:CreateDivider()
+        -- Each specialization's style, under its class (in the game's order), named with the
+        -- specialization; the styles of no specialization after them.
+        local bySpec, listed = {}, {}
         for _, style in ipairs(Case.STYLES) do
-            Radio(L[style.name], style.id)
+            if style.spec then
+                bySpec[style.spec] = style
+            end
+        end
+        for _, class in ipairs(Utils.Classes()) do
+            local specs = Utils.ClassSpecs(class.id)
+            local submenu
+            for _, spec in ipairs(specs) do
+                local style = bySpec[spec.id]
+                if style then
+                    submenu = submenu or root:CreateButton(Utils.ClassColorText(class.file, class.name))
+                    Radio(submenu, L[style.name] .. "  |cff8c8c8c" .. spec.name .. "|r", style.id)
+                    listed[style.id] = true
+                end
+            end
         end
         root:CreateDivider()
-        Radio(L["Random"], Case.RANDOM)
+        for _, style in ipairs(Case.STYLES) do
+            if not listed[style.id] then
+                Radio(root, L[style.name], style.id)
+            end
+        end
+        root:CreateDivider()
+        Radio(root, L["Random"], Case.RANDOM)
     end)
 end
 
@@ -713,7 +737,7 @@ local function BuildGreatVault()
         refresh(self)
         self.buttons[1]:SetText(StyleLabel())
     end
-    MakeNote(child, L["How an unlocked slot opens when you point at it. Match specialization gives some specializations a style of their own, such as Frost Shatter for frost mages and frost death knights, and Vault Door to the rest. Random picks a different style each time."], 2)
+    MakeNote(child, L["How an unlocked slot opens when you point at it. Match specialization opens it in your specialization's own style, such as Frost Shatter for frost mages. Random picks a different style each time."], 2)
     MakeCheckbox(child, L["Best-in-Slot tiers"], function()
         return BGV.Utils.ShowBisTiers()
     end, function(value)
