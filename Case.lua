@@ -26,7 +26,7 @@ local REEL_TICK = 1 / 60
 local REEL_REFRESH = 0.25
 local REEL_REFRESH_EMPTY = 0.1
 local SLOT_W, SLOT_H = 219, 126 -- Blizzard's slot, until the frame reports its own size
-local PARTICLES = 24
+local PARTICLES = 32
 
 -- Best-in-Slot tiers behind the reel's items (Bis.lua).
 local TIER_BACK = {
@@ -53,30 +53,24 @@ local FROST_SHARDS = {
     { l = 0.45117, r = 0.63086, t = 0.32031, b = 0.81250, w = 92, h = 126, x = 63.5, y = 0.0, dx = 73.8, dy = -11.9 },
 }
 
--- The styles, in the settings' order.
+-- The styles: each specialization's own (`class` and `spec`, its specialization ID), and the
+-- extras that belong to none. CaseStyles.lua adds most of them (Case.AddStyle).
 Case.STYLES = {
     { id = "vault", name = "Vault Door" },
     { id = "classic", name = "Classic" },
-    { id = "bandit", name = "One-Armed Bandit" },
-    { id = "arcane", name = "Arcane Portal" },
-    { id = "frost", name = "Frost Shatter" },
-    { id = "fel", name = "Fel Fire" },
     { id = "cartoon", name = "Old Cartoon" },
+    { id = "bandit", name = "One-Armed Bandit", class = "ROGUE", spec = 260 },
+    { id = "arcane", name = "Arcane Portal", class = "MAGE", spec = 62 },
+    { id = "frost", name = "Frost Shatter", class = "MAGE", spec = 64 },
+    { id = "fel", name = "Fel Fire", class = "DEMONHUNTER", spec = 577 },
 }
 Case.SPEC = "spec"
 Case.RANDOM = "random"
 
--- "Match specialization": a style for these specializations (more to come); the rest open as
--- Vault Door.
-local SPEC_STYLE = {
-    [64] = "frost", [251] = "frost", -- Frost mage, Frost death knight
-    [62] = "arcane", [1480] = "arcane", -- Arcane mage, Devourer demon hunter
-    [577] = "fel", [581] = "fel", -- Havoc and Vengeance demon hunters
-    [265] = "fel", [266] = "fel", [267] = "fel", -- Warlocks
-    [260] = "bandit", -- Outlaw rogue
-    [268] = "cartoon", -- Brewmaster monk
-}
-local RANDOM_POOL = { "vault", "bandit", "arcane", "frost", "fel", "cartoon" }
+-- "Match specialization": the specialization's style; one without a style opens as Vault Door.
+local SPEC_STYLE = {} -- specialization ID -> style id
+-- Random picks from every style but Classic.
+local RANDOM_POOL = {}
 local STYLE = {} -- id -> the style, below
 
 -- --- helpers ----------------------------------------------------------------------------------------
@@ -139,6 +133,8 @@ end
 local function Random(low, high)
     return low + math.random() * (high - low)
 end
+
+local atan2 = math.atan2 or math.atan
 
 local function AnimationsDisabled()
     return BetterGreatVaultDB and BetterGreatVaultDB.disableAnimations == true
@@ -421,16 +417,24 @@ local function EnsureFX(activityFrame)
     mid:SetAllPoints(fx)
     mid:EnableMouse(false)
     fx.mid = mid
-    -- Above the gates, clipped to the slot: a style's own art.
-    local top = CreateFrame("Frame", nil, fx)
+    -- Above the gates, clipped to the slot: a style's own art. A frame beside the gates, not inside
+    -- the case: the game draws everything inside a clipping frame with it, under the gates whatever
+    -- its own level. It shows and hides with the case (ShowCase).
+    local top = CreateFrame("Frame", nil, activityFrame)
     top:SetAllPoints(fx)
     top:EnableMouse(false)
+    if top.SetClipsChildren then
+        top:SetClipsChildren(true)
+    end
+    top:Hide()
     fx.top = top
 
     fx.topDoor = MakeGate(fx, activityFrame, "TOP")
     fx.bottomDoor = MakeGate(fx, activityFrame, "BOTTOM")
 
-    local marker = CreateFrame("Frame", nil, activityFrame)
+    -- The marker: over the reel but inside the case, so the gates, the pieces they break into and
+    -- every effect are drawn over it (the case draws its contents with it, under what's beside it).
+    local marker = CreateFrame("Frame", nil, fx)
     marker:SetPoint("TOP", fx, "TOP", 0, -GATE_CORNER)
     marker:SetPoint("BOTTOM", fx, "BOTTOM", 0, GATE_CORNER)
     marker:SetWidth(2)
@@ -456,6 +460,12 @@ local function EnsureFX(activityFrame)
     return fx
 end
 Case.Ensure = EnsureFX
+
+-- The case and its art layer above the gates, shown or hidden together.
+local function ShowCase(fx, shown)
+    fx:SetShown(shown)
+    fx.top:SetShown(shown)
+end
 
 local function SlotSize(fx)
     local w, h = fx:GetWidth(), fx:GetHeight()
@@ -522,7 +532,12 @@ local function FaceMode(fx, mode)
     local top, bottom = fx.topDoor.face, fx.bottomDoor.face
     top:ClearAllPoints()
     bottom:ClearAllPoints()
-    if mode == "slide" then
+    if mode == "slide" and fx.gateLayout == "columns" then
+        top:SetPoint("TOPLEFT", fx.topDoor, "TOPRIGHT", -w / 2, 0)
+        top:SetSize(w, h)
+        bottom:SetPoint("TOPRIGHT", fx.bottomDoor, "TOPLEFT", w / 2, 0)
+        bottom:SetSize(w, h)
+    elseif mode == "slide" then
         top:SetPoint("TOPLEFT", fx.topDoor, "BOTTOMLEFT", 0, h / 2)
         top:SetPoint("TOPRIGHT", fx.topDoor, "BOTTOMRIGHT", 0, h / 2)
         top:SetHeight(h)
@@ -548,25 +563,86 @@ local function FaceMode(fx, mode)
     end
 end
 
+-- How much of the slot each gate covers, from its own edge: the top and bottom gates (in
+-- "columns", the left and right ones; in "right", one gate from the right edge).
 local function Doors(fx, topCover, bottomCover)
     local top, bottom = fx.topDoor, fx.bottomDoor
+    local across = fx.gateLayout == "columns" or fx.gateLayout == "right"
     if topCover > 0.01 then
-        top:SetHeight(topCover)
+        if across then
+            top:SetWidth(topCover)
+        else
+            top:SetHeight(topCover)
+        end
         top:Show()
     else
         top:Hide()
     end
     if bottomCover > 0.01 then
-        bottom:SetHeight(bottomCover)
+        if across then
+            bottom:SetWidth(bottomCover)
+        else
+            bottom:SetHeight(bottomCover)
+        end
         bottom:Show()
     else
         bottom:Hide()
     end
 end
 
+-- Where the gates hang: "rows" (top and bottom, the usual), "columns" (left and right) or
+-- "right" (one gate over the slot from its right edge; the other unused).
+local function GateLayout(fx, layout)
+    layout = layout or "rows"
+    if (fx.gateLayout or "rows") == layout then
+        return
+    end
+    fx.gateLayout = layout
+    local top, bottom = fx.topDoor, fx.bottomDoor
+    top:ClearAllPoints()
+    bottom:ClearAllPoints()
+    if layout == "columns" then
+        top:SetPoint("TOPLEFT", fx, "TOPLEFT", 0, 0)
+        top:SetPoint("BOTTOMLEFT", fx, "BOTTOMLEFT", 0, 0)
+        bottom:SetPoint("TOPRIGHT", fx, "TOPRIGHT", 0, 0)
+        bottom:SetPoint("BOTTOMRIGHT", fx, "BOTTOMRIGHT", 0, 0)
+    elseif layout == "right" then
+        top:SetPoint("TOPRIGHT", fx, "TOPRIGHT", 0, 0)
+        top:SetPoint("BOTTOMRIGHT", fx, "BOTTOMRIGHT", 0, 0)
+        bottom:SetPoint("TOPRIGHT", fx, "TOPRIGHT", 0, 0)
+        bottom:SetPoint("BOTTOMRIGHT", fx, "BOTTOMRIGHT", 0, 0)
+    else
+        top:SetPoint("TOPLEFT", fx, "TOPLEFT", 0, 0)
+        top:SetPoint("TOPRIGHT", fx, "TOPRIGHT", 0, 0)
+        bottom:SetPoint("BOTTOMLEFT", fx, "BOTTOMLEFT", 0, 0)
+        bottom:SetPoint("BOTTOMRIGHT", fx, "BOTTOMRIGHT", 0, 0)
+    end
+    -- the faces sit by the gates' edges: placed again for the new layout
+    fx.faceMode = nil
+end
+
 local function DoorsClosed(fx)
-    local _, h = SlotSize(fx)
-    Doors(fx, h / 2, h / 2)
+    local w, h = SlotSize(fx)
+    if fx.gateLayout == "columns" then
+        Doors(fx, w / 2, w / 2)
+    elseif fx.gateLayout == "right" then
+        Doors(fx, w, 0)
+    else
+        Doors(fx, h / 2, h / 2)
+    end
+end
+
+-- The gates' face tinted (1, 1, 1: as it is), and grey when `grey`: the gates catching a style's
+-- light, heat or rot. Rest puts it back.
+local function FaceTint(fx, r, g, b, grey)
+    local top, bottom = fx.topDoor.face, fx.bottomDoor.face
+    top:SetVertexColor(r, g, b)
+    bottom:SetVertexColor(r, g, b)
+    if top.SetDesaturated then
+        top:SetDesaturated(grey == true)
+        bottom:SetDesaturated(grey == true)
+    end
+    fx.faceTinted = true
 end
 
 -- The seams along the gates' inner edges, `top` and `bottom` from the slot's edges (nil: none).
@@ -919,7 +995,8 @@ local function Spawn(fx, kind, x, y, vx, vy, life, size)
             p.live = true
             p.x, p.y, p.vx, p.vy, p.life, p.size, p.age = x, y, vx, vy, life, size, 0
             p.g, p.drag, p.grow, p.spin, p.rot, p.alpha, p.late = 0, 1, 0.8, 0, 0, 1, false
-            p.flip, p.turns, p.aspect = look.flip, look.spin, 1
+            -- flags stay booleans: a field set to nil and back makes the table grow again
+            p.flip, p.turns, p.aspect, p.align = look.flip == true, look.spin == true, 1, look.align == true
             local texture = p.texture
             if p.file ~= look.file then
                 texture:SetTexture(look.file)
@@ -975,7 +1052,10 @@ local function UpdateParticles(fx, dt)
                 local life = p.age / p.life
                 local size = p.size * (1 + p.grow * EaseOutCubic(life))
                 local width = size * p.aspect
-                if p.spin ~= 0 then
+                if p.align then
+                    -- a streak, pointing along its flight
+                    p.texture:SetRotation(atan2(p.vy, p.vx))
+                elseif p.spin ~= 0 then
                     p.rot = p.rot + p.spin * dt
                     if p.flip then
                         width = size * (math.abs(math.cos(p.rot)) + 0.12)
@@ -1016,6 +1096,7 @@ local function EnsureCircle(fx)
         mask:SetPoint("CENTER", fx, "CENTER", 0, 0)
         mask:SetSize(1, 1)
         fx.circle = mask
+        fx.circleFile = CIRCLE_MASK
         fx.masked = {}
         fx.maskedSet = {}
     end
@@ -1058,17 +1139,34 @@ local function MaskOff(fx)
     end
 end
 
-local function MaskCircle(fx, x, y, radius)
-    local size = math.max(1, 2 * radius)
-    fx.circle:SetSize(size, size)
+local function MaskCircle(fx, x, y, radius, radiusY)
+    fx.circle:SetSize(math.max(1, 2 * radius), math.max(1, 2 * (radiusY or radius)))
     fx.circle:SetPoint("CENTER", fx, "CENTER", x, y)
+end
+
+-- The hole's shape: a mask file (white, the shape in alpha), or nil for the circle.
+local function MaskShape(fx, file)
+    EnsureCircle(fx)
+    file = file or CIRCLE_MASK
+    if fx.circleFile ~= file then
+        fx.circle:SetTexture(file, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        fx.circleFile = file
+    end
 end
 
 -- What every style leaves behind when the slot closes: the gates shut over the full face, and
 -- the reel and marker as they were.
 local function RestCommon(fx)
     MaskOff(fx)
+    if fx.faceTinted then
+        FaceTint(fx, 1, 1, 1, false)
+        fx.faceTinted = false
+    end
+    if fx.circle then
+        MaskShape(fx, nil)
+    end
     ClearShake(fx)
+    GateLayout(fx, "rows")
     FaceMode(fx, "wipe")
     Levels(fx, false)
     fx.topDoor:SetAlpha(1)
@@ -2102,6 +2200,46 @@ STYLE.cartoon = {
     end,
 }
 
+-- --- styles from other files ---------------------------------------------------------------------------------
+
+-- Adds a style: `entry` as in Case.STYLES (its specialization opens with it), `style` with
+-- openFor, closeFor, Enter, Update and Rest as above.
+function Case.AddStyle(entry, style)
+    Case.STYLES[#Case.STYLES + 1] = entry
+    STYLE[entry.id] = style
+    if entry.spec then
+        SPEC_STYLE[entry.spec] = entry.id
+    end
+    if entry.id ~= "classic" then
+        RANDOM_POOL[#RANDOM_POOL + 1] = entry.id
+    end
+end
+
+for _, entry in ipairs(Case.STYLES) do
+    if entry.spec then
+        SPEC_STYLE[entry.spec] = entry.id
+    end
+    if entry.id ~= "classic" then
+        RANDOM_POOL[#RANDOM_POOL + 1] = entry.id
+    end
+end
+
+-- What CaseStyles.lua builds its styles from.
+Case.kit = {
+    MEDIA = MEDIA, WHITE = WHITE, GATE_CORNER = GATE_CORNER, CASE_STRIDE = CASE_STRIDE,
+    REEL_LEFT = REEL_LEFT, REEL_RIGHT = REEL_RIGHT, KINDS = KINDS, STYLE = STYLE,
+    Clamp01 = Clamp01, Smooth = Smooth, EaseOutCubic = EaseOutCubic, EaseInCubic = EaseInCubic,
+    EaseInOut = EaseInOut, EaseOutBack = EaseOutBack, EaseOutBounce = EaseOutBounce, Random = Random,
+    ColorTexture = ColorTexture, FaceAtlas = FaceAtlas, SlotSize = SlotSize, Levels = Levels,
+    FaceMode = FaceMode, Doors = Doors, DoorsClosed = DoorsClosed, GateLayout = GateLayout,
+    Seams = Seams, Shake = Shake, MarkerTint = MarkerTint, EnsureMarkerGlow = EnsureMarkerGlow,
+    MoveReel = MoveReel, MoveReelBy = MoveReelBy, EnsureGhosts = EnsureGhosts, DressCells = DressCells,
+    CellBacksAlpha = CellBacksAlpha, EnsureParticles = EnsureParticles, Spawn = Spawn, Dust = Dust,
+    Sparkle = Sparkle, MaskOn = MaskOn, MaskCircle = MaskCircle, MaskShape = MaskShape,
+    RestCommon = RestCommon, Cover = Cover, FrostArt = FrostArt, Shatter = Shatter, FlyShards = FlyShards,
+    FaceTint = FaceTint, PARTICLES = PARTICLES,
+}
+
 -- --- the engine: opening, open, closing, and back to rest ---------------------------------------------------------------
 
 -- One OnUpdate drives every animating slot, once per rendered frame, so the animations run at the
@@ -2239,7 +2377,7 @@ local function Finish(fx)
         fx.style.Rest(fx)
     end
     fx.phase, fx.t = "closed", 0
-    fx:Hide()
+    ShowCase(fx, false)
     fx.marker:Hide()
     FadeCaption(owner, 1)
     if fx.want and VaultIsOpen() and PointerOnSlot(owner) then
@@ -2337,7 +2475,7 @@ function Case.Open(activityFrame)
     fx.style, fx.styleID = PickStyle(fx)
     fx.phase, fx.t, fx.entered = "opening", 0, true
     fx.flags = {}
-    fx:Show()
+    ShowCase(fx, true)
     fx.style.Enter(fx)
     EnsureTicker(fx)
     FadeCaption(activityFrame, 0)
@@ -2376,7 +2514,7 @@ function Case.Rest(activityFrame)
     RaiseAboveGlow(activityFrame)
     Levels(fx, false)
     DoorsClosed(fx)
-    fx:Hide()
+    ShowCase(fx, false)
     fx.marker:Hide()
     FadeCaption(activityFrame, 1)
 end
@@ -2394,7 +2532,7 @@ function Case.Stop(activityFrame)
     end
     ClearParticles(fx)
     fx.phase, fx.t, fx.want = "closed", 0, false
-    fx:Hide()
+    ShowCase(fx, false)
     fx.marker:Hide()
     Seams(fx, nil)
     fx.topDoor:Hide()
@@ -2421,7 +2559,7 @@ function Case.Shut(activityFrame)
     if wasOpen and activityFrame.bgvSlot and activityFrame.bgvSlot.unlocked then
         DoorsClosed(fx)
     end
-    fx:Hide()
+    ShowCase(fx, false)
     local text = activityFrame.bgvText
     if text then
         if text.bgvFade then

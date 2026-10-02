@@ -30,6 +30,7 @@ Bis.lua
 GreatVault.lua
 Tooltip.lua
 Case.lua
+CaseStyles.lua
 UI.lua
 LootTable.lua
 Settings.lua

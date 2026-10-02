@@ -18,13 +18,13 @@ this season, for any class, so you can plan what to run next.
   and, once unlocked, the reward's upgrade track and exact item level.
 - **Loot reels.** Hovering an unlocked slot opens its gates and spins a reel of every item that
   slot can give you.
-- **Opening styles.** How a slot opens: Vault Door (heavy doors that unlatch and slide apart),
-  Classic, One-Armed Bandit (a slot machine whose reels stop on the payline), Arcane Portal, Frost
-  Shatter, Fel Fire and Old Cartoon. By default the style matches your specialization (Frost
-  Shatter for frost mages and frost death knights, Fel Fire for demon hunters and warlocks, Arcane
-  Portal for arcane mages and Devourer demon hunters, One-Armed Bandit for outlaw rogues, Old
-  Cartoon for brewmasters, Vault Door for everyone else); you can also pick one, or a random one
-  each time. In the settings' style menu, pointing at a style plays it beside the menu.
+- **Opening styles.** How a slot opens. Every specialization has a style of its own, used by
+  default: Mortal Strike cuts the gates in two for arms warriors, Cat Claw rakes them into strips
+  for feral druids, Tidal Wave washes them off for restoration shamans, Sands of Time crumbles them
+  while the reel runs backwards for augmentation evokers, and so on for all 40. Three more belong to
+  no specialization: Vault Door (heavy doors that unlatch and slide apart), Classic and Old Cartoon.
+  You can pick any style, or a random one each time. The settings' style menu lists the styles by
+  class, and pointing at one plays it beside the menu.
 - **Detailed tooltips.** A slot's tooltip lists what counts toward it (bosses killed, Mythic+ runs,
   world activity tiers), what the next slot needs, and the next step up in reward.
 - **Best-in-Slot tiers.** Reel items are colored by their Best-in-Slot tier for your loot
@@ -222,7 +222,8 @@ The addon is plain Lua with no libraries.
 | `GreatVault.lua` | Reads the vault's slots, progress and rewards |
 | `Rewards.lua` | Loot lists and item levels from the Encounter Journal; the loot database |
 | `UI.lua` | The Great Vault overlay: each slot's text and hover, and the slot art it replaces |
-| `Case.lua` | What an unlocked slot shows when hovered: its gates, the loot reel and the opening styles |
+| `Case.lua` | What an unlocked slot shows when hovered: its gates, the loot reel and the first opening styles |
+| `CaseStyles.lua` | The specializations' opening styles |
 | `Tooltip.lua` | The slot tooltip |
 | `LootTable.lua` | The loot table and loot database window |
 | `Minimap.lua` | The minimap button, its popup, and the addon compartment entry |
