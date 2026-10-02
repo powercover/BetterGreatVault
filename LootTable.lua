@@ -2854,6 +2854,8 @@ local function Build()
     track:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", 6, 0)
     local thumb = Accent(Pixel(frame, "OVERLAY", 1, 1, 1, 1), 0.7)
     thumb:SetWidth(3)
+    -- The thumb's size and its distance from the track's top, as last drawn.
+    local thumbHeight, thumbOffset = 0, 0
     UpdateScrollThumb = function()
         local range = scroll:GetVerticalScrollRange() or 0
         local height = scroll:GetHeight() or 0
@@ -2862,14 +2864,70 @@ local function Build()
             thumb:Hide()
             return
         end
-        local thumbHeight = math.max(24, height * height / (height + range))
-        local offset = (scroll:GetVerticalScroll() or 0) / range * (height - thumbHeight)
+        thumbHeight = math.max(24, height * height / (height + range))
+        thumbOffset = (scroll:GetVerticalScroll() or 0) / range * (height - thumbHeight)
         thumb:SetHeight(thumbHeight)
         thumb:ClearAllPoints()
-        thumb:SetPoint("TOP", track, "TOP", 0, -offset)
+        thumb:SetPoint("TOP", track, "TOP", 0, -thumbOffset)
         track:Show()
         thumb:Show()
     end
+    -- The scroll bar can be dragged: grabbing the thumb moves it with the pointer, and pressing
+    -- the track elsewhere brings the thumb's middle there first. The grab area is wider than the
+    -- 3px bar, and the thumb widens while it's hovered or dragged.
+    local grab = CreateFrame("Frame", nil, frame)
+    grab.bgvScrollGrab = true
+    grab:SetPoint("TOPLEFT", track, "TOPLEFT", -5, 0)
+    grab:SetPoint("BOTTOMRIGHT", track, "BOTTOMRIGHT", 5, 0)
+    grab:EnableMouse(true)
+    local dragFrom
+    local function PointerFromTop()
+        local _, y = GetCursorPosition()
+        return (grab:GetTop() or 0) - y / grab:GetEffectiveScale()
+    end
+    local function DragTo(top)
+        local range = scroll:GetVerticalScrollRange() or 0
+        local free = (scroll:GetHeight() or 0) - thumbHeight
+        if range <= 0 or free <= 0 then
+            return
+        end
+        scrollTarget = nil
+        scroll:SetVerticalScroll(math.max(0, math.min(free, top)) / free * range)
+    end
+    local function StopDrag()
+        dragFrom = nil
+        grab:SetScript("OnUpdate", nil)
+        thumb:SetWidth(grab:IsMouseOver() and 5 or 3)
+    end
+    grab:SetScript("OnMouseDown", function(_, button)
+        if button ~= "LeftButton" or not thumb:IsShown() then
+            return
+        end
+        local pointer = PointerFromTop()
+        if pointer >= thumbOffset and pointer <= thumbOffset + thumbHeight then
+            dragFrom = pointer - thumbOffset
+        else
+            dragFrom = thumbHeight / 2
+            DragTo(pointer - dragFrom)
+        end
+        thumb:SetWidth(5)
+        grab:SetScript("OnUpdate", function()
+            if not IsMouseButtonDown("LeftButton") then
+                StopDrag()
+                return
+            end
+            DragTo(PointerFromTop() - dragFrom)
+        end)
+    end)
+    grab:SetScript("OnMouseUp", StopDrag)
+    grab:SetScript("OnEnter", function()
+        thumb:SetWidth(5)
+    end)
+    grab:SetScript("OnLeave", function()
+        if not dragFrom then
+            thumb:SetWidth(3)
+        end
+    end)
     scroll:SetScript("OnScrollRangeChanged", function()
         UpdateScrollThumb()
     end)
