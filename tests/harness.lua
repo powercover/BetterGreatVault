@@ -513,6 +513,7 @@ end
 
 -- Returns nil on success, or the load error text.
 function H.Boot(reference, testsDir)
+    H.reference = reference and true or false
     H.BuildSlots()
     BGV.UI = UI
     BGV.Tooltip = Permissive({})
@@ -542,6 +543,7 @@ function H.Boot(reference, testsDir)
     BGV.GreatVault.GetSnapshot = function()
         return H.vaultSlots
     end
+    H.LoadFile("ItemLinks.lua")
     H.LoadFile("LootTable.lua", true)
     H.LoadFile("Core.lua")
     if #H.loadErrors > 0 then
@@ -582,6 +584,43 @@ H.SETTLE_LIMIT = 20
 
 local function Result(key, status, detail)
     H.results[#H.results + 1] = { key = key, status = status, detail = detail or "" }
+end
+
+-- Whether the addon listens for `event` (a frame of its own registered for it).
+local function AddonListens(event)
+    for _, frame in ipairs(M.registry[event] or {}) do
+        if frame.__owner == "addon" and frame.__events[event] then
+            return true
+        end
+    end
+    return false
+end
+
+-- g: the addon listens for GET_ITEM_INFO_RECEIVED (sent for every item the game loads) only while
+-- a list waits for an item: not before, yes while one does, not after. `phase` names the moment.
+function H.NoteItemListening(phase)
+    H.itemListening = H.itemListening or {}
+    H.itemListening[phase] = AddonListens("GET_ITEM_INFO_RECEIVED")
+end
+
+function H.CheckItemListening()
+    if H.reference or type(BGV.Rewards.WaitingForItems) ~= "function" then
+        Result("g", "SKIP", "this reader doesn't say when it waits for items")
+        return
+    end
+    local seen = H.itemListening or {}
+    local want = { before = false, waiting = true, after = false }
+    local wrong = {}
+    for _, phase in ipairs({ "before", "waiting", "after" }) do
+        if seen[phase] ~= want[phase] then
+            wrong[#wrong + 1] = string.format("%s: %s", phase, seen[phase] == nil and "not noted" or (seen[phase] and "listening" or "not listening"))
+        end
+    end
+    if #wrong > 0 then
+        Result("g", "FAIL", table.concat(wrong, "; "))
+    else
+        Result("g", "PASS", "listening only while a list waits for an item")
+    end
 end
 
 function H.Finished(name)

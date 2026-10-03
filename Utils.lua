@@ -23,22 +23,61 @@ function Utils.IsUsableString(value)
     return type(value) == "string" and value ~= "" and not Utils.IsSecret(value)
 end
 
--- Selective boundary wrapper. Use around Blizzard calls that may be missing or restricted.
+local function Answered(ok, first, ...)
+    if not ok or Utils.IsSecret(first) then
+        return
+    end
+    return first, ...
+end
+
+-- Calls a Blizzard function that may be missing, fail, or answer with a secret value: nothing
+-- comes back then. Every result comes back otherwise, nils in between included.
 function Utils.Call(func, ...)
     if type(func) ~= "function" then
         return
     end
+    return Answered(pcall(func, ...))
+end
 
-    local packed = { pcall(func, ...) }
-    if not packed[1] then
-        return
+-- --- errors ------------------------------------------------------------------------------------
+
+-- Errors the addon caught (Utils.Protect): the last few, each with how often it happened.
+-- /bgv debug lists them.
+BGV.errors = {}
+local MAX_ERRORS = 10
+
+function Utils.NoteError(label, err)
+    local message = tostring(err)
+    BGV.lastError = message
+    for _, known in ipairs(BGV.errors) do
+        if known.message == message then
+            known.count = known.count + 1
+            return
+        end
     end
-
-    if Utils.IsSecret(packed[2]) then
-        return
+    if #BGV.errors >= MAX_ERRORS then
+        table.remove(BGV.errors, 1)
     end
+    BGV.errors[#BGV.errors + 1] = { label = label, message = message, count = 1 }
+    if BetterGreatVaultDB and BetterGreatVaultDB.debug and type(Utils.Print) == "function" then
+        Utils.Print(label .. ": " .. message)
+    end
+end
 
-    return unpack(packed, 2)
+local function Settled(label, ok, ...)
+    if ok then
+        return ...
+    end
+    Utils.NoteError(label, (...))
+end
+
+-- `fn` wrapped so an error in it is caught and noted (Utils.NoteError) instead of reaching the
+-- game's error frame, or the Blizzard code that called it when `fn` hooks it: an addon's mistake
+-- must never break the Great Vault, a tooltip or another addon's data bar.
+function Utils.Protect(label, fn)
+    return function(...)
+        return Settled(label, pcall(fn, ...))
+    end
 end
 
 function Utils.CopyDefaults(target, defaults)
@@ -156,6 +195,15 @@ function Utils.LoadAddon(name)
     elseif type(LoadAddOn) == "function" then
         LoadAddOn(name)
     end
+end
+
+-- An item's instant info (no cache needed): C_Item's, or the old global the game had before it.
+function Utils.ItemInfoInstant(itemID)
+    local getInfo = C_Item and C_Item.GetItemInfoInstant or GetItemInfoInstant
+    if not Utils.IsUsableNumber(itemID) or type(getInfo) ~= "function" then
+        return
+    end
+    return Utils.Call(getInfo, itemID)
 end
 
 function Utils.Print(message)
@@ -828,7 +876,14 @@ function Utils.CreateEmblem(parent, size)
         end
         Pose()
     end)
-    emblem:SetScript("OnUpdate", Animate)
+    -- It spins while shown, unless paused (the settings page pauses it while it's scrolled away).
+    function emblem:SetAnimated(on)
+        if self.bgvAnimated ~= on then
+            self.bgvAnimated = on
+            self:SetScript("OnUpdate", on and Animate or nil)
+        end
+    end
+    emblem:SetAnimated(true)
     Pose()
     return emblem
 end
