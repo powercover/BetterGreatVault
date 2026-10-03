@@ -43,12 +43,14 @@ database list every reward for any class and specialization, so you know what to
   Wowhead's class guides. Catalyzed items keep their stats this season, so a raid or Mythic+ piece
   a guide catalyzes into your class set counts as S, and the set piece as it drops as A.
 - **Loot spec button.** See and change the specialization your vault loot is filtered by, right
-  on the vault.
+  on the vault. The game rolls your rewards for the loot spec you have when you open the vault in
+  person, so when you open it from elsewhere with rewards waiting, it also says which spec that
+  will be, and the button still works.
 - **Sad gates.** Point at the vault's **Collect** button, which takes another reward instead of an
   item, and your completed slots look disappointed. The slot holding your best reward takes it
   hardest. You can turn this off in the settings.
-- **Claim week stays Blizzard's.** While rewards wait to be claimed, the vault looks and works
-  exactly as Blizzard made it (apart from the sad gates), so choosing your reward is untouched.
+- **Choosing stays Blizzard's.** Once your rewards are rolled, the vault looks and works exactly
+  as Blizzard made it (apart from the sad gates), so choosing your reward is untouched.
 
 ### Opening styles
 
@@ -58,7 +60,7 @@ beside the menu.
 
 | Class | Styles |
 | --- | --- |
-| Death Knight | Blood: **Blood Rite** · Frost: **Runic Frost** · Unholy: **Plague** |
+| Death Knight | Blood: **Bonestorm** · Frost: **Runic Frost** · Unholy: **Plague** |
 | Demon Hunter | Havoc: **Fel Fire** · Vengeance: **Sigil Flames** · Devourer: **Void Maw** |
 | Druid | Balance: **Eclipse** · Feral: **Cat Claw** · Guardian: **Bear Maul** · Restoration: **Bloom** |
 | Evoker | Devastation: **Dragon Breath** · Preservation: **Emerald Dream** · Augmentation: **Sands of Time** |
@@ -110,7 +112,8 @@ All specs or All classes.
 
 - An animated vault door: the handle turns on hover, and the gem pulses while rewards are waiting.
 - Hover it for this week's vault at a glance: each slot's item level or progress, the time to the
-  weekly reset, and what each click does.
+  weekly reset, and what each click does. While rewards wait, it says so first, and shows the
+  week once something counts toward it.
 - Listed in the minimap's addon compartment (Blizzard's addon menu) with the same clicks.
 - A data feed for data bars such as ElvUI, Titan Panel or ChocolateBar (`5/9` unlocked slots),
   when another addon has loaded LibDataBroker. Nothing is bundled for it.

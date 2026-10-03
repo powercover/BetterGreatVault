@@ -42,6 +42,7 @@ BGV.Locale.Register("zhTW", {
     ["World activities x%d"] = "世界活動 x%d",
     ["Kills: %s"] = "擊殺：%s",
     ["Reward: %s %d/%d (%d ilvl)"] = "獎勵：%s %d/%d（%d 裝等）",
+    ["Your rewards will be rolled for %s at the Great Vault."] = "獎勵將在宏偉寶庫中依%s專精產生。",
 
     -- Great Vault: slot tooltip
     ["... and %d more"] = "……還有 %d 個",
@@ -78,7 +79,7 @@ BGV.Locale.Register("zhTW", {
     ["Rampage"] = "暴怒",
     ["Cat Claw"] = "獵豹之爪",
     ["Bear Maul"] = "熊之重毆",
-    ["Blood Rite"] = "鮮血儀式",
+    ["Bonestorm"] = "白骨風暴",
     ["Chaos Bolt"] = "混沌箭",
     ["Lightning Strike"] = "閃電打擊",
     ["Plague"] = "瘟疫",

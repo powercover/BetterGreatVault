@@ -42,6 +42,7 @@ BGV.Locale.Register("ruRU", {
     ["World activities x%d"] = "Мировые активности x%d",
     ["Kills: %s"] = "Победы: %s",
     ["Reward: %s %d/%d (%d ilvl)"] = "Награда: %s %d/%d (%d ilvl)",
+    ["Your rewards will be rolled for %s at the Great Vault."] = "Награды выпадут для специализации «%s» в Великом хранилище.",
 
     -- Great Vault: slot tooltip
     ["... and %d more"] = "... и ещё %d",
@@ -78,7 +79,7 @@ BGV.Locale.Register("ruRU", {
     ["Rampage"] = "Буйство",
     ["Cat Claw"] = "Кошачий коготь",
     ["Bear Maul"] = "Медвежья трёпка",
-    ["Blood Rite"] = "Ритуал крови",
+    ["Bonestorm"] = "Буря костей",
     ["Chaos Bolt"] = "Стрела Хаоса",
     ["Lightning Strike"] = "Удар молнии",
     ["Plague"] = "Чума",

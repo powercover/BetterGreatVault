@@ -591,8 +591,19 @@ local function PlaceAt(region, x, y)
     region:SetPoint("TOPLEFT", popup, "TOPLEFT", x, -y)
 end
 
-local function LayoutWeek(y, accent)
-    local rows = WeekRows()
+-- Whether anything counts toward the vault yet: some progress on any slot.
+local function AnyProgress(rows)
+    for _, slots in ipairs(rows) do
+        for _, slot in ipairs(slots) do
+            if slot.unlocked or (Utils.IsUsableNumber(slot.progress) and slot.progress > 0) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function LayoutWeek(y, accent, rows)
     local unlocked, total = 0, 0
     for _, slots in ipairs(rows) do
         for _, slot in ipairs(slots) do
@@ -658,10 +669,15 @@ function LayoutPopup()
     end
 
     -- Like the vault, the week's slots only while it shows the week's progress; and only if wanted.
+    -- While rewards wait, only once something counts: a new week's empty slots say nothing then.
     local week = ProgressWeek() == true and PopupWeek()
+    local rows = week and WeekRows()
+    if week and waiting and not AnyProgress(rows) then
+        week = false
+    end
     popup.heading:SetShown(week)
     if week then
-        y = LayoutWeek(y, accent)
+        y = LayoutWeek(y, accent, rows)
     else
         popup.count:Hide()
         popup.note:Hide()

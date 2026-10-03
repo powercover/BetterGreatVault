@@ -42,6 +42,7 @@ BGV.Locale.Register("koKR", {
     ["World activities x%d"] = "월드 활동 x%d",
     ["Kills: %s"] = "처치: %s",
     ["Reward: %s %d/%d (%d ilvl)"] = "보상: %s %d/%d (%d 템렙)",
+    ["Your rewards will be rolled for %s at the Great Vault."] = "보상은 위대한 금고에서 %s 전문화로 결정됩니다.",
 
     -- Great Vault: slot tooltip
     ["... and %d more"] = "... 외 %d개",
@@ -78,7 +79,7 @@ BGV.Locale.Register("koKR", {
     ["Rampage"] = "광란",
     ["Cat Claw"] = "표범 발톱",
     ["Bear Maul"] = "곰 후려치기",
-    ["Blood Rite"] = "피의 의식",
+    ["Bonestorm"] = "뼈의 폭풍",
     ["Chaos Bolt"] = "혼돈의 화살",
     ["Lightning Strike"] = "번개 강타",
     ["Plague"] = "역병",

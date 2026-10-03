@@ -122,7 +122,6 @@ end
 
 local function AttachToVault()
     BGV.UI.Hook()
-    BGV.Tooltip.Hook()
     if BGV.UI.hooked then
         BGV.UI.Prepare()
         BGV.UI.RefreshOpenFrame()

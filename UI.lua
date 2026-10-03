@@ -5,6 +5,7 @@ BGV.UI = {}
 local UI = BGV.UI
 local Utils = BGV.Utils
 local Case = BGV.Case
+local L = BGV.L
 
 -- Hooks on Blizzard's vault: an error in one of ours is noted (Utils.Protect), never passed back to
 -- the Blizzard code that called it.
@@ -24,6 +25,12 @@ local function OpenLootTableOnClick()
     return not BetterGreatVaultDB or BetterGreatVaultDB.openLootTable ~= false
 end
 
+-- The vault shows this week's progress, not rewards to choose from: the only time the addon
+-- changes it (Rewards.ShowingWeeklyProgress).
+local function ProgressWeek()
+    return not (BGV.Rewards and BGV.Rewards.ShowingWeeklyProgress) or BGV.Rewards.ShowingWeeklyProgress()
+end
+
 -- The addon's outlined small font, sized by the text size setting (Utils.ApplyFontSize).
 local function ApplyFont(fontString)
     fontString:SetFontObject(Utils.Font("Vault"))
@@ -38,6 +45,10 @@ local function ApplyFont(fontString)
         fontString:SetSpacing(1)
     end
 end
+
+-- The middle of the band above a locked slot's keyhole, below the slot's top: the keyhole starts
+-- about 50 below the top of Blizzard's 126-high slot, and the art's edge takes the first 8.
+local LOCKED_BAND_MIDDLE = 28
 
 local function LayoutLines(activityFrame)
     local progress = activityFrame.bgvProgress
@@ -57,11 +68,20 @@ local function LayoutLines(activityFrame)
 
     local gap = rewardHeight > 0 and 2 or 0
     local total = progressHeight + gap + rewardHeight
-    local top = total / 2
 
     progress:ClearAllPoints()
-    progress:SetPoint("TOPLEFT", activityFrame, "LEFT", 10, top)
-    progress:SetPoint("TOPRIGHT", activityFrame, "RIGHT", -10, top)
+    local slot = activityFrame.bgvSlot
+    if type(slot) == "table" and not slot.unlocked then
+        -- A locked slot's art has its keyhole in the middle: the text goes in the band above it,
+        -- where Blizzard keeps its own (its Threshold sits 16 below the top).
+        local top = math.min(-4, total / 2 - LOCKED_BAND_MIDDLE)
+        progress:SetPoint("TOPLEFT", activityFrame, "TOPLEFT", 10, top)
+        progress:SetPoint("TOPRIGHT", activityFrame, "TOPRIGHT", -10, top)
+    else
+        local top = total / 2
+        progress:SetPoint("TOPLEFT", activityFrame, "LEFT", 10, top)
+        progress:SetPoint("TOPRIGHT", activityFrame, "RIGHT", -10, top)
+    end
     reward:ClearAllPoints()
     reward:SetPoint("TOPLEFT", progress, "BOTTOMLEFT", 0, -2)
     reward:SetPoint("TOPRIGHT", progress, "BOTTOMRIGHT", 0, -2)
@@ -102,7 +122,12 @@ local function BuryShownRegion(region)
     end
     if not region.bgvBuryHook and type(hooksecurefunc) == "function" then
         region.bgvBuryHook = true
+        -- Only in the progress week: outside it Blizzard's refresh decides, even before the addon
+        -- has let go of the slot (RestoreVanilla).
         local function Force(self)
+            if not ProgressWeek() then
+                return
+            end
             local parent = self.GetParent and self:GetParent()
             while parent and not parent.bgvSlot and parent.GetParent do
                 parent = parent:GetParent()
@@ -133,6 +158,9 @@ local function KillAnim(anim)
     if anim.HookScript and not anim.bgvBuryHook then
         anim.bgvBuryHook = true
         HookScript(anim, "OnPlay", function(self)
+            if not ProgressWeek() then
+                return
+            end
             local owner = self.GetParent and self:GetParent()
             while owner and not owner.bgvSlot and owner.GetParent do
                 owner = owner:GetParent()
@@ -423,6 +451,9 @@ local function BuryDefaultRegion(region)
     end
     region.bgvBuryHook = true
     local function Force()
+        if not ProgressWeek() then
+            return
+        end
         local parent = region.GetParent and region:GetParent()
         if not parent or not parent.bgvSlot or region.bgvForcing then
             return
@@ -506,8 +537,17 @@ local function SyncSkinSoon(weeklyRewardsFrame)
     end)
 end
 
-local function ProgressWeek()
-    return not (BGV.Rewards and BGV.Rewards.ShowingWeeklyProgress) or BGV.Rewards.ShowingWeeklyProgress()
+-- Opened away from the vault with rewards waiting, Blizzard dims the whole window (its Blackout,
+-- which also takes the mouse) and puts its "unclaimed rewards" box on top. The game rolls those
+-- rewards when the vault is opened there, for the loot spec of that moment, so the loot spec
+-- button and the line saying which spec that is (AwayNote) sit above the dimming.
+local function AboveDimming(weeklyRewardsFrame)
+    local level = weeklyRewardsFrame:GetFrameLevel() + 20
+    local blackout = weeklyRewardsFrame.Blackout
+    if type(blackout) == "table" and type(blackout.GetFrameLevel) == "function" then
+        level = math.max(level, blackout:GetFrameLevel() + 10)
+    end
+    return level
 end
 
 local function EnsureSpecButton(weeklyRewardsFrame)
@@ -519,7 +559,7 @@ local function EnsureSpecButton(weeklyRewardsFrame)
     -- In line with the rows' labels (Blizzard's RaidFrame and the rest sit at x 68), clear of the
     -- vault border's corner bracket, which draws over everything in the frame's top-left.
     button:SetPoint("TOPLEFT", weeklyRewardsFrame, "TOPLEFT", 68, -34)
-    button:SetFrameLevel(weeklyRewardsFrame:GetFrameLevel() + 20)
+    button:SetFrameLevel(AboveDimming(weeklyRewardsFrame))
     weeklyRewardsFrame.bgvSpecButton = button
     return button
 end
@@ -539,6 +579,73 @@ local function RefreshSpecButton(weeklyRewardsFrame)
     Utils.RefreshLootSpecButton(EnsureSpecButton(weeklyRewardsFrame))
 end
 
+-- The line under Blizzard's "unclaimed rewards" box: which spec the rewards will be rolled for.
+-- A soft dark band behind it, fading out to both sides, keeps the dimmed slots' edges out of it.
+local NOTE_FADE = 48
+
+local function AwayNote(weeklyRewardsFrame)
+    local note = weeklyRewardsFrame.bgvAwayNote
+    if note then
+        return note
+    end
+    note = CreateFrame("Frame", nil, weeklyRewardsFrame)
+    note.center = Utils.Pixel(note, "BACKGROUND", 0, 0, 0, 0.6)
+    note.center:SetPoint("TOP")
+    note.center:SetPoint("BOTTOM")
+    note.left = Utils.Pixel(note, "BACKGROUND", 0, 0, 0, 0.6)
+    note.left:SetPoint("TOPLEFT")
+    note.left:SetPoint("BOTTOMRIGHT", note.center, "BOTTOMLEFT")
+    note.right = Utils.Pixel(note, "BACKGROUND", 0, 0, 0, 0.6)
+    note.right:SetPoint("TOPRIGHT")
+    note.right:SetPoint("BOTTOMLEFT", note.center, "BOTTOMRIGHT")
+    if type(CreateColor) == "function" then
+        local clear, dark = CreateColor(0, 0, 0, 0), CreateColor(0, 0, 0, 0.6)
+        if not (pcall(note.left.SetGradient, note.left, "HORIZONTAL", clear, dark)
+            and pcall(note.right.SetGradient, note.right, "HORIZONTAL", dark, clear)) then
+            note.left:SetVertexColor(0, 0, 0, 0.3)
+            note.right:SetVertexColor(0, 0, 0, 0.3)
+        end
+    end
+    note.text = Utils.FontString(note, "OVERLAY", "Highlight")
+    note.text:SetPoint("CENTER", 0, 0)
+    note.text:SetTextColor(0.82, 0.82, 0.85)
+    weeklyRewardsFrame.bgvAwayNote = note
+    return note
+end
+
+local function HideAwayNote(weeklyRewardsFrame)
+    local note = weeklyRewardsFrame and weeklyRewardsFrame.bgvAwayNote
+    if note then
+        note:Hide()
+    end
+end
+
+-- Shown with Blizzard's box, and only before the rewards are rolled (ProgressWeek): once they
+-- are, the loot spec no longer changes them.
+local function RefreshAwayNote(weeklyRewardsFrame)
+    local overlay = weeklyRewardsFrame and weeklyRewardsFrame.Overlay
+    local away = ProgressWeek() and type(overlay) == "table" and type(overlay.IsShown) == "function"
+        and overlay:IsShown()
+    local name = away and Utils.LootSpecName(Utils.LootSpecID())
+    if not name then
+        HideAwayNote(weeklyRewardsFrame)
+        return
+    end
+    local note = AwayNote(weeklyRewardsFrame)
+    note:ClearAllPoints()
+    note:SetPoint("TOP", overlay, "BOTTOM", 0, -6)
+    note:SetFrameLevel(AboveDimming(weeklyRewardsFrame))
+    note.text:SetText(string.format(L["Your rewards will be rolled for %s at the Great Vault."], "|cffffffff" .. name .. "|r"))
+    local width = math.ceil(note.text:GetStringWidth() or 0)
+    note.center:SetWidth(width + 16)
+    note:SetSize(width + 16 + 2 * NOTE_FADE, math.ceil(note.text:GetStringHeight() or 12) + 12)
+    note:Show()
+    local button = weeklyRewardsFrame.bgvSpecButton
+    if button then
+        button:SetFrameLevel(AboveDimming(weeklyRewardsFrame))
+    end
+end
+
 local function RestoreScene()
     local scene = WeeklyRewardsFrame and WeeklyRewardsFrame.ModelScene
     if scene then
@@ -547,15 +654,14 @@ local function RestoreScene()
     end
 end
 
+-- Undoes the addon's alpha 0. Whether the region shows is Blizzard's: its refresh shows or hides
+-- it per slot (a checkmark only on a finished one), and the hooks above no longer interfere.
 local function ReleaseRegion(region)
     if not region then
         return
     end
     region.bgvForcing = true
     region:SetAlpha(1)
-    if region.Show then
-        region:Show()
-    end
     region.bgvForcing = false
 end
 
@@ -588,9 +694,8 @@ local function RestoreVanilla(activityFrame)
     ReleaseRegion(activityFrame.CompletedActivityFlipbook)
     ReleaseRegion(activityFrame.ItemGlow)
     ReleaseRegion(activityFrame.UncollectedGlow)
-    if activityFrame.RewardGenerated then
-        activityFrame.RewardGenerated:Hide()
-    end
+    -- RewardGenerated (the sheen as rewards appear) is left alone: this runs after Blizzard's
+    -- refresh, which may just have started it.
     if activityFrame.bgvBaseLevel then
         activityFrame:SetFrameLevel(activityFrame.bgvBaseLevel)
     end
@@ -600,6 +705,7 @@ end
 local function RestoreVault(weeklyRewardsFrame)
     RestoreScene()
     HideSpecButton(weeklyRewardsFrame)
+    HideAwayNote(weeklyRewardsFrame)
     local frames = weeklyRewardsFrame and weeklyRewardsFrame.Activities
     if type(frames) ~= "table" then
         return
@@ -725,6 +831,7 @@ function UI.Update(weeklyRewardsFrame)
 
     weeklyRewardsFrame.bgvShellReady = true
     RefreshSpecButton(weeklyRewardsFrame)
+    RefreshAwayNote(weeklyRewardsFrame)
     BGV.GreatVault.Invalidate()
     local snapshot = BGV.GreatVault.GetSnapshot()
     local seen = {}
@@ -901,12 +1008,17 @@ local function KeepShell(weeklyRewardsFrame)
 end
 
 function UI.Hook()
-    if UI.hooked or type(WeeklyRewardsMixin) ~= "table" or type(hooksecurefunc) ~= "function" then
+    if UI.hooked or type(WeeklyRewardsFrame) ~= "table" or type(hooksecurefunc) ~= "function" then
         return false
     end
 
-    if type(WeeklyRewardsMixin.Refresh) == "function" then
-        Hook(WeeklyRewardsMixin, "Refresh", function(self)
+    -- The hooks go on the vault frame itself: it copied its methods from WeeklyRewardsMixin when it
+    -- was made, so hooks on the mixin never reach it (in game, WeeklyRewardsFrame.Refresh ~=
+    -- WeeklyRewardsMixin.Refresh once hooked). Blizzard refreshes on every show (FullRefresh) and
+    -- on every WEEKLY_REWARDS_UPDATE while it's open. The slots' own art and text are kept down
+    -- by the hooks on those regions (BuryShownRegion, BuryDefaultRegion, KillAnim).
+    if type(WeeklyRewardsFrame.Refresh) == "function" then
+        Hook(WeeklyRewardsFrame, "Refresh", function(self)
             if not ProgressWeek() then
                 RestoreVault(self)
                 return
@@ -924,28 +1036,6 @@ function UI.Hook()
         end)
     end
 
-    if type(WeeklyRewardsMixin.OnShow) == "function" then
-        Hook(WeeklyRewardsMixin, "OnShow", function(self)
-            if not ProgressWeek() then
-                RestoreVault(self)
-                return
-            end
-            SyncSkinSoon(self)
-            if self.bgvShellReady then
-                KeepShell(self)
-                return
-            end
-            UI.SafeUpdate(self)
-            UI.ScheduleContent(self)
-        end)
-    end
-
-    if type(WeeklyRewardsMixin.OnHide) == "function" then
-        Hook(WeeklyRewardsMixin, "OnHide", function(self)
-            CloseOpenGates(self)
-        end)
-    end
-
     if WeeklyRewardsFrame and not WeeklyRewardsFrame.bgvHideHook then
         WeeklyRewardsFrame.bgvHideHook = true
         HookScript(WeeklyRewardsFrame, "OnHide", function(self)
@@ -953,37 +1043,11 @@ function UI.Hook()
         end)
     end
 
-    if type(WeeklyRewardsActivityMixin) == "table" and type(WeeklyRewardsActivityMixin.SetActiveEffect) == "function" then
-        Hook(WeeklyRewardsActivityMixin, "SetActiveEffect", function(self)
-            if self.bgvSlot then
-                HideDefaultShine(self)
-            end
-        end)
-    end
-
-    if type(WeeklyRewardsActivityMixin) == "table" and type(WeeklyRewardsActivityMixin.Refresh) == "function" then
-        Hook(WeeklyRewardsActivityMixin, "Refresh", function(self)
-            if self.bgvSlot then
-                HideDefaultCaption(self)
-                HideDefaultShine(self)
-            end
-        end)
-    end
-
-    if type(WeeklyRewardsActivityMixin) == "table" and type(WeeklyRewardsActivityMixin.SetProgressText) == "function" then
-        Hook(WeeklyRewardsActivityMixin, "SetProgressText", function(self)
-            if self.bgvSlot then
-                HideDefaultCaption(self)
-            end
-        end)
-    end
-
-    if type(WeeklyRewardsActivityMixin) == "table" and type(WeeklyRewardsActivityMixin.OnShow) == "function" then
-        Hook(WeeklyRewardsActivityMixin, "OnShow", function(self)
-            if self.bgvSlot then
-                HideDefaultCaption(self)
-                HideDefaultShine(self)
-            end
+    -- Every refresh decides on Blizzard's "unclaimed rewards" box here, so the line under it follows.
+    if WeeklyRewardsFrame and type(WeeklyRewardsFrame.UpdateOverlay) == "function" and not WeeklyRewardsFrame.bgvOverlayHook then
+        WeeklyRewardsFrame.bgvOverlayHook = true
+        Hook(WeeklyRewardsFrame, "UpdateOverlay", function(self)
+            RefreshAwayNote(self)
         end)
     end
 

@@ -42,6 +42,7 @@ BGV.Locale.Register("ukUA", {
     ["World activities x%d"] = "Світові активності ×%d",
     ["Kills: %s"] = "Перемоги: %s",
     ["Reward: %s %d/%d (%d ilvl)"] = "Нагорода: %s %d/%d (%d ilvl)",
+    ["Your rewards will be rolled for %s at the Great Vault."] = "Нагороди випадуть для спеціалізації «%s» у Великому сховищі.",
 
     -- Great Vault: slot tooltip
     ["... and %d more"] = "... і ще %d",
@@ -78,7 +79,7 @@ BGV.Locale.Register("ukUA", {
     ["Rampage"] = "Шаленство",
     ["Cat Claw"] = "Котячий кіготь",
     ["Bear Maul"] = "Ведмежий удар",
-    ["Blood Rite"] = "Ритуал крові",
+    ["Bonestorm"] = "Буря кісток",
     ["Chaos Bolt"] = "Стріла Хаосу",
     ["Lightning Strike"] = "Удар блискавки",
     ["Plague"] = "Чума",

@@ -211,38 +211,3 @@ function Tooltip.Write(slot)
 
     GameTooltip:Show()
 end
-
-function Tooltip.Hook()
-    if Tooltip.hooked or type(WeeklyRewardsActivityMixin) ~= "table" then
-        return false
-    end
-
-    if type(WeeklyRewardsActivityMixin.ShowPreviewItemTooltip) == "function" then
-        hooksecurefunc(WeeklyRewardsActivityMixin, "ShowPreviewItemTooltip", Utils.Protect("vault tooltip", function(self)
-            Tooltip.ShowStandalone(self)
-        end))
-    end
-
-    if type(WeeklyRewardsActivityMixin.OnEnter) == "function" then
-        hooksecurefunc(WeeklyRewardsActivityMixin, "OnEnter", Utils.Protect("vault tooltip", function(self)
-            local showingPreview = false
-            if type(self.CanShowPreviewItemTooltip) == "function" then
-                local ok, preview = pcall(self.CanShowPreviewItemTooltip, self)
-                showingPreview = ok and preview
-            end
-            if not showingPreview then
-                Tooltip.ShowStandalone(self)
-            end
-        end))
-    end
-
-    if type(WeeklyRewardActivityItemMixin) == "table" and type(WeeklyRewardActivityItemMixin.OnEnter) == "function" then
-        hooksecurefunc(WeeklyRewardActivityItemMixin, "OnEnter", Utils.Protect("vault tooltip", function(self)
-            local parent = self:GetParent()
-            Tooltip.ShowStandalone(parent or self)
-        end))
-    end
-
-    Tooltip.hooked = true
-    return true
-end
