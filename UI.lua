@@ -31,6 +31,13 @@ local function ProgressWeek()
     return not (BGV.Rewards and BGV.Rewards.ShowingWeeklyProgress) or BGV.Rewards.ShowingWeeklyProgress()
 end
 
+-- Whether the addon holds a slot's own art and text down: while it shows the slot itself (the
+-- progress week's slots; at the vault, the rewards' cases). Otherwise Blizzard's refresh decides,
+-- even before the addon has let go of the slot (RestoreVanilla).
+local function Holds(activityFrame)
+    return activityFrame.bgvClaim ~= nil or (activityFrame.bgvSlot ~= nil and ProgressWeek())
+end
+
 -- The addon's outlined small font, sized by the text size setting (Utils.ApplyFontSize).
 local function ApplyFont(fontString)
     fontString:SetFontObject(Utils.Font("Vault"))
@@ -122,17 +129,12 @@ local function BuryShownRegion(region)
     end
     if not region.bgvBuryHook and type(hooksecurefunc) == "function" then
         region.bgvBuryHook = true
-        -- Only in the progress week: outside it Blizzard's refresh decides, even before the addon
-        -- has let go of the slot (RestoreVanilla).
         local function Force(self)
-            if not ProgressWeek() then
-                return
-            end
             local parent = self.GetParent and self:GetParent()
-            while parent and not parent.bgvSlot and parent.GetParent do
+            while parent and not (parent.bgvSlot or parent.bgvClaim) and parent.GetParent do
                 parent = parent:GetParent()
             end
-            if not parent or not parent.bgvSlot or self.bgvForcing then
+            if not parent or not Holds(parent) or self.bgvForcing then
                 return
             end
             self.bgvForcing = true
@@ -158,14 +160,11 @@ local function KillAnim(anim)
     if anim.HookScript and not anim.bgvBuryHook then
         anim.bgvBuryHook = true
         HookScript(anim, "OnPlay", function(self)
-            if not ProgressWeek() then
-                return
-            end
             local owner = self.GetParent and self:GetParent()
-            while owner and not owner.bgvSlot and owner.GetParent do
+            while owner and not (owner.bgvSlot or owner.bgvClaim) and owner.GetParent do
                 owner = owner:GetParent()
             end
-            if owner and owner.bgvSlot then
+            if owner and Holds(owner) then
                 self:Stop()
             end
         end)
@@ -337,6 +336,38 @@ local function UpdateFX(activityFrame, slot, fromEnter)
     end
 end
 
+-- A reward's own tooltip, as Blizzard's reward button shows it: compared with your gear while the
+-- game says to (Shift held, or Always compare items).
+local CompareReward = Utils.Protect("reward tooltip", function()
+    if TooltipUtil and type(TooltipUtil.ShouldDoItemComparison) == "function" and TooltipUtil.ShouldDoItemComparison(GameTooltip) then
+        if type(GameTooltip_ShowCompareItem) == "function" then
+            GameTooltip_ShowCompareItem(GameTooltip)
+        end
+    elseif type(GameTooltip_HideShoppingTooltips) == "function" then
+        GameTooltip_HideShoppingTooltips(GameTooltip)
+    end
+end)
+
+local function ShowRewardTooltip(hit, activityFrame)
+    local claim = activityFrame.bgvClaim
+    if not (GameTooltip and claim) then
+        return
+    end
+    GameTooltip:SetOwner(hit, "ANCHOR_RIGHT", -3, -6)
+    if type(GameTooltip.SetWeeklyReward) == "function" then
+        GameTooltip:SetWeeklyReward(claim.itemDBID)
+    else
+        local link = C_WeeklyRewards and type(C_WeeklyRewards.GetItemHyperlink) == "function"
+            and Utils.Call(C_WeeklyRewards.GetItemHyperlink, claim.itemDBID)
+        if not link then
+            return
+        end
+        GameTooltip:SetHyperlink(link)
+    end
+    GameTooltip:Show()
+    hit:SetScript("OnUpdate", CompareReward)
+end
+
 local function EnsureHit(activityFrame)
     if activityFrame.bgvHit then
         return
@@ -351,6 +382,11 @@ local function EnsureHit(activityFrame)
     end
     hit:SetScript("OnEnter", function()
         activityFrame.bgvHoverGen = (activityFrame.bgvHoverGen or 0) + 1
+        if activityFrame.bgvClaim then
+            -- a reward to choose: its tooltip; the case stays open, and clicks still select it
+            ShowRewardTooltip(hit, activityFrame)
+            return
+        end
         BGV.Tooltip.ShowStandalone(activityFrame)
         if activityFrame.bgvSlot then
             UpdateFX(activityFrame, activityFrame.bgvSlot, true)
@@ -360,6 +396,10 @@ local function EnsureHit(activityFrame)
         local owner = GameTooltip and GameTooltip:GetOwner()
         if owner == hit or owner == activityFrame then
             GameTooltip:Hide()
+        end
+        hit:SetScript("OnUpdate", nil)
+        if activityFrame.bgvClaim then
+            return
         end
         local generation = activityFrame.bgvHoverGen or 0
         if not (C_Timer and type(C_Timer.After) == "function") then
@@ -451,11 +491,8 @@ local function BuryDefaultRegion(region)
     end
     region.bgvBuryHook = true
     local function Force()
-        if not ProgressWeek() then
-            return
-        end
         local parent = region.GetParent and region:GetParent()
-        if not parent or not parent.bgvSlot or region.bgvForcing then
+        if not parent or not Holds(parent) or region.bgvForcing then
             return
         end
         region.bgvForcing = true
@@ -512,7 +549,7 @@ local function SyncSkin(activityFrame)
         return
     end
     local slot = activityFrame.bgvSlot
-    local alpha = (slot and slot.unlocked) and 0 or 1
+    local alpha = ((slot and slot.unlocked) or activityFrame.bgvClaim) and 0 or 1
     for _, child in ipairs({ activityFrame:GetChildren() }) do
         if IsSkinPiece(child) and child:GetAlpha() ~= alpha then
             child:SetAlpha(alpha)
@@ -665,11 +702,25 @@ local function ReleaseRegion(region)
     region.bgvForcing = false
 end
 
+-- Blizzard's reward button (its icon and name, and whatever a skin adds to it, such as EllesmereUI's
+-- quality border a level above it) goes invisible while the case shows the reward: still there for
+-- the clicks that select it, which pass through the case to it.
+local function HideRewardButton(activityFrame, hidden)
+    local button = activityFrame.ItemFrame
+    if type(button) ~= "table" or type(button.SetAlpha) ~= "function" or (activityFrame.bgvButtonHidden or false) == hidden then
+        return
+    end
+    activityFrame.bgvButtonHidden = hidden
+    button:SetAlpha(hidden and 0 or 1)
+end
+
 local function RestoreVanilla(activityFrame)
     if not activityFrame then
         return
     end
     activityFrame.bgvSlot = nil
+    activityFrame.bgvClaim = nil
+    HideRewardButton(activityFrame, false)
     activityFrame.bgvToken = (activityFrame.bgvToken or 0) + 1
     if activityFrame.bgvProgress then
         activityFrame.bgvProgress:Hide()
@@ -703,6 +754,9 @@ local function RestoreVanilla(activityFrame)
 end
 
 local function RestoreVault(weeklyRewardsFrame)
+    if weeklyRewardsFrame then
+        weeklyRewardsFrame.bgvClaimSince = nil
+    end
     RestoreScene()
     HideSpecButton(weeklyRewardsFrame)
     HideAwayNote(weeklyRewardsFrame)
@@ -712,6 +766,205 @@ local function RestoreVault(weeklyRewardsFrame)
     end
     for _, activityFrame in ipairs(frames) do
         RestoreVanilla(activityFrame)
+    end
+end
+
+-- --- the claim week: every slot holding a reward opens onto it ----------------------------------------------
+
+-- At the vault with rewards to choose from: each slot holding one opens onto it (Case.OpenClaim),
+-- unless slot animations are off; then the vault is Blizzard's.
+local function ClaimReveal()
+    return not AnimationsDisabled() and C_WeeklyRewards ~= nil and type(C_WeeklyRewards.CanClaimRewards) == "function"
+        and Utils.Call(C_WeeklyRewards.CanClaimRewards) == true
+end
+
+local function ItemIcon(itemID)
+    if C_Item and type(C_Item.GetItemIconByID) == "function" then
+        return Utils.Call(C_Item.GetItemIconByID, itemID)
+    end
+end
+
+-- The reward a slot shows: Blizzard's own pick (its best item), known once the items have loaded.
+local function ClaimReward(activityFrame)
+    local info = activityFrame.info
+    if type(info) ~= "table" or type(info.rewards) ~= "table" or type(activityFrame.GetDisplayedItemDBID) ~= "function" then
+        return nil
+    end
+    local shown = Utils.Call(activityFrame.GetDisplayedItemDBID, activityFrame)
+    if shown == nil then
+        return nil
+    end
+    for _, reward in ipairs(info.rewards) do
+        if type(reward) == "table" and reward.itemDBID == shown and Utils.IsUsableNumber(reward.id) then
+            local icon = ItemIcon(reward.id)
+            if icon then
+                return { itemDBID = shown, itemID = reward.id, icon = icon }
+            end
+        end
+    end
+end
+
+-- What a reward's reel spins through: what its slot could have awarded (Rewards.ClaimIcons), and,
+-- while that's short (still loading), the vault's other rewards too, never Collect's currencies.
+local CLAIM_REEL_MIN = 8
+
+local function ClaimIcons(activityFrame, reward, held)
+    local icons, pending = {}, false
+    if BGV.Rewards and type(BGV.Rewards.ClaimIcons) == "function" then
+        local ok, list, loading = pcall(BGV.Rewards.ClaimIcons, activityFrame.info, reward.itemID)
+        if ok and type(list) == "table" then
+            icons, pending = list, loading == true
+        elseif not ok then
+            Utils.NoteError("reward reel", list)
+        end
+    end
+    if #icons < CLAIM_REEL_MIN then
+        local seen = {}
+        for _, entry in ipairs(icons) do
+            seen[entry.itemID or entry.icon] = true
+        end
+        for _, other in ipairs(held) do
+            local key = other.reward.itemID
+            if not seen[key] then
+                seen[key] = true
+                icons[#icons + 1] = { icon = other.reward.icon, itemID = other.reward.itemID }
+            end
+        end
+    end
+    return icons, pending
+end
+
+-- A reel's own order: shuffled, at least eight items long.
+local function Shuffled(list)
+    local out = {}
+    while #out < 8 and #list > 0 do
+        for _, entry in ipairs(list) do
+            out[#out + 1] = entry
+        end
+    end
+    for i = #out, 2, -1 do
+        local j = math.random(i)
+        out[i], out[j] = out[j], out[i]
+    end
+    return out
+end
+
+-- Rewards still loading: ask again shortly, for up to CLAIM_WAIT seconds, before opening any.
+local CLAIM_WAIT = 2
+local claimRetry = false
+local ApplyClaim
+
+-- Reels whose lists were still loading: fuller lists swap in while they spin (up to CLAIM_REEL_WAIT
+-- seconds after the reveal).
+local CLAIM_REEL_WAIT = 4
+local reelRetry = false
+
+local function RefreshClaimReels(vault, held, since)
+    if reelRetry or not (C_Timer and type(C_Timer.After) == "function") then
+        return
+    end
+    reelRetry = true
+    C_Timer.After(0.3, Utils.Protect("vault overlay", function()
+        reelRetry = false
+        if not vault:IsShown() or GetTime() - since > CLAIM_REEL_WAIT then
+            return
+        end
+        local waiting = false
+        for _, entry in ipairs(held) do
+            local activityFrame = entry.frame
+            if activityFrame.bgvClaim and activityFrame.bgvClaim.itemDBID == entry.reward.itemDBID and entry.reelPending then
+                local icons, pending = ClaimIcons(activityFrame, entry.reward, held)
+                if #icons > (entry.reelCount or 0) and Case.SetClaimIcons(activityFrame, Shuffled(icons)) then
+                    entry.reelCount = #icons
+                end
+                entry.reelPending = pending
+                waiting = waiting or pending
+            end
+        end
+        if waiting then
+            RefreshClaimReels(vault, held, since)
+        end
+    end))
+end
+
+local function RetryClaim(vault)
+    if claimRetry or not (C_Timer and type(C_Timer.After) == "function") then
+        return
+    end
+    claimRetry = true
+    C_Timer.After(0.1, Utils.Protect("vault overlay", function()
+        claimRetry = false
+        if vault:IsShown() and not ProgressWeek() and ClaimReveal() then
+            ApplyClaim(vault)
+        end
+    end))
+end
+
+function ApplyClaim(vault)
+    RestoreScene()
+    HideSpecButton(vault)
+    HideAwayNote(vault)
+    vault.bgvShellReady = nil
+    vault.bgvClaimSince = vault.bgvClaimSince or GetTime()
+    local waited = GetTime() - vault.bgvClaimSince >= CLAIM_WAIT
+    local held, loading = {}, false
+    for _, activityFrame in ipairs(type(vault.Activities) == "table" and vault.Activities or {}) do
+        local reward = activityFrame.ItemFrame and activityFrame.hasRewards and activityFrame:IsShown() and ClaimReward(activityFrame)
+        if reward then
+            held[#held + 1] = { frame = activityFrame, reward = reward }
+        elseif activityFrame.ItemFrame and activityFrame.hasRewards and activityFrame:IsShown() and not waited then
+            -- its item still loading: shut, so nothing shows before they all open together
+            loading = true
+            HideRewardButton(activityFrame, true)
+            Case.Cover(activityFrame)
+        else
+            RestoreVanilla(activityFrame)
+        end
+    end
+    if loading then
+        for _, entry in ipairs(held) do
+            HideRewardButton(entry.frame, true)
+            Case.Cover(entry.frame)
+        end
+        RetryClaim(vault)
+        return
+    end
+    local reelsLoading = false
+    for _, entry in ipairs(held) do
+        local activityFrame = entry.frame
+        -- the week's progress view goes: the slot shows its reward now
+        activityFrame.bgvSlot = nil
+        if activityFrame.bgvText then
+            activityFrame.bgvText:Hide()
+        end
+        HideClosedGates(activityFrame)
+        EnsureHit(activityFrame)
+        activityFrame.bgvHit:Show()
+        HideRewardButton(activityFrame, true)
+        local fresh = not (activityFrame.bgvClaim and activityFrame.bgvClaim.itemDBID == entry.reward.itemDBID)
+        activityFrame.bgvClaim = entry.reward
+        if fresh then
+            local icons, pending = ClaimIcons(activityFrame, entry.reward, held)
+            entry.reelCount, entry.reelPending = #icons, pending
+            reelsLoading = reelsLoading or pending
+            Case.OpenClaim(activityFrame, entry.reward, Shuffled(icons))
+        end
+        -- Blizzard's own art and text under the case go, as on the progress week's slots
+        HideDefaultCaption(activityFrame)
+        HideDefaultShine(activityFrame)
+        SyncSkin(activityFrame)
+    end
+    if reelsLoading then
+        RefreshClaimReels(vault, held, GetTime())
+    end
+end
+
+-- Out of the progress week: the rewards' reveal at the vault, or Blizzard's vault.
+local function LeaveWeek(weeklyRewardsFrame)
+    if weeklyRewardsFrame and ClaimReveal() then
+        ApplyClaim(weeklyRewardsFrame)
+    else
+        RestoreVault(weeklyRewardsFrame)
     end
 end
 
@@ -825,7 +1078,7 @@ function UI.Update(weeklyRewardsFrame)
     end
     if not ProgressWeek() then
         weeklyRewardsFrame.bgvShellReady = nil
-        RestoreVault(weeklyRewardsFrame)
+        LeaveWeek(weeklyRewardsFrame)
         return
     end
 
@@ -992,7 +1245,7 @@ end
 
 local function KeepShell(weeklyRewardsFrame)
     if not ProgressWeek() then
-        RestoreVault(weeklyRewardsFrame)
+        LeaveWeek(weeklyRewardsFrame)
         return
     end
     local frames = weeklyRewardsFrame and weeklyRewardsFrame.Activities
@@ -1020,7 +1273,7 @@ function UI.Hook()
     if type(WeeklyRewardsFrame.Refresh) == "function" then
         Hook(WeeklyRewardsFrame, "Refresh", function(self)
             if not ProgressWeek() then
-                RestoreVault(self)
+                LeaveWeek(self)
                 return
             end
             if shellApplying or not self:IsShown() then
@@ -1075,7 +1328,7 @@ end
 function UI.RefreshOpenFrame()
     if not ProgressWeek() then
         if WeeklyRewardsFrame then
-            RestoreVault(WeeklyRewardsFrame)
+            LeaveWeek(WeeklyRewardsFrame)
         end
         return
     end

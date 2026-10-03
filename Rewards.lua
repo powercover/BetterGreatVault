@@ -2331,6 +2331,87 @@ local function SeasonRaidScope()
     return scope
 end
 
+-- --- the vault's rewards to choose from: what each reward's reel spins through ----------------------------
+
+-- A raid reward's pool, as far as it can be known now: last week's kills aren't, so the bosses of
+-- the reward's own raid up to the first one (in the journal's order) that drops it, every one of
+-- which was in the pool. Nothing when the reward isn't boss loot (a class set piece).
+local function ClaimRaidEntries(rewardItemID)
+    local scope = SeasonRaidScope()
+    if #scope.instanceIDs == 0 then
+        return {}, true
+    end
+    local entries, pending = WithScan(CollectEntries, RaidMythicID(), scope.instanceIDs, scope.encounterSet, scope.names)
+    local function Order(entry)
+        local first
+        for _, encounterID in ipairs(type(entry.encounterIDs) == "table" and entry.encounterIDs or { entry.encounterID }) do
+            local order = scope.order[encounterID]
+            if order and (not first or order < first) then
+                first = order
+            end
+        end
+        return first
+    end
+    local bound
+    for _, entry in ipairs(type(entries) == "table" and entries or {}) do
+        if entry.itemID == rewardItemID then
+            local order = Order(entry)
+            if order and (not bound or order < bound) then
+                bound = order
+            end
+        end
+    end
+    if not bound then
+        return {}, pending
+    end
+    local raid = math.floor(bound / 100)
+    local kept = {}
+    for _, entry in ipairs(entries) do
+        local order = Order(entry)
+        if order and math.floor(order / 100) == raid and order <= bound then
+            kept[#kept + 1] = entry
+        end
+    end
+    return kept, pending
+end
+
+-- What a reward's reel spins through at the vault (UI.lua's claim week): items its slot could have
+-- awarded, never one it couldn't. The class set pieces (any slot can award them), then the slot's
+-- own loot: a Mythic+ or world slot's whole pool, the same every week; a raid slot's as far as it
+-- can be known (ClaimRaidEntries). `info` is Blizzard's activity info for the slot. Returns
+-- { { itemID, icon } } and whether lists are still loading.
+function Rewards.ClaimIcons(info, rewardItemID)
+    if type(info) ~= "table" then
+        return {}, false
+    end
+    local entries, pending = TierEntries({ Utils.PlayerClassID() })
+    local own, ownPending = {}, false
+    if Utils.SameType(info.type, Utils.ThresholdType("Raid")) then
+        own, ownPending = ClaimRaidEntries(rewardItemID)
+    elseif Utils.SameType(info.type, Utils.ThresholdType("Activities")) or Utils.SameType(info.type, Utils.ThresholdType("World")) then
+        own, ownPending = WithScan(SourceSlotItems, { type = info.type, index = info.index, unlocked = true, activityTierID = info.activityTierID })
+    end
+    local icons, seen = {}, {}
+    local function Add(entry)
+        local itemID = type(entry) == "table" and entry.itemID or nil
+        local icon = type(entry) == "table" and entry.icon or nil
+        if (not icon or icon == 0) and Utils.IsUsableNumber(itemID) and C_Item and type(C_Item.GetItemIconByID) == "function" then
+            icon = Utils.Call(C_Item.GetItemIconByID, itemID)
+        end
+        if Utils.IsUsableNumber(itemID) and icon and icon ~= 0 and not Utils.IsSecret(icon) and not seen[itemID] then
+            seen[itemID] = true
+            icons[#icons + 1] = { itemID = itemID, icon = icon }
+        end
+    end
+    for _, entry in ipairs(entries) do
+        Add(entry)
+    end
+    for _, entry in ipairs(type(own) == "table" and own or {}) do
+        Add(entry)
+    end
+    return icons, pending == true or ownPending == true
+end
+
 -- Copies with the vault's item level for the chosen level (the ceiling for raid Mythic's last two
 -- bosses); unknown item levels stay nil. Vault rewards are always epic.
 -- `copies` (optional): the copies made for this list before, by the entry copied, reused so a

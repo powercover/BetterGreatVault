@@ -302,7 +302,7 @@ end
 
 -- --- a face's life -------------------------------------------------------------------------------------------
 
-local function Finish(face)
+local function Finish(face, stopping)
     for _, texture in ipairs(face.all) do
         Off(texture)
     end
@@ -320,7 +320,12 @@ local function Finish(face)
         -- the slot opened meanwhile: its case has the gates and the caption now
         return
     end
-    if face.claim then
+    if face.handBack and Case.HasClaim(owner) then
+        -- the reward's case opens onto it again (the vault closing shuts it instead)
+        if not stopping then
+            Case.ResumeClaim(owner)
+        end
+    elseif face.claim then
         -- back to Blizzard's slot, exactly as it was
         Case.Stop(owner)
         if owner.bgvBaseLevel then
@@ -357,10 +362,10 @@ local function Update(face, dt)
         if face.left > 0.35 then
             face.show = max(0, face.show - dt / 0.22)
         end
-        if face.claim and face.show <= 0 then
+        if face.claim and face.show <= 0 and not face.handBack then
             face.gate = max(0, face.gate - dt / 0.22)
         end
-        if face.show <= 0 and (not face.claim or face.gate <= 0) then
+        if face.show <= 0 and (not face.claim or face.handBack or face.gate <= 0) then
             Finish(face)
             return false
         end
@@ -486,6 +491,7 @@ function Begin(activityFrame, moodName, claim, button)
     face.mood = MOODS[moodName]
     face.moodName = moodName
     face.claim = claim
+    face.handBack = nil
     face.active, face.entering, face.shown = true, true, false
     face.t, face.left, face.show, face.sad, face.relief, face.gate = 0, 0, 0, 0, 0, 0
     face.blinkIn, face.blinkAt = Random(1.5, 3.5), nil
@@ -520,7 +526,14 @@ function Begin(activityFrame, moodName, claim, button)
         K.Levels(fx, false)
         K.GateLayout(fx, "rows")
         K.FaceMode(fx, "wipe")
-        K.Doors(fx, 0, 0)
+        -- a reward's case (Case.OpenClaim) has just shut its gates: the face forms on them
+        face.handBack = Case.HasClaim(activityFrame)
+        if face.handBack then
+            face.gate = 1
+            K.Doors(fx, fx.slotHeight / 2, fx.slotHeight / 2)
+        else
+            K.Doors(fx, 0, 0)
+        end
     else
         Case.FadeCaption(activityFrame, 0)
     end
@@ -563,6 +576,10 @@ function Faces.Start(button)
         else
             moodName = MIDDLE[(rank - 2) % #MIDDLE + 1]
         end
+        if claim and Case.HasClaim(activityFrame) then
+            -- open onto its reward: it closes first
+            Case.SuspendClaim(activityFrame)
+        end
         if Case.IsAnimating(activityFrame) then
             -- still opening or closing (pointed at a moment ago): it cries once its gates are shut
             waiting[activityFrame] = moodName
@@ -582,6 +599,9 @@ function Faces.Leave()
     pointedAt = nil
     for activityFrame in pairs(waiting) do
         waiting[activityFrame] = nil
+        if Case.HasClaim(activityFrame) then
+            Case.ResumeClaim(activityFrame)
+        end
     end
     for _, face in ipairs(faces) do
         face.entering = false
@@ -595,7 +615,7 @@ function Faces.Stop()
         waiting[activityFrame] = nil
     end
     for index = #faces, 1, -1 do
-        Finish(faces[index])
+        Finish(faces[index], true)
         faces[index] = nil
     end
     if driver then

@@ -46,11 +46,15 @@ database list every reward for any class and specialization, so you know what to
   on the vault. The game rolls your rewards for the loot spec you have when you open the vault in
   person, so when you open it from elsewhere with rewards waiting, it also says which spec that
   will be, and the button still works.
+- **Your rewards, revealed.** At the Great Vault, with rewards to choose from, every slot holding
+  one opens at once in your opening style. Its reel slows to a stop on the item it holds, which
+  grows and shows its name and item level. Point at it for the item's own tooltip. Clicking still
+  selects it, and choosing works exactly as in Blizzard's vault. With slot animations off, the
+  vault is Blizzard's.
 - **Sad gates.** Point at the vault's **Collect** button, which takes another reward instead of an
   item, and your completed slots look disappointed. The slot holding your best reward takes it
-  hardest. You can turn this off in the settings.
-- **Choosing stays Blizzard's.** Once your rewards are rolled, the vault looks and works exactly
-  as Blizzard made it (apart from the sad gates), so choosing your reward is untouched.
+  hardest. At the vault, the open slots close over their rewards first, and open onto them again
+  when you move away. You can turn this off in the settings.
 
 ### Opening styles
 
