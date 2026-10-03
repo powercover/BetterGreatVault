@@ -42,6 +42,7 @@ BGV.Locale.Register("zhCN", {
     ["World activities x%d"] = "世界活动 x%d",
     ["Kills: %s"] = "击杀：%s",
     ["Reward: %s %d/%d (%d ilvl)"] = "奖励：%s %d/%d（%d 装等）",
+    ["Your rewards will be rolled for %s at the Great Vault."] = "奖励将在宏伟宝库中按%s专精生成。",
 
     -- Great Vault: slot tooltip
     ["... and %d more"] = "……还有 %d 个",
@@ -78,7 +79,7 @@ BGV.Locale.Register("zhCN", {
     ["Rampage"] = "暴怒",
     ["Cat Claw"] = "猎豹之爪",
     ["Bear Maul"] = "熊之重殴",
-    ["Blood Rite"] = "鲜血仪式",
+    ["Bonestorm"] = "白骨风暴",
     ["Chaos Bolt"] = "混乱之箭",
     ["Lightning Strike"] = "闪电打击",
     ["Plague"] = "瘟疫",

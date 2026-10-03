@@ -28,6 +28,7 @@ K.KINDS.spark = { file = MEDIA .. "CaseSpark", blend = "ADD", align = true }
 K.KINDS.smoke = { file = MEDIA .. "CaseSmoke", blend = "BLEND", shapes = 4, tilt = 3.1, turn = 0.5, stretch = 0.2 }
 K.KINDS.foam = { file = MEDIA .. "CaseFoam", blend = "BLEND", shapes = 4, tilt = 3.1, turn = 0.4, stretch = 0.1 }
 K.KINDS.chip = { file = MEDIA .. "CaseChips", blend = "BLEND", shapes = 4, tilt = 3.1, turn = 7, stretch = 0.25 }
+K.KINDS.bone = { file = MEDIA .. "CaseBones", blend = "BLEND", shapes = 4, tilt = 3.1, turn = 9, stretch = 0.08 }
 
 -- --- helpers ----------------------------------------------------------------------------------------------
 
@@ -991,96 +992,258 @@ Register("guardian", "Bear Maul", "DRUID", 104, PieceStyle("guardian", {
     end,
 }))
 
--- --- Blood Rite (Blood death knight): veins creep over the gates and pulse; they burst into red mist -----------------
+-- --- Bonestorm (Blood death knight): bone shards circle the lock, faster and faster, and grind the gates away -------
+-- from the middle out, then fly off past the edges. Closing, they ride the mending edge back in and snap away.
 
--- A heartbeat: two beats, then a rest.
-local function Heartbeat()
-    local cycle = GetTime() % 1.1
-    if cycle < 0.12 then
-        return sin(pi * cycle / 0.12)
-    elseif cycle > 0.22 and cycle < 0.34 then
-        return 0.7 * sin(pi * (cycle - 0.22) / 0.12)
-    end
-    return 0
+local STORM_BONES = 8
+local STORM_ASPECT = 0.7                 -- the storm's height against its width
+local STORM_FILL = 0.72                  -- how much of CaseShred's half-size the torn hole surely covers
+local STORM_SPIN, STORM_GRIND, STORM_FLING = 0.2, 0.5, 0.92
+local STORM_SHUT = 0.52                  -- closing: the gates whole again
+local STORM_SNAP = 0.07                  -- closing: the bones closing in on the lock, then gone
+local STORM_SPEED = 2600                 -- the bones' top speed along the orbit, a second
+local GATE_CHIP = { 0.86, 0.68, 0.42 }
+
+-- How far across the storm reaches (its height STORM_ASPECT of that) once every corner is ground away.
+local function StormReach(fx)
+    local x, y = fx.slotWidth / 2, fx.slotHeight / 2 / STORM_ASPECT
+    return math.sqrt(x * x + y * y) + 12
 end
 
-local BLOOD_BEATS = { 0.18, 0.44 }
+-- The storm now: the bones' orbit and the hole it has ground (both across), and its spin (a second).
+local function Storm(fx, art)
+    local t, reach = fx.t, art.reach
+    if fx.phase == "opening" then
+        if t < STORM_SPIN then
+            return 24 + 14 * EaseOutCubic(t / STORM_SPIN), 0, 3 + 5 * t / STORM_SPIN
+        elseif t < STORM_GRIND then
+            local k = (t - STORM_SPIN) / (STORM_GRIND - STORM_SPIN)
+            return 38 + 6 * k, 0, 8 + 18 * EaseInCubic(k)
+        end
+        local k = Clamp01((t - STORM_GRIND) / (STORM_FLING - STORM_GRIND))
+        local orbit = 44 + (reach + 26 - 44) * k * k
+        return orbit, min(reach, (orbit - 8) * Clamp01((t - STORM_GRIND) / 0.07)), min(26, STORM_SPEED / orbit)
+    elseif fx.phase == "open" then
+        return reach + 26, reach + 30, 0
+    end
+    local hole = reach * (1 - EaseInOut(Clamp01(t / STORM_SHUT)))
+    return hole + 8, hole, min(22, STORM_SPEED / (hole + 8))
+end
 
-Register("blood", "Blood Rite", "DEATHKNIGHT", 250, PieceStyle("blood", {
-    files = X_PIECES,
-    moves = {
-        { vx = 0, vy = 230, g = 200 },
-        { vx = 280, vy = 20, g = 200 },
-        { vx = 0, vy = -230, g = 0 },
-        { vx = -280, vy = 20, g = 200 },
-    },
-    split = 0.62, flyFor = 0.4, fadeFrom = 0.08, fadeFor = 0.22, openFor = 1.05, closeFor = 0.55,
+-- A point on the storm's orbit `r` across, at angle `a`, and the way along it there.
+local function OnOrbit(r, a)
+    local x, y = cos(a) * r, sin(a) * r * STORM_ASPECT
+    return x, y, atan2(cos(a) * STORM_ASPECT, -sin(a))
+end
+
+-- The bones on their orbit: the far side smaller and dimmer, each trailing a streak of blood light
+-- as long as it is fast. `fade` dims them all (appearing), `scale` shrinks them (taken into the lock).
+local function PlaceBones(fx, art, orbit, omega, fade, scale)
+    local streak = min(64, abs(omega) * orbit * 0.045)
+    local trail = Clamp01((abs(omega) - 6) / 14) * 0.85
+    local grow = (1 + 0.45 * Clamp01((orbit - 44) / 110)) * (scale or 1)
+    local time = GetTime()
+    for i, seat in ipairs(art.seat) do
+        local a = art.phi + seat.angle
+        local x, y, heading = OnOrbit(orbit + seat.out, a)
+        local far = sin(a)                  -- 1 at the back of the orbit, -1 at the front
+        local depth = 1 - 0.14 * far
+        local alpha = fade * (0.86 - 0.14 * far)
+        PutTurned(fx, art.bones[i], x, y, 22 * seat.size * depth * grow, heading + 0.45 * sin(time * seat.tumble + i), alpha)
+        if trail > 0 and streak > 4 then
+            local length = streak * depth
+            PutTurned(fx, art.trails[i], x - cos(heading) * length * 0.42, y - sin(heading) * length * 0.42, length, heading, trail * alpha)
+        else
+            Off(art.trails[i])
+        end
+    end
+end
+
+local function HideBones(art)
+    for i = 1, STORM_BONES do
+        Off(art.bones[i])
+        Off(art.trails[i])
+    end
+end
+
+-- What the storm throws: a spark off a bone, along its way; bits of the gates and bone dust off the edge.
+local function StormSpark(fx, art, orbit)
+    local seat = art.seat[math.random(STORM_BONES)]
+    local x, y, heading = OnOrbit(orbit + seat.out, art.phi + seat.angle)
+    local a = heading + Random(-0.35, 0.35)
+    local speed = Random(160, 300)
+    local p = Part(fx, "spark", x, y, cos(a) * speed, sin(a) * speed, Random(0.2, 0.34), Random(9, 13), 1, 0.16, 0.16)
+    if p then
+        p.g, p.drag, p.grow = -160, 0.95, -0.5
+    end
+end
+
+local function StormChip(fx, hole, dust)
+    local a = Random(0, pi * 2)
+    local x, y, heading = OnOrbit(hole, a)
+    local speed = Random(150, 260)
+    local vx, vy = cos(heading) * speed + cos(a) * Random(40, 100), sin(heading) * speed + sin(a) * Random(40, 100) + 40
+    if dust then
+        Smoke(fx, x, y, vx * 0.2, vy * 0.2, Random(0.5, 0.75), Random(20, 28), 0.35, 0.84, 0.78, 0.7)
+        return
+    end
+    local p = Part(fx, "chip", x, y, vx, vy, Random(0.5, 0.8), Random(5, 8), GATE_CHIP[1], GATE_CHIP[2], GATE_CHIP[3])
+    if p then
+        p.g, p.grow, p.late = -560, 0, true
+    end
+end
+
+Register("blood", "Bonestorm", "DEATHKNIGHT", 250, HoleStyle("blood", {
+    shape = "CaseShred", fill = STORM_FILL, openFor = 1.15, closeFor = 0.8,
     Build = function(fx, art)
-        art.veins = Tex(art, fx.top, "CaseVeins", "BLEND", 0.72, 0.04, 0.07, "OVERLAY", 1)
-        art.pulse = Tex(art, fx.top, "CaseGlow", "ADD", 1, 0.1, 0.12, "OVERLAY", 2)
-        art.ring = Tex(art, fx.top, "CaseRing", "ADD", 0.9, 0.08, 0.1, "OVERLAY", 3)
-        art.heart = Tex(art, fx.mid, "CaseGlow", "ADD", 0.9, 0.05, 0.08)
+        art.core = Tex(art, fx.top, "CaseGlow", "ADD", 1, 0.12, 0.15, "OVERLAY", 0)
+        art.track = Tex(art, fx.top, "CaseRing", "ADD", 0.9, 0.08, 0.1, "OVERLAY", 0)
+        art.edge = Tex(art, fx.top, "CaseShredRim", "BLEND", 0.16, 0.02, 0.03, "OVERLAY", 1)
+        art.rim = Tex(art, fx.top, "CaseShredRim", "ADD", 1, 0.16, 0.18, "OVERLAY", 2)
+        art.trails, art.bones, art.seat = {}, {}, {}
+        for i = 1, STORM_BONES do
+            art.trails[i] = Tex(art, fx.top, "CaseSpark", "ADD", 1, 0.1, 0.12, "OVERLAY", 3)
+            local shape = (i - 1) % 4
+            local bone = Tex(art, fx.top, "CaseBones", "BLEND", nil, nil, nil, "OVERLAY", 4)
+            bone:SetTexCoord(shape / 4, (shape + 1) / 4, 0, 1)
+            art.bones[i] = bone
+            -- each bone's place in the storm: its angle, a little in or out, how big, how it tumbles
+            art.seat[i] = { angle = (i - 1) / STORM_BONES * pi * 2 + Random(-0.25, 0.25), out = Random(-5, 5),
+                size = Random(0.85, 1.15), tumble = Random(-2.5, 2.5) }
+        end
+        art.flash = Tex(art, fx.top, "CaseGlow", "ADD", 1, 0.3, 0.3, "OVERLAY", 5)
+        art.wave = Tex(art, fx.top, "CaseRing", "ADD", 1, 0.14, 0.16, "OVERLAY", 5)
+        art.burst = Tex(art, fx.top, "CaseVignette", "ADD", 0.95, 0.08, 0.1, "OVERLAY", 5)
+        art.ambient = Tex(art, fx.mid, "CaseVignette", "ADD", 0.7, 0.03, 0.05)
     end,
     Enter = function(fx, art)
-        Mood(fx, { 0.06, 0.01, 0.015 }, { 1, 0.2, 0.25 })
+        Mood(fx, { 0.06, 0.01, 0.015 }, { 1, 0.2, 0.25 }, 0.8)
         K.EnsureMarkerGlow(fx)
-        art.burstAt = nil
+        art.reach = StormReach(fx)
+        art.phi = Random(0, pi * 2)
+        art.flashAt, art.burstAt, art.biteAt = nil, nil, nil
     end,
-    Split = function(fx, art)
-        fx.shake = 1.8
-        art.burstAt = GetTime()
-        Off(art.veins)
-        Off(art.pulse)
-        for _ = 1, 7 do
-            local a = Random(0, pi * 2)
-            Smoke(fx, cos(a) * 20, sin(a) * 12, cos(a) * Random(30, 80), sin(a) * Random(20, 50), Random(0.7, 1.1), Random(40, 60), 0.75, 0.5, 0.02, 0.04)
-        end
-        for _ = 1, 8 do
-            local p = Part(fx, "drop", Random(-30, 30), Random(-10, 10), Random(-90, 90), Random(20, 110), Random(0.5, 0.8), Random(6, 9), 0.7, 0.03, 0.05)
-            if p then
-                p.g = -380
-            end
-        end
-        Sparks(fx, 10, 0, 0, 0, pi, 100, 220, 0.9, 0.1, 0.12, 200)
+    Radius = function(fx, art)
+        local orbit, hole, omega = Storm(fx, art)
+        art.orbit, art.hole, art.omega = orbit, hole, omega
+        return hole, hole * STORM_ASPECT
     end,
-    Join = function(fx)
-        fx.shake = 0.8
-    end,
-    Update = function(fx, art, dt)
-        local t = fx.t
+    Update = function(fx, art, dt, hole)
+        local t, flags = fx.t, fx.flags
         local w, h = fx.slotWidth, fx.slotHeight
-        local beat = Heartbeat()
-        if fx.phase == "opening" then
-            if t < 0.62 then
-                local grow = EaseOutCubic(t / 0.5)
-                local thump = 0
-                for _, at in ipairs(BLOOD_BEATS) do
-                    if t >= at and t < at + 0.14 then
-                        thump = sin(pi * (t - at) / 0.14)
-                        if not fx.flags[at] then
-                            fx.flags[at] = true
-                            fx.shake = 0.7
-                        end
-                    end
-                end
-                Put(fx, art.veins, 0, 0, w * (0.3 + 0.8 * grow), h * (0.3 + 0.8 * grow), min(1, grow * 1.2) * (0.75 + 0.25 * thump))
-                Put(fx, art.pulse, 0, 0, w * (0.5 + 0.3 * thump), h * (0.7 + 0.3 * thump), thump * 0.55)
-                -- the gates flush red with each beat
-                local flush = 0.85 - 0.3 * thump - 0.1 * grow
-                K.FaceTint(fx, 1, flush, flush)
+        local orbit, omega = art.orbit, art.omega
+        local opening, closing = fx.phase == "opening", fx.phase == "closing"
+        art.phi = art.phi + omega * dt
+
+        -- the bones: summoned at the lock and whirling until they're flung past the edges; closing,
+        -- back in on the mending edge, then into the lock
+        local bones, scale = 0, 1
+        if opening and t < STORM_FLING then
+            bones = Clamp01(t / 0.16)
+        elseif closing and t < STORM_SHUT + STORM_SNAP then
+            bones = Clamp01(t / 0.1)
+            if t >= STORM_SHUT then
+                local k = (t - STORM_SHUT) / STORM_SNAP
+                orbit, scale = orbit * (1 - k), 1 - 0.6 * k
             end
-        elseif fx.phase == "open" then
-            Put(fx, art.heart, 0, 0, w * 0.9, h * 0.9, 0.12 + 0.2 * beat)
+        end
+        if bones > 0 then
+            PlaceBones(fx, art, orbit, omega, bones, scale)
+            local track = 0.3 * Clamp01((omega - 8) / 12) * bones
+            if track > 0 then
+                Put(fx, art.track, 0, 0, orbit * 2.08, orbit * 2.08 * STORM_ASPECT, track)
+            else
+                Off(art.track)
+            end
         else
-            art.heart:SetAlpha(0.12 * (1 - Clamp01(t / 0.3)))
-            Put(fx, art.veins, 0, 0, w * 1.1, h * 1.1, sin(pi * Clamp01(t / 0.45)) * 0.7)
+            HideBones(art)
+            Off(art.track)
+        end
+
+        if opening then
+            if t < STORM_GRIND then
+                -- the storm gathers: blood light at the lock, the gates reddening, sparks where bones scrape
+                local k = t / STORM_GRIND
+                Put(fx, art.core, 0, 0, 30 + 60 * EaseOutCubic(k), 26 + 44 * EaseOutCubic(k), 0.2 + 0.5 * k + 0.08 * sin(GetTime() * 31))
+                fx.shake = max(fx.shake or 0, 0.12 + 0.55 * Clamp01((omega - 8) / 18))
+                if t >= STORM_SPIN and Chance(3 + omega * 1.1, dt) then
+                    StormSpark(fx, art, orbit)
+                end
+            else
+                Put(fx, art.core, 0, 0, 90, 70, 0.7 * (1 - Clamp01((t - STORM_GRIND) / 0.25)))
+                if not flags.bite then
+                    -- it bites in: the middle of the gates goes at once
+                    flags.bite = true
+                    fx.shake = 1.4
+                    art.flashAt = GetTime()
+                    art.biteAt = art.flashAt
+                    Sparks(fx, 12, 0, 0, 0, pi, 130, 280, 1, 0.18, 0.18, 220)
+                    Chips(fx, 6, 0, 0, 60, 160, 16)
+                end
+                if t < STORM_FLING then
+                    fx.shake = max(fx.shake or 0, 0.9)
+                    if Chance(42, dt) then
+                        StormChip(fx, hole)
+                    end
+                    if Chance(12, dt) then
+                        StormChip(fx, hole, true)
+                    end
+                    if Chance(24, dt) then
+                        StormSpark(fx, art, orbit)
+                    end
+                elseif not flags.fling then
+                    -- flung past the edges: a last flare of blood light around the slot
+                    flags.fling = true
+                    fx.shake = 0.9
+                    art.burstAt = GetTime()
+                end
+            end
+            local red = 0.3 * Clamp01(t / STORM_GRIND)
+            K.FaceTint(fx, 1, 1 - red, 1 - red)
+        elseif closing then
+            Off(art.core)
+            if hole > 4 and Chance(16, dt) then
+                StormChip(fx, hole, true)
+            end
+            if t >= STORM_SHUT + STORM_SNAP and not flags.snapped then
+                -- into the lock, and gone
+                flags.snapped = true
+                fx.shake = 0.9
+                art.flashAt = GetTime()
+                Burst(fx, "bone", 5, 0, 0, 80, 170, 0.45, 9, 1, 1, 1)
+                Sparks(fx, 6, 0, 0, 0, pi, 70, 150, 1, 0.2, 0.2, 160)
+            end
+            local red = 0.3 * (1 - Clamp01(t / STORM_SHUT))
+            K.FaceTint(fx, 1, 1 - red, 1 - red)
+        else
+            Off(art.core)
+        end
+
+        -- the torn edge: blood light on it, the gates darkened around it
+        if hole > 1 and hole < art.reach then
+            local across = 2 * hole / STORM_FILL
+            Put(fx, art.rim, 0, 0, across, across * STORM_ASPECT, 0.85 + 0.15 * sin(GetTime() * 27))
+            Put(fx, art.edge, 0, 0, across * 1.07, across * 1.07 * STORM_ASPECT, 0.85)
+        else
+            Off(art.rim)
+            Off(art.edge)
+        end
+        Flash(fx, art.flash, art.flashAt, 0.2, 0, 0, 110, 80, 1)
+        Ring(fx, art.wave, art.biteAt, 0.35, 0, 0, 40, 190, STORM_ASPECT, 0.75)
+        Flash(fx, art.burst, art.burstAt, 0.32, 0, 0, w, h, 0.3)
+
+        -- open: blood light breathing at the slot's edges, the marker in time
+        local breath = 0.5 + 0.5 * sin(GetTime() * 2.4)
+        if fx.phase == "open" then
+            Put(fx, art.ambient, 0, 0, w, h, 0.12 + 0.08 * breath)
+        else
+            Off(art.ambient)
         end
         if fx.markerGlow then
-            fx.markerGlow:SetAlpha(fx.phase == "open" and beat * 0.8 or 0)
+            fx.markerGlow:SetAlpha(fx.phase == "open" and 0.3 + 0.35 * breath or 0)
         end
-        Ring(fx, art.ring, art.burstAt, 0.4, 0, 0, 30, 280, 0.75)
-        MoveReel(fx, SplitSpeed(fx, 0.62, 70, 260), dt)
-        DressCells(fx, 0, false, false, 0, 0)
+        MoveReel(fx, SplitSpeed(fx, STORM_GRIND, 90, 320), dt)
+        DressCells(fx, 0.08, true, false, 0, 0)
         K.Shake(fx, dt)
     end,
 }))

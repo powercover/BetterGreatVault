@@ -42,6 +42,7 @@ BGV.Locale.Register("frFR", {
     ["World activities x%d"] = "Activités du monde x%d",
     ["Kills: %s"] = "Victoires : %s",
     ["Reward: %s %d/%d (%d ilvl)"] = "Récompense : %s %d/%d (%d ilvl)",
+    ["Your rewards will be rolled for %s at the Great Vault."] = "Vos récompenses seront tirées au sort pour %s dans la Grande chambre forte.",
 
     -- Great Vault: slot tooltip
     ["... and %d more"] = "... et %d de plus",
@@ -78,7 +79,7 @@ BGV.Locale.Register("frFR", {
     ["Rampage"] = "Saccager",
     ["Cat Claw"] = "Griffe de félin",
     ["Bear Maul"] = "Mutilation d'ours",
-    ["Blood Rite"] = "Rite de sang",
+    ["Bonestorm"] = "Tempête d'os",
     ["Chaos Bolt"] = "Trait du chaos",
     ["Lightning Strike"] = "Foudroiement",
     ["Plague"] = "Peste",
