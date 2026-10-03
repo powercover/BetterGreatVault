@@ -28,6 +28,18 @@ local REEL_REFRESH_EMPTY = 0.1
 local SLOT_W, SLOT_H = 219, 126 -- Blizzard's slot, until the frame reports its own size
 local PARTICLES = 32
 
+-- The vault's rewards to choose from (Case.OpenClaim): the reel spins at CLAIM_SPIN until the case
+-- is open, then slows to a stop with the reward at the marker, CLAIM_PASS more items going by. The
+-- reward then grows by CLAIM_ZOOM over CLAIM_GROW seconds, centred in the space above the caption
+-- bar (CLAIM_BAR high, along the reel's bottom) that holds its name and item level.
+local CLAIM_SPIN = 380
+local CLAIM_PASS = 3
+local CLAIM_BAR = 30
+local CLAIM_ZOOM, CLAIM_LIFT, CLAIM_GROW = 0.3, CLAIM_BAR / 2, 0.4
+-- Once it has landed, grown and shown its name, with nothing left in the air, a reward's case stays
+-- as it is without a frame's work (every slot may be open at once while a reward is chosen).
+local CLAIM_SETTLE, CLAIM_NAME_WAIT = 1, 5
+
 -- Best-in-Slot tiers behind the reel's items (Bis.lua).
 local TIER_BACK = {
     D = { 0.45, 0.45, 0.45 },
@@ -750,7 +762,8 @@ local function PaintReel(fx)
     local showTiers = BGV.Bis and Utils.ShowBisTiers()
     local specID = showTiers and Utils.LootSpecID() or nil
     for index, cell in ipairs(fx.cells) do
-        local entry = icons[((fx.cursor + index - 2) % #icons) + 1]
+        local item = fx.cursor + index - 1
+        local entry = (fx.landItem == item and fx.landEntry) or icons[((item - 1) % #icons) + 1]
         local itemID = type(entry) == "table" and entry.itemID or nil
         local icon = type(entry) == "table" and entry.icon or entry
         cell.icon:SetTexture(icon)
@@ -815,10 +828,58 @@ local function MoveReelBy(fx, distance)
     end
 end
 
+-- The reward's reel slows from CLAIM_SPIN to a stop (a cubic ease, starting at the spin's own
+-- speed), the reward painted into the item that stops at the marker.
+local function StartLanding(fx)
+    local marker = (fx.windowWidth or (SLOT_W - REEL_LEFT - REEL_RIGHT)) / 2 + 1
+    -- where the reel is, counted in items: item k is centred on the marker when this is k
+    local at = (fx.cursor or 1) + (marker - (fx.offset or 0)) / CASE_STRIDE - 0.5
+    local item = math.ceil(at) + CLAIM_PASS
+    local distance = (item - at) * CASE_STRIDE
+    fx.landItem = item
+    fx.landEntry = { icon = fx.claim.icon, itemID = fx.claim.itemID }
+    fx.land = { distance = distance, done = 0, t = 0, length = 3 * distance / CLAIM_SPIN }
+    PaintReel(fx)
+end
+
+local function MoveClaimReel(fx, dt)
+    -- the main reel lands once (landItem); a style with reels of its own (the One-Armed Bandit)
+    -- may have revealed the reward without it
+    if not fx.land and not fx.landItem then
+        if fx.phase ~= "open" or type(fx.icons) ~= "table" or #fx.icons == 0 then
+            fx.reelSpeed = CLAIM_SPIN
+            MoveReelBy(fx, CLAIM_SPIN * dt)
+            return
+        end
+        StartLanding(fx)
+    end
+    local land = fx.land
+    if not land then
+        fx.reelSpeed = 0
+        return
+    end
+    land.t = land.t + dt
+    local k = Clamp01(land.t / land.length)
+    local goal = land.distance * (1 - (1 - k) ^ 3)
+    MoveReelBy(fx, goal - land.done)
+    fx.reelSpeed = (goal - land.done) / math.max(dt, 0.001)
+    land.done = goal
+    if k >= 1 then
+        fx.land = nil
+        fx.landedAt = fx.landedAt or GetTime()
+        fx.reelSpeed = 0
+    end
+end
+
+-- The reel at a style's `speed`; a reward's reel (Case.OpenClaim) goes its own way.
 local function MoveReel(fx, speed, dt)
-    fx.reelSpeed = speed
-    if speed ~= 0 then
-        MoveReelBy(fx, speed * dt)
+    if fx.claim then
+        MoveClaimReel(fx, dt)
+    else
+        fx.reelSpeed = speed
+        if speed ~= 0 then
+            MoveReelBy(fx, speed * dt)
+        end
     end
     fx.pulse = math.max(0, (fx.pulse or 0) - dt * 3.5)
     fx.hop = math.max(0, (fx.hop or 0) - dt * 3)
@@ -850,6 +911,9 @@ local function DressCells(fx, zoom, ghosts, hop, bob, shimmer)
     if ghosts then
         trail = Clamp01((math.abs(speed) - 260) / 700)
     end
+    -- a reward landed at the marker (Case.OpenClaim): it grows and the rest dims
+    local focus = fx.landedAt and Clamp01((time - fx.landedAt) / CLAIM_GROW) or 0
+    fx.dressed = true
     for index, cell in ipairs(fx.cells) do
         local center = (fx.offset or 0) + (index - 0.5) * CASE_STRIDE
         local near = 1 - math.abs(center - marker) / CASE_STRIDE
@@ -870,6 +934,19 @@ local function DressCells(fx, zoom, ghosts, hop, bob, shimmer)
         end
         if shimmer > 0 then
             dy = dy + math.sin(time * 9 + item * 2.1) * shimmer
+        end
+        local alpha = 1
+        if focus > 0 then
+            if item == fx.landItem then
+                sx = 1 + CLAIM_ZOOM * EaseOutBack(focus, 1.7)
+                sy, dy = sx, CLAIM_LIFT * EaseOutCubic(focus)
+            else
+                alpha = 1 - 0.72 * focus
+            end
+        end
+        if cell.dressA ~= alpha then
+            cell:SetAlpha(alpha)
+            cell.dressA = alpha
         end
         -- only what changed: most items sit still in size, and ghosts show only at speed
         local w, h = CASE_ICON * sx, CASE_ICON * sy
@@ -902,6 +979,8 @@ end
 
 local function ResetCells(fx)
     for _, cell in ipairs(fx.cells) do
+        cell:SetAlpha(1)
+        cell.dressA = 1
         cell.icon:SetSize(CASE_ICON, CASE_ICON)
         cell.icon:SetPoint("CENTER", cell, "CENTER", 0, 0)
         cell.dressW, cell.dressH, cell.dressY = CASE_ICON, CASE_ICON, 0
@@ -1443,9 +1522,13 @@ local function PaintBandit(fx, art)
                     local k = first + n - 1
                     local y = k * BANDIT_STRIDE - column.pos
                     local index = ((k + column.seed) % count) + 1
+                    local entry = icons[index]
+                    if fx.claim and column.mode ~= "spin" and k == column.k then
+                        -- a reward to choose (Case.OpenClaim): every reel stops on it
+                        index, entry = "reward", { icon = fx.claim.icon, itemID = fx.claim.itemID }
+                    end
                     if cell.item ~= index then
                         cell.item = index
-                        local entry = icons[index]
                         local icon = type(entry) == "table" and entry.icon or entry
                         cell.icon:SetTexture(icon)
                         cell.ghost:SetTexture(icon)
@@ -1600,7 +1683,12 @@ STYLE.bandit = {
                 held = held + 1
             end
         end
-        if fx.phase == "open" and held == 3 and fx.cycle >= 0.65 + 0.6 + 0.95 + 1.3 then
+        if fx.claim and held == 3 and not fx.landedAt then
+            -- three of the reward: the jackpot, and they stay
+            fx.landedAt = GetTime()
+            Jackpot(fx)
+        end
+        if fx.phase == "open" and held == 3 and not fx.claim and fx.cycle >= 0.65 + 0.6 + 0.95 + 1.3 then
             fx.cycle = 0
             for _, column in ipairs(art.columns) do
                 column.mode, column.speed = "spin", 0
@@ -2146,7 +2234,13 @@ STYLE.cartoon = {
             cx = (REEL_LEFT - REEL_RIGHT) / 2
             if fx.entered then
                 local marker = fx.windowWidth / 2 + 1
-                fx.snapDistance = ((fx.offset or 0) + CASE_STRIDE / 2 - marker) % CASE_STRIDE
+                local distance = ((fx.offset or 0) + CASE_STRIDE / 2 - marker) % CASE_STRIDE
+                -- already centred (a hair short of a whole item is rounding), or a reward's reel,
+                -- which stops on the reward by itself
+                if fx.claim or distance > CASE_STRIDE - 0.01 then
+                    distance = 0
+                end
+                fx.snapDistance = distance
                 fx.snapDone = 0
             end
             local goal = (fx.snapDistance or 0) * EaseOutCubic(t / 0.35)
@@ -2239,6 +2333,131 @@ Case.kit = {
     RestCommon = RestCommon, Cover = Cover, FrostArt = FrostArt, Shatter = Shatter, FlyShards = FlyShards,
     FaceTint = FaceTint, PARTICLES = PARTICLES,
 }
+
+-- --- the vault's rewards to choose from ---------------------------------------------------------------------
+
+-- The reward's name and item level once it has landed, on a dark plate with a fine border (the
+-- popup's look), sized to the text and centred under the reward: it reads over any style's reel or
+-- art. In the case, so the gates cover it as they close.
+local CLAIM_PAD_X, CLAIM_PAD_Y = 8, 3
+
+local function EnsureClaimLabel(fx)
+    local label = fx.claimLabel
+    if label then
+        return label
+    end
+    label = CreateFrame("Frame", nil, fx)
+    label:EnableMouse(false)
+    label:SetPoint("BOTTOM", fx, "BOTTOM", (REEL_LEFT - REEL_RIGHT) / 2, GATE_CORNER + 3)
+    label:SetSize(80, CLAIM_BAR)
+    label.plate = Utils.Pixel(label, "BACKGROUND", 0.055, 0.055, 0.065, 0.92)
+    label.plate:SetAllPoints()
+    Utils.Border(label, 0.24, 0.24, 0.27, 1)
+    label.name = Utils.FontString(label, "OVERLAY", "Normal")
+    label.name:SetPoint("TOP", label, "TOP", 0, -CLAIM_PAD_Y)
+    label.name:SetWordWrap(false)
+    label.name:SetJustifyH("CENTER")
+    label.ilvl = Utils.FontString(label, "OVERLAY", "HighlightSmall")
+    label.ilvl:SetPoint("TOP", label.name, "BOTTOM", 0, -1)
+    label:Hide()
+    fx.claimLabel = label
+    return label
+end
+
+-- The reward's name, quality and item level, once the game has the item (asked at most four times
+-- a second). The item level is the vault's own, from the reward's link.
+local function ResolveClaim(claim)
+    local now = GetTime()
+    if claim.triedAt and now - claim.triedAt < 0.25 then
+        return
+    end
+    claim.triedAt = now
+    local link = C_WeeklyRewards and type(C_WeeklyRewards.GetItemHyperlink) == "function"
+        and Utils.Call(C_WeeklyRewards.GetItemHyperlink, claim.itemDBID) or nil
+    if not (C_Item and type(C_Item.GetItemInfo) == "function") then
+        return
+    end
+    local name, _, quality = Utils.Call(C_Item.GetItemInfo, link or claim.itemID)
+    if type(name) ~= "string" or name == "" then
+        return
+    end
+    claim.name, claim.quality = name, quality
+    if link and type(C_Item.GetDetailedItemLevelInfo) == "function" then
+        local level = Utils.Call(C_Item.GetDetailedItemLevelInfo, link)
+        claim.level = Utils.IsUsableNumber(level) and level or nil
+    end
+end
+
+local function QualityColor(quality)
+    if Utils.IsUsableNumber(quality) and C_Item and type(C_Item.GetItemQualityColor) == "function" then
+        local r, g, b = Utils.Call(C_Item.GetItemQualityColor, quality)
+        if Utils.IsUsableNumber(r) then
+            return r, g, b
+        end
+    end
+    return 1, 0.82, 0
+end
+
+-- Each frame of a case holding a reward: once it has landed, the marker fades and the name shows,
+-- only while the case is open (some styles draw the gates under the case while they move).
+local function ClaimTick(fx)
+    local claim = fx.claim
+    if not fx.dressed then
+        DressCells(fx, 0, false, false, 0, 0)
+    end
+    local landed = fx.landedAt and GetTime() - fx.landedAt or -1
+    fx.marker:SetAlpha(landed < 0 and 1 or 1 - Clamp01(landed / 0.25))
+    local label = EnsureClaimLabel(fx)
+    local shown = 0
+    if landed >= 0 and fx.phase == "open" then
+        shown = math.min(Clamp01((landed - 0.1) / 0.3), Clamp01(fx.t / 0.2))
+    end
+    if shown <= 0 then
+        label:Hide()
+        return
+    end
+    if not claim.name then
+        ResolveClaim(claim)
+    end
+    if claim.name and label.shownFor ~= claim then
+        label.name:SetText(claim.name)
+        label.name:SetTextColor(QualityColor(claim.quality))
+        label.ilvl:SetText(claim.level and string.format(L["%d ilvl"], claim.level) or "")
+        -- the plate fits the text (at any text size); a long name is cut short to the reel's width
+        label.name:SetWidth(0)
+        local widest = SLOT_W - REEL_LEFT - REEL_RIGHT - 2 * CLAIM_PAD_X - 8
+        local nameWidth = math.min(widest, math.ceil(label.name:GetStringWidth() or 0))
+        label.name:SetWidth(nameWidth)
+        local width = math.max(nameWidth, math.ceil(label.ilvl:GetStringWidth() or 0)) + 2 * CLAIM_PAD_X
+        local height = math.ceil((label.name:GetStringHeight() or 12) + (label.ilvl:GetStringHeight() or 10)) + 1 + 2 * CLAIM_PAD_Y
+        label:SetSize(width, height)
+        label.shownFor = claim
+    end
+    -- above the reel and whatever a style puts over it; the gates, beside the case, cover it
+    local frameLevel = fx:GetFrameLevel() + 5
+    if label.frameLevel ~= frameLevel then
+        label:SetFrameLevel(frameLevel)
+        label.frameLevel = frameLevel
+    end
+    label:SetAlpha(shown)
+    label:SetShown(claim.name ~= nil)
+end
+
+-- The case lets go of its reward: back to how any case is.
+local function ClearClaim(fx)
+    if not fx.claim then
+        return
+    end
+    fx.claim, fx.claimHeld, fx.settling, fx.settled = nil, nil, nil, nil
+    fx.claimStyle, fx.claimStyleID = nil, nil
+    fx.land, fx.landedAt, fx.landItem, fx.landEntry = nil, nil, nil, nil
+    fx.reelReady = nil
+    fx.marker:SetAlpha(1)
+    if fx.claimLabel then
+        fx.claimLabel:Hide()
+        fx.claimLabel.shownFor = nil
+    end
+end
 
 -- --- the engine: opening, open, closing, and back to rest ---------------------------------------------------------------
 
@@ -2377,19 +2596,50 @@ local function Prepare(fx)
     fx.pulse, fx.hop, fx.markerItem = 0, 0, nil
 end
 
+-- The case opens in its style (the reel as it is). A reward's case keeps the style it was revealed
+-- with until it lets go of the reward: closed for Collect and open again, it's the same case.
+local function StartCase(fx)
+    fx.settling, fx.settled = nil, nil
+    Prepare(fx)
+    if fx.claim and fx.claimStyle then
+        fx.style, fx.styleID = fx.claimStyle, fx.claimStyleID
+    else
+        fx.style, fx.styleID = PickStyle(fx)
+        if fx.claim then
+            fx.claimStyle, fx.claimStyleID = fx.style, fx.styleID
+        end
+    end
+    fx.phase, fx.t, fx.entered = "opening", 0, true
+    fx.flags = {}
+    ShowCase(fx, true)
+    fx.style.Enter(fx)
+    EnsureTicker(fx)
+    FadeCaption(fx.owner, 0)
+end
+
 local function Finish(fx)
     local owner = fx.owner
     if fx.style then
         fx.style.Rest(fx)
     end
     fx.phase, fx.t = "closed", 0
-    ShowCase(fx, false)
     fx.marker:Hide()
-    FadeCaption(owner, 1)
-    if fx.want and VaultIsOpen() and PointerOnSlot(owner) then
-        -- pointed at again while it closed
-        Case.Open(owner)
-        return
+    if fx.claim then
+        if fx.claimHeld then
+            -- Collect left before the gates had shut: open onto the reward again
+            StartCase(fx)
+            return
+        end
+        -- Collect pointed at: the gates stay shut over the reward, for the sad gates (Faces.lua)
+        ShowCase(fx, true)
+    else
+        ShowCase(fx, false)
+        FadeCaption(owner, 1)
+        if fx.want and VaultIsOpen() and PointerOnSlot(owner) then
+            -- pointed at again while it closed
+            Case.Open(owner)
+            return
+        end
     end
     -- effects still in the air finish on their own
     if fx.parts and fx.parts.live > 0 then
@@ -2424,7 +2674,7 @@ function Tick(fx, elapsed)
         StopTicker(fx)
         return
     end
-    if fx.want and not fx.preview and not PointerOnSlot(owner) then
+    if fx.want and not fx.preview and not fx.claimHeld and not PointerOnSlot(owner) then
         fx.want = false
     end
     local style = fx.style
@@ -2448,8 +2698,26 @@ function Tick(fx, elapsed)
             return
         end
     end
+    if fx.settling then
+        -- a reward's case settling: the style is still, what's in the air fades, then no more work
+        UpdateParticles(fx, dt)
+        if not (fx.parts and fx.parts.live > 0) then
+            fx.settling, fx.settled = nil, true
+            StopTicker(fx)
+        end
+        return
+    end
     RefreshIcons(fx, dt)
+    fx.dressed = false
     style.Update(fx, dt)
+    if fx.claim then
+        ClaimTick(fx)
+        local since = fx.landedAt and GetTime() - fx.landedAt
+        if fx.claimHeld and fx.phase == "open" and not fx.land and fx.t > CLAIM_SETTLE and since and since > CLAIM_SETTLE
+            and (fx.claim.name or since > CLAIM_NAME_WAIT) then
+            fx.settling = true
+        end
+    end
     UpdateParticles(fx, dt)
     local text = owner.bgvText
     if text and fx.phase ~= "closing" and text.bgvFadeTarget ~= 0 then
@@ -2477,14 +2745,7 @@ function Case.Open(activityFrame)
     if fx.phase ~= "closed" and fx.phase ~= "tail" then
         return
     end
-    Prepare(fx)
-    fx.style, fx.styleID = PickStyle(fx)
-    fx.phase, fx.t, fx.entered = "opening", 0, true
-    fx.flags = {}
-    ShowCase(fx, true)
-    fx.style.Enter(fx)
-    EnsureTicker(fx)
-    FadeCaption(activityFrame, 0)
+    StartCase(fx)
 end
 
 -- Asks the case to close; the ticker closes it once it has finished opening.
@@ -2532,6 +2793,7 @@ function Case.Stop(activityFrame)
     if not fx then
         return
     end
+    ClearClaim(fx)
     StopTicker(fx)
     if fx.style then
         fx.style.Rest(fx)
@@ -2554,6 +2816,7 @@ function Case.Shut(activityFrame)
         return
     end
     local wasOpen = fx.phase ~= "closed" and fx.phase ~= "tail"
+    ClearClaim(fx)
     StopTicker(fx)
     if fx.style then
         fx.style.Rest(fx)
@@ -2581,6 +2844,92 @@ function Case.RepaintAccent(activityFrame)
     if fx and fx.phase == "closed" then
         ColorMarker(fx)
     end
+end
+
+-- --- the vault's rewards to choose from (UI.lua) ------------------------------------------------------------
+
+-- Opens the slot's case onto `reward` ({ itemDBID, itemID, icon }) and holds it open, the reel
+-- spinning through `icons` first. The same reward again changes nothing (the case may be shut for
+-- the sad gates).
+function Case.OpenClaim(activityFrame, reward, icons)
+    if AnimationsDisabled() or not activityFrame or not activityFrame.IsShown or not activityFrame:IsShown()
+        or type(reward) ~= "table" or type(icons) ~= "table" or #icons == 0 then
+        return
+    end
+    local fx = EnsureFX(activityFrame)
+    if fx.claim and fx.claim.itemDBID == reward.itemDBID then
+        return
+    end
+    if fx.claim then
+        ClearClaim(fx)
+    end
+    fx.claim, fx.claimHeld, fx.want = reward, true, true
+    fx.icons, fx.iconKey, fx.iconCount, fx.iconsPending = icons, icons, #icons, false
+    fx.cursor, fx.offset, fx.reelReady = math.random(#icons), 0, true
+    PaintReel(fx)
+    PlaceReel(fx)
+    if fx.phase == "closed" or fx.phase == "tail" then
+        StartCase(fx)
+    end
+end
+
+-- A slot whose reward hasn't loaded yet: its gates shut over it, still, so nothing shows before
+-- every reward opens together.
+function Case.Cover(activityFrame)
+    if AnimationsDisabled() or not activityFrame then
+        return
+    end
+    local fx = EnsureFX(activityFrame)
+    if fx.phase ~= "closed" or fx.claim then
+        return
+    end
+    RaiseAboveGlow(activityFrame)
+    Prepare(fx)
+    Levels(fx, false)
+    DoorsClosed(fx)
+    fx.marker:Hide()
+    ShowCase(fx, true)
+end
+
+-- A reward's reel gets a fuller list (it was still loading): swapped in while it still spins.
+function Case.SetClaimIcons(activityFrame, icons)
+    local fx = activityFrame and activityFrame.bgvFX
+    if not (fx and fx.claim) or fx.land or fx.landedAt or type(icons) ~= "table" or #icons == 0 then
+        return false
+    end
+    fx.icons, fx.iconKey, fx.iconCount = icons, icons, #icons
+    PaintReel(fx)
+    return true
+end
+
+-- Collect pointed at: the case closes over its reward, and stays shut until ResumeClaim.
+function Case.SuspendClaim(activityFrame)
+    local fx = activityFrame and activityFrame.bgvFX
+    if fx and fx.claim then
+        fx.claimHeld, fx.want = false, false
+        if fx.phase ~= "closed" and fx.phase ~= "tail" then
+            -- a settled case: awake again, to close
+            fx.settling, fx.settled = nil, nil
+            EnsureTicker(fx)
+        end
+    end
+end
+
+-- Collect left: open onto the reward again (right away, or once it has finished closing).
+function Case.ResumeClaim(activityFrame)
+    local fx = activityFrame and activityFrame.bgvFX
+    if not (fx and fx.claim) or AnimationsDisabled() then
+        return
+    end
+    fx.claimHeld, fx.want = true, true
+    if fx.phase == "closed" or fx.phase == "tail" then
+        StartCase(fx)
+    end
+end
+
+function Case.HasClaim(activityFrame)
+    local fx = activityFrame and activityFrame.bgvFX
+    return fx ~= nil and fx.claim ~= nil
 end
 
 -- --- the settings' preview -----------------------------------------------------------------------------------
