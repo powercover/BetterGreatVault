@@ -2304,7 +2304,13 @@ function Drive(_, elapsed)
     for index = 1, count do
         local fx = active[index]
         if fx and fx.driven then
-            Tick(fx, elapsed)
+            local ok, err = pcall(Tick, fx, elapsed)
+            if not ok then
+                -- a style that fails puts its slot to rest, rather than failing every frame
+                Utils.NoteError("slot animation", err)
+                fx.driven = false
+                pcall(Case.Rest, fx.owner)
+            end
         end
     end
     -- compact the list: keep slots still animating (and any that started during this frame)

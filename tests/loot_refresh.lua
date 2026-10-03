@@ -222,6 +222,7 @@ end
 loadModule("Locales/Locales.lua")
 loadModule("Utils.lua")
 loadModule("Rewards.lua")
+loadModule("ItemLinks.lua")
 loadModule("LootTable.lua")
 
 BGV.WorldLoot = { 93001, 93002, 93003 }

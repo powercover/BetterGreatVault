@@ -20,6 +20,7 @@ BGV.Settings.LINKS = {
 
 local panel
 local scroll
+local aboutEmblem -- the About card's emblem: it spins only while it's in view
 local child
 local links = {}
 local sections = {}
@@ -112,10 +113,22 @@ local function SelectLink(id)
     end
 end
 
+-- The About card's emblem spins only while the page shows it.
+local function EmblemInView()
+    local emblem = aboutEmblem
+    if not (emblem and scroll and emblem.SetAnimated) then
+        return
+    end
+    local top, bottom = emblem:GetTop(), emblem:GetBottom()
+    local viewTop, viewBottom = scroll:GetTop(), scroll:GetBottom()
+    emblem:SetAnimated((top and bottom and viewTop and viewBottom and bottom < viewTop and top > viewBottom) and true or false)
+end
+
 local function CategoryFromScroll()
     if not scroll then
         return
     end
+    EmblemInView()
     local offset = scroll:GetVerticalScroll()
     local id = 1
     for index = #sections, 1, -1 do
@@ -144,6 +157,7 @@ local function ScrollTo(id)
     scrollAnim.to = target
     scrollAnim.t = 0
     scrollAnim.play = true
+    scroll:SetScript("OnUpdate", scrollAnim.Step)
 end
 
 -- A link in the left menu, to a section of the page. `bottom` pins it to the bottom of the menu.
@@ -558,7 +572,9 @@ local function MakeAboutCard(parent)
     card:SetHeight(52)
     local emblem = BGV.Utils.CreateEmblem(card, 48)
     emblem:SetPoint("LEFT", card, "LEFT", 0, 0)
+    emblem:SetAnimated(false)
     card.emblem = emblem
+    aboutEmblem = emblem
     local name = BGV.Utils.FontString(card, "OVERLAY", "NormalLarge")
     name:SetPoint("TOPLEFT", emblem, "TOPRIGHT", 12, -7)
     name:SetText("Better Great Vault")
@@ -715,12 +731,12 @@ end
 
 local function BuildGreatVault()
     MakeHeader(child, L["Great Vault"], 1)
-    MakeCheckbox(child, L["Animated slots"], AnimatedSlots, function(value)
+    MakeCheckbox(child, L["Slot animations"], AnimatedSlots, function(value)
         DB().disableAnimations = not value
         RefreshAccent()
         BGV.Settings.Refresh()
     end)
-    MakeNote(child, L["Hovering an unlocked slot opens its gates and spins a reel of the loot it can give. Off: the gates stay closed and the slot shows its caption."])
+    MakeNote(child, L["Pointing at an unlocked slot opens it onto a reel of the loot it can give."])
     local styleRow
     styleRow = MakeButtons(child, {
         { text = StyleLabel(), width = 240, onClick = function(self)
@@ -737,15 +753,24 @@ local function BuildGreatVault()
         refresh(self)
         self.buttons[1]:SetText(StyleLabel())
     end
-    MakeNote(child, L["How an unlocked slot opens when you point at it. Match specialization opens it in your specialization's own style, such as Frost Shatter for frost mages. Random picks a different style each time."], 2)
+    MakeNote(child, L["Match specialization: your specialization's own style. Random: a different one each time."], 2)
+    -- Pointing at Collect saddens the gates (Faces.lua). The game names Collect, in its own language.
+    local collect = WEEKLY_REWARDS_GET_CONCESSION or "Collect"
+    MakeCheckbox(child, string.format(L["Sad faces when hovering %s"], collect), function()
+        local saved = DB()
+        return not (saved and saved.disableCollectFaces == true)
+    end, function(value)
+        DB().disableCollectFaces = not value
+    end, { indent = 1, requires = AnimatedSlots })
+    MakeNote(child, string.format(L["While you point at %s (a reward in place of an item), your completed slots look disappointed. The best reward's slot takes it hardest."], collect), 2)
     MakeCheckbox(child, L["Best-in-Slot tiers"], function()
         return BGV.Utils.ShowBisTiers()
     end, function(value)
         DB().showBisTiers = value and true or false
         RefreshAccent()
     end)
-    MakeNote(child, L["Colors the reel's items by their Best-in-Slot tier for your loot spec (S, A, B, C, D, from Wowhead's guides), and shows the loot table's Tier column."])
-    MakeCheckbox(child, L["Open the loot table from a slot"], function()
+    MakeNote(child, L["Colors items by their Best-in-Slot tier for your loot spec, from Wowhead's guides, and adds the loot table's Tier column."])
+    MakeCheckbox(child, L["Click a slot for its loot table"], function()
         local saved = DB()
         return not saved or saved.openLootTable ~= false
     end, function(value)
@@ -762,7 +787,7 @@ local function BuildGreatVault()
             BGV.LootTable.Invalidate()
         end
     end)
-    MakeNote(child, L["On the Great Vault and the loot table: shows the spec your loot is filtered by, and lets you change it."])
+    MakeNote(child, L["Shows and changes your loot spec, on the Great Vault and in the loot table."])
     MakeCheckbox(child, L["Reward reminder"], function()
         local saved = DB()
         return not saved or saved.remindRewards ~= false
@@ -779,15 +804,15 @@ end
 
 local function BuildMinimap()
     MakeHeader(child, L["Minimap button"], 2)
-    MakeCheckbox(child, L["Add to the addon compartment"], function()
+    MakeCheckbox(child, L["Addon compartment entry"], function()
         local saved = DB()
         return not saved or saved.useCompartment ~= false
     end, function(value)
         DB().useCompartment = value and true or false
         Call(BGV.Minimap and BGV.Minimap.ApplyCompartment)
     end)
-    MakeNote(child, L["The addon compartment is Blizzard's addon menu on the minimap: the small button with a number. Better Great Vault is listed there with the same clicks as its minimap button. Needs a game restart after installing or updating the addon."])
-    MakeCheckbox(child, L["Show minimap button"], ButtonShown, function(value)
+    MakeNote(child, L["Lists the addon in Blizzard's addon menu on the minimap, with the same clicks. After installing or updating, it shows there after a game restart."])
+    MakeCheckbox(child, L["Show the button"], ButtonShown, function(value)
         DB().showMinimap = value and true or false
         BGV.Minimap.Apply()
         BGV.Settings.Refresh()
@@ -799,14 +824,14 @@ local function BuildMinimap()
             Call(BGV.Minimap and BGV.Minimap.ResetPosition)
         end },
     }, nested)
-    MakeCheckbox(child, L["Show popup on mouseover"], function()
+    MakeCheckbox(child, L["Popup on hover"], function()
         local saved = DB()
         return not saved or saved.minimapPopup ~= false
     end, function(value)
         DB().minimapPopup = value and true or false
         BGV.Settings.Refresh()
     end, nested)
-    MakeCheckbox(child, L["Show this week's slots"], function()
+    MakeCheckbox(child, L["This week's slots"], function()
         local saved = DB()
         return not saved or saved.popupWeek ~= false
     end, function(value)
@@ -822,15 +847,15 @@ local function BuildMinimap()
     end, function(value)
         DB().lockMinimap = value and true or false
     end, nested)
-    MakeCheckbox(child, L["Unaffected by other addons"], function()
+    MakeCheckbox(child, L["Keep on the minimap"], function()
         local saved = DB()
         return saved and saved.independentMinimap == true
     end, function(value)
         DB().independentMinimap = value and true or false
         BGV.Minimap.Apply()
     end, nested)
-    MakeNote(child, L["Keeps the button on the minimap when another addon gathers minimap buttons, such as EllesmereUI. A change takes full effect after a reload."], 2)
-    MakeCheckbox(child, L["Fade out when not hovered"], function()
+    MakeNote(child, L["Stops addons that gather minimap buttons, such as EllesmereUI, from moving it. Takes full effect after a reload."], 2)
+    MakeCheckbox(child, L["Fade until hovered"], function()
         local saved = DB()
         return saved and saved.fadeMinimap == true
     end, function(value)
@@ -927,19 +952,19 @@ local function BuildAppearance()
             return value > 0 and ("+" .. value) or tostring(value)
         end,
     })
-    MakeNote(child, L["Resizes the addon's text: on the Great Vault's slots, in the loot table, in the minimap popup and on this page."], true)
+    MakeNote(child, L["Scales all of the addon's text."], true)
     MakeGap(8)
     BuildLanguage()
     MakeGap(8)
     MakeSubheader(child, L["Accent color"])
-    MakeCheckbox(child, L["Class specialization"], SpecAccentOn, function(value)
+    MakeCheckbox(child, L["Use my spec's color"], SpecAccentOn, function(value)
         DB().useSpecAccent = value and true or false
         BGV.Settings.Refresh()
         RefreshAccent()
     end)
-    MakeNote(child, L["Use your specialization's color for the addon's highlights. Uncheck this to pick your own."])
+    MakeNote(child, L["Highlights in your specialization's color. Off: pick your own below."])
     MakeColorRow(child)
-    MakeNote(child, L["Your color, used while class specialization is off."])
+    MakeNote(child, L["Used while your spec's color is off."])
 end
 
 local function KeyText(command)
@@ -1042,7 +1067,7 @@ local function BuildTools()
     end, function(value)
         DB().debug = value and true or false
     end)
-    MakeNote(child, L["Prints loading details to chat while the reels and the loot table load, for bug reports."])
+    MakeNote(child, L["Prints loading details to chat, for bug reports."])
     MakeButtons(child, {
         { text = L["Print vault data"], width = 140, onClick = function()
             Call(BGV.PrintVaultData)
@@ -1057,7 +1082,7 @@ local function BuildTools()
             Call(BGV.PrintPerformance)
         end },
     })
-    MakeNote(child, L["Prints what the addon costs in chat: its CPU time a frame (from the game's addon profiler), its memory, how long it took to load, and its last slot animation and loot table load."], true)
+    MakeNote(child, L["Prints the addon's CPU time, memory and load times in chat."], true)
 
     MakeGap(10)
     MakeSubheader(child, L["Reset"])
@@ -1223,6 +1248,7 @@ local function Build()
 
     scroll:SetScript("OnMouseWheel", function(self, delta)
         scrollAnim.play = false
+        self:SetScript("OnUpdate", nil)
         local current = self:GetVerticalScroll()
         local maxScroll = self:GetVerticalScrollRange()
         local nextOffset = current - delta * 48
@@ -1234,20 +1260,19 @@ local function Build()
         self:SetVerticalScroll(nextOffset)
         CategoryFromScroll()
     end)
-    scroll:SetScript("OnUpdate", function(self, elapsed)
-        if not scrollAnim.play then
-            return
-        end
+    -- The glide to a section (ScrollTo): its OnUpdate runs only while it glides.
+    function scrollAnim.Step(self, elapsed)
         scrollAnim.t = scrollAnim.t + elapsed
         local progress = scrollAnim.t / 0.22
         if progress >= 1 then
             progress = 1
             scrollAnim.play = false
+            self:SetScript("OnUpdate", nil)
         end
         progress = progress * progress * (3 - 2 * progress)
         self:SetVerticalScroll(scrollAnim.from + (scrollAnim.to - scrollAnim.from) * progress)
         CategoryFromScroll()
-    end)
+    end
 
     panel:SetScript("OnShow", function(self)
         if self.bgvFit then
@@ -1261,6 +1286,7 @@ local function Build()
         if self.bgvFit then
             self.bgvFit()
         end
+        EmblemInView()
     end)
 
     return panel

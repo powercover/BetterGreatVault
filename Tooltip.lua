@@ -133,7 +133,7 @@ function Tooltip.ShowStandalone(activityFrame)
 
     local ok, err = pcall(Tooltip.Write, slot)
     if not ok then
-        BGV.lastError = err
+        Utils.NoteError("slot tooltip", err)
         GameTooltip:ClearLines()
         GameTooltip:AddLine(L["Great Vault"], 1, 0.82, 0)
         GameTooltip:AddLine(BGV.GreatVault.ProgressText(slot), 1, 1, 1, true)
@@ -218,13 +218,13 @@ function Tooltip.Hook()
     end
 
     if type(WeeklyRewardsActivityMixin.ShowPreviewItemTooltip) == "function" then
-        hooksecurefunc(WeeklyRewardsActivityMixin, "ShowPreviewItemTooltip", function(self)
+        hooksecurefunc(WeeklyRewardsActivityMixin, "ShowPreviewItemTooltip", Utils.Protect("vault tooltip", function(self)
             Tooltip.ShowStandalone(self)
-        end)
+        end))
     end
 
     if type(WeeklyRewardsActivityMixin.OnEnter) == "function" then
-        hooksecurefunc(WeeklyRewardsActivityMixin, "OnEnter", function(self)
+        hooksecurefunc(WeeklyRewardsActivityMixin, "OnEnter", Utils.Protect("vault tooltip", function(self)
             local showingPreview = false
             if type(self.CanShowPreviewItemTooltip) == "function" then
                 local ok, preview = pcall(self.CanShowPreviewItemTooltip, self)
@@ -233,14 +233,14 @@ function Tooltip.Hook()
             if not showingPreview then
                 Tooltip.ShowStandalone(self)
             end
-        end)
+        end))
     end
 
     if type(WeeklyRewardActivityItemMixin) == "table" and type(WeeklyRewardActivityItemMixin.OnEnter) == "function" then
-        hooksecurefunc(WeeklyRewardActivityItemMixin, "OnEnter", function(self)
+        hooksecurefunc(WeeklyRewardActivityItemMixin, "OnEnter", Utils.Protect("vault tooltip", function(self)
             local parent = self:GetParent()
             Tooltip.ShowStandalone(parent or self)
-        end)
+        end))
     end
 
     Tooltip.hooked = true

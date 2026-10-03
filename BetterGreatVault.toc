@@ -3,6 +3,7 @@
 ## Notes: Shows Great Vault progress and reward item level on each slot.
 ## Author: powercover
 ## Version: 1.0.0
+## X-License: All Rights Reserved
 ## SavedVariablesPerCharacter: BetterGreatVaultCharDB
 ## AllowLoadGameType: mainline
 ## Category: Character Advancement
@@ -31,7 +32,9 @@ GreatVault.lua
 Tooltip.lua
 Case.lua
 CaseStyles.lua
+Faces.lua
 UI.lua
+ItemLinks.lua
 LootTable.lua
 Settings.lua
 Minimap.lua

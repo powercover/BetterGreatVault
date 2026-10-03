@@ -109,7 +109,6 @@ local pool = {}
 local linkPool = {}
 local linkRows = {}
 local itemCache = {}
-local templateCache = {}
 local Layout
 local RefreshHeaderFilters
 local pendingWatch
@@ -648,7 +647,7 @@ end
 
 function BGV.LootTable.Invalidate()
     itemCache = {}
-    templateCache = {}
+    BGV.ItemLinks.Clear()
     ResetWatch()
     if BGV.Rewards and type(BGV.Rewards.InvalidateIcons) == "function" then
         BGV.Rewards.InvalidateIcons()
@@ -663,7 +662,7 @@ end
 -- bursts, so the redraw waits for the next loading pass rather than coming once per item.
 function BGV.LootTable.Reload()
     itemCache = {}
-    templateCache = {}
+    BGV.ItemLinks.Clear()
     ResetWatch()
     BGV.LootTable.RefreshPending()
 end
@@ -760,173 +759,6 @@ local function FirstSection(model, preferUnlocked)
     return fallback
 end
 
-local function SplitLink(link)
-    local body = type(link) == "string" and link:match("item:([%d:]*)") or nil
-    if not body or body == "" then
-        return nil
-    end
-    local parts = {}
-    for part in (body .. ":"):gmatch("([^:]*):") do
-        parts[#parts + 1] = part
-    end
-    if #parts < 13 then
-        return nil
-    end
-    return parts
-end
-
-local function Assemble(parts)
-    return "item:" .. table.concat(parts, ":")
-end
-
-local function Measure(link)
-    if not (C_Item and type(C_Item.GetDetailedItemLevelInfo) == "function") or type(link) ~= "string" then
-        return nil
-    end
-    local level = BGV.Utils.Call(C_Item.GetDetailedItemLevelInfo, link)
-    if BGV.Utils.IsUsableNumber(level) and level > 0 then
-        return level
-    end
-end
-
-local function WithoutBonus(parts, dropIndex)
-    local count = tonumber(parts[13]) or 0
-    local nextParts = {}
-    for index = 1, 12 do
-        nextParts[index] = parts[index]
-    end
-    local kept = {}
-    for index = 1, count do
-        if index ~= dropIndex then
-            kept[#kept + 1] = parts[13 + index]
-        end
-    end
-    nextParts[13] = tostring(#kept)
-    local pos = 13
-    for _, bonus in ipairs(kept) do
-        pos = pos + 1
-        nextParts[pos] = bonus
-    end
-    for index = 14 + count, #parts do
-        pos = pos + 1
-        nextParts[pos] = parts[index]
-    end
-    return nextParts
-end
-
-local function TemplateFor(rewardLink, target)
-    local key = tostring(rewardLink) .. "@" .. tostring(target)
-    if templateCache[key] then
-        return templateCache[key]
-    end
-    local parts = SplitLink(rewardLink)
-    local link = parts and Assemble(parts) or rewardLink
-    local level = Measure(link)
-    local guard = 0
-    while parts and level and target and level > target and guard < 6 do
-        guard = guard + 1
-        local count = tonumber(parts[13]) or 0
-        local matched
-        local bestParts
-        local bestLevel
-        for index = 1, count do
-            local trial = WithoutBonus(parts, index)
-            local trialLevel = Measure(Assemble(trial))
-            if trialLevel == target then
-                parts = trial
-                link = Assemble(trial)
-                level = trialLevel
-                matched = true
-                break
-            end
-            if trialLevel and trialLevel < level and trialLevel > target and (not bestLevel or trialLevel < bestLevel) then
-                bestLevel = trialLevel
-                bestParts = trial
-            end
-        end
-        if matched or not bestParts then
-            break
-        end
-        parts = bestParts
-        link = Assemble(parts)
-        level = bestLevel
-    end
-    templateCache[key] = link
-    return link
-end
-
-local function SwapItem(link, itemID)
-    local parts = SplitLink(link)
-    if parts then
-        parts[1] = tostring(itemID)
-        return Assemble(parts)
-    end
-    local rest = type(link) == "string" and (link:match("item:%d+(.-)|h") or link:match("item:%d+(.*)")) or ""
-    return "item:" .. tostring(itemID) .. (rest or "")
-end
-
-local function TipLink(entry)
-    if not BGV.Utils.IsUsableNumber(entry.itemID) then
-        return nil
-    end
-    if type(entry.rewardLink) == "string" and entry.rewardLink ~= "" and BGV.Utils.IsUsableNumber(entry.itemLevel) then
-        local template = TemplateFor(entry.rewardLink, entry.itemLevel)
-        local link = SwapItem(template, entry.itemID)
-        local level = Measure(link)
-        if level and level > entry.itemLevel then
-            return TemplateFor(link, entry.itemLevel)
-        end
-        return link
-    end
-    return "item:" .. tostring(entry.itemID)
-end
-
-local function EntryLink(entry)
-    if not entry.tipLink then
-        entry.tipLink = TipLink(entry)
-    end
-    return entry.tipLink
-end
-
--- The item's own chat link with `itemString` ("item:...") in it, so it shows that version.
-local function FullLink(itemString, itemID)
-    local _, link = BGV.Utils.Call(C_Item.GetItemInfo, itemID)
-    if type(link) ~= "string" or link == "" then
-        return nil
-    end
-    local body = type(itemString) == "string" and itemString:match("item:[^|]+")
-    if not body then
-        return link
-    end
-    return (link:gsub("item:[^|]+", function()
-        return body
-    end, 1))
-end
-
--- The link Shift-click puts in chat: at the exact item level the row shows when the game can
--- give one (the vault reward's own bonuses, or the link behind the row's tooltip), measured
--- to be sure; else the item itself. Nil while the item's data loads.
-local function ChatLink(entry)
-    local itemID = entry.itemID
-    if not (BGV.Utils.IsUsableNumber(itemID) and C_Item and type(C_Item.GetItemInfo) == "function") then
-        return nil
-    end
-    local want = entry.itemLevel
-    if BGV.Utils.IsUsableNumber(want) then
-        local candidate = EntryLink(entry)
-        if candidate and Measure(candidate) == want then
-            return FullLink(candidate, itemID)
-        end
-        local info = C_TooltipInfo
-        local data = info and type(info.GetItemKey) == "function" and BGV.Utils.Call(info.GetItemKey, itemID, want, 0)
-        local hyperlink = type(data) == "table" and data.hyperlink
-        if type(hyperlink) == "string" and not BGV.Utils.IsSecret(hyperlink) and Measure(hyperlink) == want then
-            return hyperlink:find("|H", 1, true) and hyperlink or FullLink(hyperlink, itemID)
-        end
-    end
-    return FullLink(nil, itemID)
-end
-
 -- The vault preview link can't be reliably re-scaled to an arbitrary rank (e.g. its ceiling
 -- bonus doesn't map to the normal cap by removing or shifting bonus IDs), so render the item
 -- by ID at the exact level the slot will award, the same way the Auction House does.
@@ -934,7 +766,7 @@ local function FillTooltip(entry)
     if BGV.Utils.IsUsableNumber(entry.itemLevel) and type(GameTooltip.SetItemKey) == "function" then
         GameTooltip:SetItemKey(entry.itemID, entry.itemLevel, 0)
     else
-        local link = EntryLink(entry)
+        local link = BGV.ItemLinks.EntryLink(entry)
         if type(link) == "string" then
             GameTooltip:SetHyperlink(link)
         else
@@ -1005,8 +837,10 @@ local function BonusLines(classID)
 end
 
 if TooltipDataProcessor and type(TooltipDataProcessor.AddTooltipPostCall) == "function" and Enum and Enum.TooltipDataType then
-    TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tooltip)
-        if tooltip ~= GameTooltip then
+    -- It runs for every item tooltip in the game: anything but a loot table row's leaves at once, and
+    -- an error in it is noted (Utils.Protect), never passed on to the game's tooltips.
+    TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, BGV.Utils.Protect("item tooltip", function(tooltip)
+        if tooltip ~= GameTooltip or (tooltip.IsForbidden and tooltip:IsForbidden()) then
             return
         end
         local owner = tooltip:GetOwner()
@@ -1040,7 +874,7 @@ if TooltipDataProcessor and type(TooltipDataProcessor.AddTooltipPostCall) == "fu
                 return
             end
         end
-    end)
+    end))
 end
 
 local function ShowItemTooltip(owner, entry)
@@ -1224,7 +1058,7 @@ local function Acquire()
         row:SetScript("OnClick", function(self, button)
             -- Shift-click links the item in chat, Ctrl-click previews it, like the game's items.
             if button == "LeftButton" and IsModifiedClick() and self.entry and type(HandleModifiedItemClick) == "function" then
-                local link = ChatLink(self.entry)
+                local link = BGV.ItemLinks.ChatLink(self.entry)
                 if link then
                     HandleModifiedItemClick(link)
                 elseif C_Item and type(C_Item.RequestLoadItemDataByID) == "function" then
@@ -1399,14 +1233,14 @@ local WEARABLE_ARMOR = { [1] = true, [2] = true, [3] = true, [4] = true }
 
 local function ArmorType(entry)
     local itemID = entry.itemID
-    if not BGV.Utils.IsUsableNumber(itemID) or type(GetItemInfoInstant) ~= "function" then
+    if not BGV.Utils.IsUsableNumber(itemID) then
         return nil
     end
     local known = armorTypes[itemID]
     if known ~= nil then
         return known or nil
     end
-    local _, _, subType, equipLoc, _, classID, subClassID = GetItemInfoInstant(itemID)
+    local _, _, subType, equipLoc, _, classID, subClassID = BGV.Utils.ItemInfoInstant(itemID)
     if not BGV.Utils.IsUsableNumber(classID) then
         return nil
     end
@@ -2938,13 +2772,10 @@ local function Build()
     scroll:SetScript("OnSizeChanged", function()
         PaintVisible()
     end)
-    scroll:SetScript("OnMouseWheel", function(self, delta)
-        local maxScroll = self:GetVerticalScrollRange() or 0
-        local target = (scrollTarget or self:GetVerticalScroll()) - delta * 64
-        scrollTarget = math.max(0, math.min(maxScroll, target))
-    end)
-    scroll:SetScript("OnUpdate", function(self, elapsed)
+    -- The wheel glides the list to its target; the glide's OnUpdate runs only while it moves.
+    local function Glide(self, elapsed)
         if not scrollTarget then
+            self:SetScript("OnUpdate", nil)
             return
         end
         local current = self:GetVerticalScroll()
@@ -2952,12 +2783,19 @@ local function Build()
         if math.abs(distance) < 0.5 then
             self:SetVerticalScroll(scrollTarget)
             scrollTarget = nil
+            self:SetScript("OnUpdate", nil)
         else
             self:SetVerticalScroll(current + distance * math.min(1, elapsed * 14))
         end
         if tipWaiting and not ListMoving() then
             ShowTipUnderPointer()
         end
+    end
+    scroll:SetScript("OnMouseWheel", function(self, delta)
+        local maxScroll = self:GetVerticalScrollRange() or 0
+        local target = (scrollTarget or self:GetVerticalScroll()) - delta * 64
+        scrollTarget = math.max(0, math.min(maxScroll, target))
+        self:SetScript("OnUpdate", Glide)
     end)
 
     local sizer = CreateFrame("Button", nil, frame)
@@ -3062,7 +2900,7 @@ function BGV.LootTable.Show(slot)
     end
     mode = "vault"
     itemCache = {}
-    templateCache = {}
+    BGV.ItemLinks.Clear()
     ResetWatch()
     local category = CategoryFor(slot)
     solo = category ~= nil
@@ -3104,7 +2942,7 @@ function BGV.LootTable.ShowDatabase()
     mode = "database"
     solo = false
     itemCache = {}
-    templateCache = {}
+    BGV.ItemLinks.Clear()
     ResetWatch()
     if not BGV.Utils.IsUsableNumber(db.classID) then
         db.classID = BGV.Utils.PlayerClassID()

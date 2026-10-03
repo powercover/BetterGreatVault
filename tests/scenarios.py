@@ -11,6 +11,7 @@ Checks per vault scenario (see harness.lua):
   d  no Adventure Guide loot rebuild or re-select happens inside an addon call
   e  no Lua errors, no blocked actions
   f  10s of later journal events cause no rescans
+  g  GET_ITEM_INFO_RECEIVED is listened for only while a list waits for an item (where checked)
 
 Checks per loot database scenario (Rewards.DatabaseLevels / DatabaseItems / ClearDatabase):
   itm  items equal the ground truth for the class/spec filter over the whole season (every raid
@@ -40,7 +41,7 @@ from lupa import LuaError, LuaRuntime
 
 ROOT = Path(__file__).resolve().parents[1]
 TESTS = ROOT / "tests"
-CHECKS = ["a", "b", "c", "d", "e", "f"]
+CHECKS = ["a", "b", "c", "d", "e", "f", "g"]
 DB_CHECKS = ["itm", "lvl", "rst", "vlt", "prf", "clr", "rec", "err"]
 ALL = "R1,R2,M1,M2,W1"
 
@@ -423,6 +424,28 @@ def uncached_items_late(t):
     t.run(0.3)
     t.hover("R1")
     t.verify()
+
+
+def items_after_giving_up(t):
+    """Item data arrives just after the reads gave up waiting for it (8s). The lists must complete
+    when it does: raid and Mythic+ lists through the journal's own event, the world list (its items
+    come from C_Item, not the journal) through the item event, which the addon listens for only
+    while a list waits for an item. Loads take 8.6s here, twice over for the world list, so the
+    lists get 25s instead of 10."""
+    t.M.SetUncached(2, 1)
+    t.cfg("itemLoadDelay", 8.6)
+    t.boot()
+    t.H.FINISH_LIMIT = 25
+    t.H.NoteItemListening("before")
+    t.open_vault()
+    t.poll(ALL)
+    t.run(8.45)  # the reads have given up on the missing items, which arrive at 8.6s
+    t.H.NoteItemListening("waiting")
+    t.run(16.55)
+    t.H.StopPoll()
+    t.verify()
+    t.H.NoteItemListening("after")
+    t.H.CheckItemListening()
 
 
 def dungeon_bosses_unlisted(t):
@@ -855,6 +878,7 @@ SCENARIOS = [
     ("challenge_maps_late", challenge_maps_late),
     ("keystone_difficulty_invalid", keystone_difficulty_invalid),
     ("uncached_items_late", uncached_items_late),
+    ("items_after_giving_up", items_after_giving_up),
     ("dungeon_bosses_unlisted", dungeon_bosses_unlisted),
     ("guide_and_vault_open_together", guide_and_vault_open_together),
 ]

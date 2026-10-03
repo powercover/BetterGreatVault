@@ -288,6 +288,23 @@ local readAttempts = {}
 -- Rewards.RetryGivenUp): batchKey -> { items = { [itemID] = true } or nil, stale = bool }.
 local givenUp = {}
 
+-- Whether a list given up on waits for an item's info: Core listens for GET_ITEM_INFO_RECEIVED only
+-- then (Rewards.OnItemWaitChanged), since the game sends it for every item it loads anywhere.
+function Rewards.WaitingForItems()
+    for _, why in pairs(givenUp) do
+        if why.items then
+            return true
+        end
+    end
+    return false
+end
+
+local function ItemWaitChanged()
+    if type(Rewards.OnItemWaitChanged) == "function" then
+        Rewards.OnItemWaitChanged()
+    end
+end
+
 -- Timed retries already spent on lists given up on while empty and out of date: batchKey -> n.
 local staleRetries = {}
 
@@ -342,6 +359,7 @@ function Rewards.InvalidateIcons()
     dbLevels = {}
     dbStamped = {}
     dbCopies = {}
+    ItemWaitChanged()
 end
 
 -- The journal's state (selected instance and boss, difficulty, loot and slot filters) is global
@@ -611,10 +629,10 @@ local VAULT_EQUIP = {
 }
 
 local function IsVaultGear(itemID)
-    if not Utils.IsUsableNumber(itemID) or type(GetItemInfoInstant) ~= "function" then
+    if not Utils.IsUsableNumber(itemID) then
         return false
     end
-    local _, _, _, equipLoc, _, classID, subClassID = GetItemInfoInstant(itemID)
+    local _, _, _, equipLoc, _, classID, subClassID = Utils.ItemInfoInstant(itemID)
     local weaponClass = Enum and Enum.ItemClass and Enum.ItemClass.Weapon or 2
     local armorClass = Enum and Enum.ItemClass and Enum.ItemClass.Armor or 4
     if not Utils.IsUsableNumber(classID) or type(equipLoc) ~= "string" then
@@ -1027,8 +1045,8 @@ local EQUIP_LABEL = {
 
 local function ItemFields(itemID)
     local equipLoc, icon, name, quality
-    if Utils.IsUsableNumber(itemID) and type(GetItemInfoInstant) == "function" then
-        local instantName, _, _, loc, instantIcon = GetItemInfoInstant(itemID)
+    if Utils.IsUsableNumber(itemID) then
+        local instantName, _, _, loc, instantIcon = Utils.ItemInfoInstant(itemID)
         equipLoc = type(loc) == "string" and loc or nil
         icon = instantIcon
         name = type(instantName) == "string" and instantName or nil
@@ -1401,6 +1419,9 @@ local function CollectEntries(difficultyID, instanceIDs, encounterSet, names, bu
                             items = read.missing > 0 and read.missingItems or nil,
                             stale = read.problem == STALE_EMPTY,
                         }
+                        if read.missing > 0 then
+                            ItemWaitChanged()
+                        end
                         if read.problem == STALE_EMPTY then
                             ScheduleStaleRetry(batchKey)
                         end
@@ -1460,6 +1481,9 @@ function Rewards.RetryGivenUp(itemID)
     end
     if vaultDropped then
         iconLists = {}
+    end
+    if dropped then
+        ItemWaitChanged()
     end
     return dropped
 end
@@ -1657,7 +1681,7 @@ local function SeasonSetItems(classID)
     end
     local journal = C_LootJournal
     if not (journal and type(journal.GetItemSets) == "function" and type(journal.GetItemSetItems) == "function")
-        or type(GetItemInfoInstant) ~= "function" or not (BGV.Bis and type(BGV.Bis.Tier) == "function") then
+        or not (BGV.Bis and type(BGV.Bis.Tier) == "function") then
         return {}
     end
     local sets = Utils.Call(journal.GetItemSets, classID)
@@ -1675,7 +1699,7 @@ local function SeasonSetItems(classID)
         for _, item in ipairs(type(items) == "table" and items or {}) do
             local itemID = type(item) == "table" and item.itemID
             if Utils.IsUsableNumber(itemID) then
-                local _, _, _, equipLoc = GetItemInfoInstant(itemID)
+                local _, _, _, equipLoc = Utils.ItemInfoInstant(itemID)
                 local slot = TIER_SLOTS[equipLoc]
                 if slot and not slots[slot] then
                     slots[slot] = true
@@ -2523,6 +2547,7 @@ function Rewards.ClearDatabase()
             end
         end
     end
+    ItemWaitChanged()
     -- World spec answers for other classes (keyed "class..spec..:item", see DatabaseEntries).
     for _, byKey in ipairs({ specKnown, specAnswers }) do
         for key in pairs(byKey) do

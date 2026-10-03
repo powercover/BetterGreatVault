@@ -54,7 +54,7 @@ end
 
 NameBindings()
 
-function BetterGreatVault_OnBinding(action)
+BetterGreatVault_OnBinding = Utils.Protect("key binding", function(action)
     if action == "vault" then
         BGV.Minimap.ToggleVault()
     elseif action == "loot" then
@@ -64,7 +64,7 @@ function BetterGreatVault_OnBinding(action)
     elseif action == "settings" then
         BGV.Minimap.ToggleSettings()
     end
-end
+end)
 
 -- At login, a line in chat if rewards are waiting in the Great Vault (settings). The vault's data
 -- can arrive a little after login, so it's looked at again for a short while.
@@ -194,13 +194,14 @@ function BGV.PrintVaultData()
     BGV.GreatVault.Invalidate()
     local ok, snapshot = pcall(BGV.GreatVault.GetSnapshot)
     if not ok then
-        BGV.lastError = snapshot
+        Utils.NoteError("vault data", snapshot)
         Utils.Print(L["Could not read Great Vault data."])
         return
     end
 
-    if BGV.lastError then
-        Utils.Print(string.format(L["Last error: %s"], tostring(BGV.lastError)))
+    -- the errors the addon caught (Utils.Protect), each once, with how often it happened
+    for _, caught in ipairs(BGV.errors or {}) do
+        Utils.Print(string.format(L["Last error: %s"], string.format("%s (%s, x%d)", caught.message, caught.label, caught.count)))
     end
 
     if #snapshot == 0 then
@@ -213,10 +214,10 @@ function BGV.PrintVaultData()
         local reward = slot.itemLevel and tostring(slot.itemLevel) or L["unavailable"]
         Utils.Print(string.format(
             L["Category: %s | Slot: %d | Progress: %d | Required: %d | Reward ilvl: %s"],
-            slot.category,
-            slot.index,
-            slot.progress,
-            slot.threshold,
+            tostring(slot.category),
+            Utils.IsUsableNumber(slot.index) and slot.index or 0,
+            Utils.IsUsableNumber(slot.progress) and slot.progress or 0,
+            Utils.IsUsableNumber(slot.threshold) and slot.threshold or 0,
             reward
         ))
     end
@@ -237,7 +238,7 @@ function BGV.RefreshVault()
     if WeeklyRewardsFrame and type(WeeklyRewardsFrame.Refresh) == "function" and WeeklyRewardsFrame:IsShown() then
         local ok, err = pcall(WeeklyRewardsFrame.Refresh, WeeklyRewardsFrame)
         if not ok then
-            BGV.lastError = err
+            Utils.NoteError("vault refresh", err)
             BGV.UI.RefreshOpenFrame()
         end
     else
@@ -300,7 +301,8 @@ local function HandleSlash(message)
     end
 end
 
-frame:SetScript("OnEvent", function(_, event, arg1)
+-- Every game event the addon reacts to; an error in one is noted (Utils.Protect), never shown.
+frame:SetScript("OnEvent", Utils.Protect("event", function(_, event, arg1)
     if event == "ADDON_LOADED" then
         if arg1 == addonName then
             local started = type(debugprofilestop) == "function" and debugprofilestop() or nil
@@ -413,13 +415,23 @@ frame:SetScript("OnEvent", function(_, event, arg1)
         end
         ResumePump(false)
     end
-end)
+end))
 
 frame:RegisterEvent("ADDON_LOADED")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("WEEKLY_REWARDS_UPDATE")
 frame:RegisterEvent("EJ_LOOT_DATA_RECIEVED")
-frame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+-- The game sends GET_ITEM_INFO_RECEIVED for every item it loads, anywhere: listen only while a loot
+-- list waits for one (Rewards.WaitingForItems).
+if BGV.Rewards then
+    BGV.Rewards.OnItemWaitChanged = function()
+        if BGV.Rewards.WaitingForItems() then
+            frame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+        else
+            frame:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
+        end
+    end
+end
 frame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 frame:RegisterEvent("CHALLENGE_MODE_MAPS_UPDATE")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
@@ -427,7 +439,7 @@ frame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 frame:RegisterEvent("PLAYER_LOOT_SPEC_UPDATED")
 
 SLASH_BETTERGREATVAULT1 = "/bgv"
-SlashCmdList.BETTERGREATVAULT = HandleSlash
+SlashCmdList.BETTERGREATVAULT = Utils.Protect("chat command", HandleSlash)
 
 -- The last file the game loads (see the TOC): how long loading the addon's files took.
 if BGV.loadStarted then

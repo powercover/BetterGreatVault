@@ -757,20 +757,21 @@ end
 
 -- The minimap's addon compartment (Blizzard's addon menu; the .toc names these functions): the same
 -- clicks and hover popup as the minimap button.
-function BetterGreatVault_OnAddonCompartmentClick(_, mouseButton)
+-- Blizzard's menu code calls these: an error in one is noted (Utils.Protect), never passed back.
+BetterGreatVault_OnAddonCompartmentClick = Utils.Protect("addon compartment", function(_, mouseButton)
     HidePopup()
     RunClick(mouseButton)
-end
+end)
 
-function BetterGreatVault_OnAddonCompartmentEnter(_, menuButton)
+BetterGreatVault_OnAddonCompartmentEnter = Utils.Protect("addon compartment", function(_, menuButton)
     if menuButton and PopupOnHover() then
         ShowPopup(menuButton, true)
     end
-end
+end)
 
-function BetterGreatVault_OnAddonCompartmentLeave()
+BetterGreatVault_OnAddonCompartmentLeave = Utils.Protect("addon compartment", function()
     HidePopup()
-end
+end)
 
 local function WeekCounts(rows)
     local unlocked, total = 0, 0
@@ -857,18 +858,19 @@ function BGV.Minimap.RegisterBroker()
         label = L["Great Vault"],
         text = BrokerText(),
         icon = "Interface\\AddOns\\BetterGreatVault\\Icon",
-        OnClick = function(_, mouseButton)
+        -- Other addons' data bars call these: an error in one is noted, never passed back.
+        OnClick = Utils.Protect("data broker", function(_, mouseButton)
             HidePopup()
             RunClick(mouseButton)
-        end,
-        OnEnter = function(frame)
+        end),
+        OnEnter = Utils.Protect("data broker", function(frame)
             if PopupOnHover() then
                 ShowPopup(frame, true)
             end
-        end,
-        OnLeave = function()
+        end),
+        OnLeave = Utils.Protect("data broker", function()
             HidePopup()
-        end,
+        end),
     })
 end
 

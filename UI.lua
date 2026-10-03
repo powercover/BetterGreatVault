@@ -6,6 +6,16 @@ local UI = BGV.UI
 local Utils = BGV.Utils
 local Case = BGV.Case
 
+-- Hooks on Blizzard's vault: an error in one of ours is noted (Utils.Protect), never passed back to
+-- the Blizzard code that called it.
+local function Hook(target, method, fn)
+    hooksecurefunc(target, method, Utils.Protect("vault hook", fn))
+end
+
+local function HookScript(frame, script, fn)
+    frame:HookScript(script, Utils.Protect("vault hook", fn))
+end
+
 local function AnimationsDisabled()
     return BetterGreatVaultDB and BetterGreatVaultDB.disableAnimations == true
 end
@@ -105,8 +115,8 @@ local function BuryShownRegion(region)
             self:Hide()
             self.bgvForcing = false
         end
-        hooksecurefunc(region, "Show", Force)
-        hooksecurefunc(region, "SetAlpha", function(self, alpha)
+        Hook(region, "Show", Force)
+        Hook(region, "SetAlpha", function(self, alpha)
             if alpha ~= 0 then
                 Force(self)
             end
@@ -122,7 +132,7 @@ local function KillAnim(anim)
     end
     if anim.HookScript and not anim.bgvBuryHook then
         anim.bgvBuryHook = true
-        anim:HookScript("OnPlay", function(self)
+        HookScript(anim, "OnPlay", function(self)
             local owner = self.GetParent and self:GetParent()
             while owner and not owner.bgvSlot and owner.GetParent do
                 owner = owner:GetParent()
@@ -422,12 +432,12 @@ local function BuryDefaultRegion(region)
         region.bgvForcing = false
     end
     if region.HookScript then
-        region:HookScript("OnShow", Force)
+        HookScript(region, "OnShow", Force)
     elseif type(hooksecurefunc) == "function" then
-        hooksecurefunc(region, "Show", Force)
+        Hook(region, "Show", Force)
     end
     if type(hooksecurefunc) == "function" then
-        hooksecurefunc(region, "SetAlpha", function(_, alpha)
+        Hook(region, "SetAlpha", function(_, alpha)
             if alpha ~= 0 then
                 Force()
             end
@@ -743,7 +753,7 @@ function UI.SafeUpdate(weeklyRewardsFrame)
 
     local ok, err = pcall(UI.Update, weeklyRewardsFrame)
     if not ok then
-        BGV.lastError = err
+        Utils.NoteError("vault overlay", err)
     end
 end
 
@@ -763,7 +773,7 @@ function UI.Prepare()
     end)
     shellApplying = false
     if not ok then
-        BGV.lastError = err
+        Utils.NoteError("vault overlay", err)
     end
 end
 
@@ -855,6 +865,9 @@ function UI.ScheduleContent(weeklyRewardsFrame)
 end
 
 local function CloseOpenGates(weeklyRewardsFrame)
+    if BGV.Faces then
+        BGV.Faces.Stop()
+    end
     if not ProgressWeek() then
         RestoreVault(weeklyRewardsFrame)
         return
@@ -893,7 +906,7 @@ function UI.Hook()
     end
 
     if type(WeeklyRewardsMixin.Refresh) == "function" then
-        hooksecurefunc(WeeklyRewardsMixin, "Refresh", function(self)
+        Hook(WeeklyRewardsMixin, "Refresh", function(self)
             if not ProgressWeek() then
                 RestoreVault(self)
                 return
@@ -912,7 +925,7 @@ function UI.Hook()
     end
 
     if type(WeeklyRewardsMixin.OnShow) == "function" then
-        hooksecurefunc(WeeklyRewardsMixin, "OnShow", function(self)
+        Hook(WeeklyRewardsMixin, "OnShow", function(self)
             if not ProgressWeek() then
                 RestoreVault(self)
                 return
@@ -928,20 +941,20 @@ function UI.Hook()
     end
 
     if type(WeeklyRewardsMixin.OnHide) == "function" then
-        hooksecurefunc(WeeklyRewardsMixin, "OnHide", function(self)
+        Hook(WeeklyRewardsMixin, "OnHide", function(self)
             CloseOpenGates(self)
         end)
     end
 
     if WeeklyRewardsFrame and not WeeklyRewardsFrame.bgvHideHook then
         WeeklyRewardsFrame.bgvHideHook = true
-        WeeklyRewardsFrame:HookScript("OnHide", function(self)
+        HookScript(WeeklyRewardsFrame, "OnHide", function(self)
             CloseOpenGates(self)
         end)
     end
 
     if type(WeeklyRewardsActivityMixin) == "table" and type(WeeklyRewardsActivityMixin.SetActiveEffect) == "function" then
-        hooksecurefunc(WeeklyRewardsActivityMixin, "SetActiveEffect", function(self)
+        Hook(WeeklyRewardsActivityMixin, "SetActiveEffect", function(self)
             if self.bgvSlot then
                 HideDefaultShine(self)
             end
@@ -949,7 +962,7 @@ function UI.Hook()
     end
 
     if type(WeeklyRewardsActivityMixin) == "table" and type(WeeklyRewardsActivityMixin.Refresh) == "function" then
-        hooksecurefunc(WeeklyRewardsActivityMixin, "Refresh", function(self)
+        Hook(WeeklyRewardsActivityMixin, "Refresh", function(self)
             if self.bgvSlot then
                 HideDefaultCaption(self)
                 HideDefaultShine(self)
@@ -958,7 +971,7 @@ function UI.Hook()
     end
 
     if type(WeeklyRewardsActivityMixin) == "table" and type(WeeklyRewardsActivityMixin.SetProgressText) == "function" then
-        hooksecurefunc(WeeklyRewardsActivityMixin, "SetProgressText", function(self)
+        Hook(WeeklyRewardsActivityMixin, "SetProgressText", function(self)
             if self.bgvSlot then
                 HideDefaultCaption(self)
             end
@@ -966,7 +979,7 @@ function UI.Hook()
     end
 
     if type(WeeklyRewardsActivityMixin) == "table" and type(WeeklyRewardsActivityMixin.OnShow) == "function" then
-        hooksecurefunc(WeeklyRewardsActivityMixin, "OnShow", function(self)
+        Hook(WeeklyRewardsActivityMixin, "OnShow", function(self)
             if self.bgvSlot then
                 HideDefaultCaption(self)
                 HideDefaultShine(self)
@@ -974,9 +987,14 @@ function UI.Hook()
         end)
     end
 
+    -- Pointing at Collect saddens the gates (Faces.lua).
+    if BGV.Faces and WeeklyRewardsFrame then
+        BGV.Faces.Hook(WeeklyRewardsFrame)
+    end
+
     if WeeklyRewardsFrame and WeeklyRewardsFrame.HookScript and not WeeklyRewardsFrame.bgvAccentShow then
         WeeklyRewardsFrame.bgvAccentShow = true
-        WeeklyRewardsFrame:HookScript("OnShow", function()
+        HookScript(WeeklyRewardsFrame, "OnShow", function()
             if not ProgressWeek() then
                 return
             end
