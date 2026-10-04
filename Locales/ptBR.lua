@@ -149,6 +149,10 @@ BGV.Locale.Register("ptBR", {
     ["All specs"] = "Todas as especializações",
     ["Shield"] = "Escudo",
     ["Other"] = "Outros",
+    -- where world loot comes from (WorldLoot.lua)
+    ["Delves"] = "Imersões",
+    ["Prey"] = "Presa",
+    ["World Boss"] = "Chefe mundial",
     ["Item"] = "Item",
     ["Vault item level not known yet"] = "Nível de item do cofre ainda desconhecido",
     ["Vault reward: %d item level, %d from the raid's last two bosses"] = "Recompensa do cofre: nível de item %d, %d dos dois últimos chefes da raide",

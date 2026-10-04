@@ -149,6 +149,10 @@ BGV.Locale.Register("koKR", {
     ["All specs"] = "모든 전문화",
     ["Shield"] = "방패",
     ["Other"] = "기타",
+    -- where world loot comes from (WorldLoot.lua)
+    ["Delves"] = "구렁",
+    ["Prey"] = "사냥감",
+    ["World Boss"] = "월드 보스",
     ["Item"] = "아이템",
     ["Vault item level not known yet"] = "금고 아이템 레벨 아직 알 수 없음",
     ["Vault reward: %d item level, %d from the raid's last two bosses"] = "금고 보상: 아이템 레벨 %d, 공격대 마지막 두 우두머리는 %d",

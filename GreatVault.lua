@@ -55,6 +55,33 @@ local function RawActivities()
     return activities
 end
 
+-- The vault's slots in a string: what each holds (kind, level, progress, reward count) and whether
+-- rewards wait. Equal strings mean nothing a loot list is read from has changed; nil when that
+-- can't be told.
+local SIGNATURE_FIELDS = { "type", "index", "threshold", "progress", "level", "activityTierID", "id" }
+
+function GreatVault.Signature()
+    local parts = {}
+    for _, name in ipairs({ "CanClaimRewards", "HasGeneratedRewards", "HasAvailableRewards" }) do
+        local ask = C_WeeklyRewards and C_WeeklyRewards[name]
+        parts[#parts + 1] = tostring(type(ask) == "function" and Utils.Call(ask) == true)
+    end
+    for _, activity in ipairs(RawActivities()) do
+        if type(activity) ~= "table" then
+            return nil
+        end
+        for _, field in ipairs(SIGNATURE_FIELDS) do
+            local value = activity[field]
+            if value ~= nil and not Utils.IsUsableNumber(value) then
+                return nil
+            end
+            parts[#parts + 1] = tostring(value)
+        end
+        parts[#parts + 1] = type(activity.rewards) == "table" and tostring(#activity.rewards) or "-"
+    end
+    return table.concat(parts, ":")
+end
+
 local function IsDisplayActivity(activity)
     if type(activity) ~= "table" then
         return false
@@ -168,10 +195,6 @@ local function MapName(mapID)
     return string.format(L["Mythic+ %d"], mapID)
 end
 
-local function HistoryLength(history)
-    return type(history) == "table" and #history or -1
-end
-
 local function CompletionTime(date)
     if type(date) ~= "table" then
         return nil
@@ -209,24 +232,9 @@ local function ReadRunHistory()
         return nil
     end
 
-    -- The second argument includes runs that finished over time. Those still count for the Great Vault.
-    local candidates = {
-        Utils.Call(C_MythicPlus.GetRunHistory, false, true, true),
-        Utils.Call(C_MythicPlus.GetRunHistory, false, true),
-        Utils.Call(C_MythicPlus.GetRunHistory, false, false, true),
-        Utils.Call(C_MythicPlus.GetRunHistory, false, false),
-    }
-
-    local best
-    local bestCount = -1
-    for _, history in ipairs(candidates) do
-        local count = HistoryLength(history)
-        if count > bestCount then
-            best = history
-            bestCount = count
-        end
-    end
-    return best
+    -- This week's runs, the ones that finished over time included: those still count for the Great
+    -- Vault. Blizzard's vault reads the same list.
+    return Utils.Call(C_MythicPlus.GetRunHistory, false, true)
 end
 
 local DungeonCounts
@@ -247,11 +255,9 @@ local function CompletedRuns()
         if type(run) == "table" and Utils.IsUsableNumber(run.level) and run.level >= 1 then
             runs[#runs + 1] = {
                 level = run.level,
-                mapID = Utils.IsUsableNumber(run.mapChallengeModeID) and run.mapChallengeModeID or nil,
                 name = MapName(run.mapChallengeModeID),
                 completed = run.completed ~= false,
                 completedAt = CompletionTime(run.completionDate),
-                kind = "keystone",
             }
         end
     end
@@ -323,7 +329,6 @@ function GreatVault.DungeonRows(threshold)
         end
         rows[#rows + 1] = {
             name = run.name,
-            mapID = run.mapID,
             level = run.level,
             counts = counts,
             setsReward = run == rewardRun,
@@ -386,7 +391,7 @@ local function EncounterName(encounterID)
     return name, instanceName, journalInstanceID, journalEncounterID, dungeonEncounterID
 end
 
-function GreatVault.RaidRows(activityType, index, threshold)
+function GreatVault.RaidRows(activityType, index)
     if BGV.Rewards and BGV.Rewards.EnsureJournal then
         BGV.Rewards.EnsureJournal()
     end
@@ -398,28 +403,6 @@ function GreatVault.RaidRows(activityType, index, threshold)
     local encounters = Utils.Call(C_WeeklyRewards.GetActivityEncounterInfo, activityType, index)
     if type(encounters) ~= "table" then
         return rows
-    end
-
-    local killed = {}
-    for _, encounter in ipairs(encounters) do
-        if type(encounter) == "table" and Utils.IsUsableNumber(encounter.bestDifficulty) and encounter.bestDifficulty > 0 then
-            killed[#killed + 1] = encounter
-        end
-    end
-
-    table.sort(killed, function(left, right)
-        if left.bestDifficulty ~= right.bestDifficulty then
-            return left.bestDifficulty > right.bestDifficulty
-        end
-        return (left.uiOrder or 0) < (right.uiOrder or 0)
-    end)
-
-    local countedUntil = {}
-    local limit = Utils.IsUsableNumber(threshold) and threshold or 0
-    for killIndex, encounter in ipairs(killed) do
-        if killIndex <= limit then
-            countedUntil[encounter] = killIndex
-        end
     end
 
     local ordered = {}
@@ -441,7 +424,6 @@ function GreatVault.RaidRows(activityType, index, threshold)
     for _, encounter in ipairs(ordered) do
         local name, instanceName, journalInstanceID, journalEncounterID, dungeonEncounterID = EncounterName(encounter.encounterID)
         local difficultyName = Utils.DifficultyName(encounter.bestDifficulty)
-        local killIndex = countedUntil[encounter]
         rows[#rows + 1] = {
             name = name or string.format(L["Encounter %s"], tostring(encounter.encounterID)),
             instanceName = instanceName,
@@ -454,8 +436,6 @@ function GreatVault.RaidRows(activityType, index, threshold)
             uiOrder = Utils.IsUsableNumber(encounter.uiOrder) and encounter.uiOrder or nil,
             difficultyName = difficultyName,
             defeated = Utils.IsUsableNumber(encounter.bestDifficulty) and encounter.bestDifficulty > 0,
-            counts = killIndex ~= nil,
-            setsReward = killIndex == limit and limit > 0,
         }
     end
 
@@ -543,7 +523,6 @@ local function BuildSlot(activity, activities)
         category = GreatVault.CategoryName(activity.type),
         unit = GreatVault.UnitName(activity),
         qualifier = GreatVault.QualifierText(activity),
-        raidString = Utils.IsUsableString(activity.raidString) and activity.raidString or nil,
         itemLevel = nil,
         itemQuality = nil,
         upgrade = unlocked and BGV.Rewards.GetNextIncrease(activity) or nil,
@@ -552,14 +531,13 @@ local function BuildSlot(activity, activities)
         worldTiers = nil,
         nextThreshold = nextSlot and nextSlot.threshold or nil,
         nextProgress = nextSlot and nextSlot.progress or nil,
-        nextIndex = nextSlot and nextSlot.index or nil,
         source = activity,
     }
 
     if Utils.SameType(activity.type, Utils.ThresholdType("Activities")) then
         slot.runs = GreatVault.DungeonRows(activity.threshold)
     elseif Utils.SameType(activity.type, Utils.ThresholdType("Raid")) then
-        slot.encounters = GreatVault.RaidRows(activity.type, activity.index, activity.threshold)
+        slot.encounters = GreatVault.RaidRows(activity.type, activity.index)
         slot.killSummary = GreatVault.KillSummary(slot.encounters)
         activity.bgvEncounters = slot.encounters
     elseif Utils.SameType(activity.type, Utils.ThresholdType("World")) then
@@ -644,14 +622,6 @@ function GreatVault.GetSnapshot()
 
     cache = snapshot
     return cache
-end
-
-function GreatVault.SlotFor(activityType, index)
-    for _, slot in ipairs(GreatVault.GetSnapshot()) do
-        if Utils.SameType(slot.type, activityType) and slot.index == index then
-            return slot
-        end
-    end
 end
 
 function GreatVault.ProgressText(slot)

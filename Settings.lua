@@ -50,20 +50,33 @@ local function PaintAccent()
     end
 end
 
+-- The vault and the loot table drawn again for a setting's change (the accent, the text size, ...),
+-- once, on the next frame: string widths at a new text size have settled by then, and the calls in
+-- one frame share it (the color picker sends one for every move of the pointer): the frame's time
+-- (GetTime, the same all through a frame) says which frame asked last.
+local redrawAt
+
+local function Redraw()
+    if BGV.UI and type(BGV.UI.RefreshOpenFrame) == "function" then
+        BGV.UI.RefreshOpenFrame()
+    end
+    if BGV.LootTable and type(BGV.LootTable.RefreshStyle) == "function" then
+        BGV.LootTable.RefreshStyle()
+    end
+end
+
 local function RefreshAccent()
     PaintAccent()
-    local function Go()
-        if BGV.UI and type(BGV.UI.RefreshOpenFrame) == "function" then
-            BGV.UI.RefreshOpenFrame()
-        end
-        if BGV.LootTable and type(BGV.LootTable.RefreshStyle) == "function" then
-            BGV.LootTable.RefreshStyle()
-        end
+    if not (C_Timer and type(C_Timer.After) == "function") then
+        Redraw()
+        return
     end
-    Go()
-    if C_Timer and type(C_Timer.After) == "function" then
-        C_Timer.After(0, Go)
+    local now = type(GetTime) == "function" and GetTime() or nil
+    if now and now == redrawAt then
+        return
     end
+    redrawAt = now
+    C_Timer.After(0, BGV.Utils.Protect("settings", Redraw))
 end
 
 BGV.Settings.RefreshAccent = RefreshAccent
@@ -73,7 +86,8 @@ local function SpecAccentOn()
     return not saved or saved.useSpecAccent ~= false
 end
 
-local function Call(func, ...)
+-- Calls `func` if there is one (another file's, which may not have loaded).
+local function CallIfThere(func, ...)
     if type(func) == "function" then
         return func(...)
     end
@@ -658,8 +672,7 @@ local function Launch(open)
 end
 
 local function AnimatedSlots()
-    local saved = DB()
-    return not (saved and saved.disableAnimations == true)
+    return not BGV.Utils.AnimationsOff()
 end
 
 -- How an unlocked slot opens (Case.lua): the specialization's style, one style, or a random one.
@@ -809,7 +822,7 @@ local function BuildMinimap()
         return not saved or saved.useCompartment ~= false
     end, function(value)
         DB().useCompartment = value and true or false
-        Call(BGV.Minimap and BGV.Minimap.ApplyCompartment)
+        CallIfThere(BGV.Minimap and BGV.Minimap.ApplyCompartment)
     end)
     MakeNote(child, L["Lists the addon in Blizzard's addon menu on the minimap, with the same clicks. After installing or updating, it shows there after a game restart."])
     MakeCheckbox(child, L["Show the button"], ButtonShown, function(value)
@@ -821,7 +834,7 @@ local function BuildMinimap()
     local nested = { indent = 1, requires = ButtonShown }
     MakeButtons(child, {
         { text = L["Reset position"], onClick = function()
-            Call(BGV.Minimap and BGV.Minimap.ResetPosition)
+            CallIfThere(BGV.Minimap and BGV.Minimap.ResetPosition)
         end },
     }, nested)
     MakeCheckbox(child, L["Popup on hover"], function()
@@ -860,7 +873,7 @@ local function BuildMinimap()
         return saved and saved.fadeMinimap == true
     end, function(value)
         DB().fadeMinimap = value and true or false
-        Call(BGV.Minimap and BGV.Minimap.UpdateFade)
+        CallIfThere(BGV.Minimap and BGV.Minimap.UpdateFade)
     end, nested)
     MakeNote(child, L["The button stays faint until you point at it. It shows fully while rewards are waiting."], 2)
 end
@@ -1043,17 +1056,17 @@ local function BuildTools()
     MakeButtons(child, {
         { text = L["Great Vault"], onClick = function()
             Launch(function()
-                Call(BGV.Minimap and BGV.Minimap.ShowVault)
+                CallIfThere(BGV.Minimap and BGV.Minimap.ShowVault)
             end)
         end },
         { text = L["Loot table"], onClick = function()
             Launch(function()
-                Call(BGV.LootTable and BGV.LootTable.Show, nil)
+                CallIfThere(BGV.LootTable and BGV.LootTable.Show, nil)
             end)
         end },
         { text = L["Loot database"], onClick = function()
             Launch(function()
-                Call(BGV.LootTable and BGV.LootTable.ShowDatabase)
+                CallIfThere(BGV.LootTable and BGV.LootTable.ShowDatabase)
             end)
         end },
     })
@@ -1070,16 +1083,16 @@ local function BuildTools()
     MakeNote(child, L["Prints loading details to chat, for bug reports."])
     MakeButtons(child, {
         { text = L["Print vault data"], width = 140, onClick = function()
-            Call(BGV.PrintVaultData)
+            CallIfThere(BGV.PrintVaultData)
         end },
         { text = L["Refresh vault data"], width = 140, onClick = function()
-            Call(BGV.RefreshVault)
+            CallIfThere(BGV.RefreshVault)
         end },
     })
     MakeNote(child, L["Print lists each Great Vault slot in chat, with its progress and reward item level. Refresh reads the Great Vault again."], true)
     MakeButtons(child, {
         { text = L["Print performance"], width = 140, onClick = function()
-            Call(BGV.PrintPerformance)
+            CallIfThere(BGV.PrintPerformance)
         end },
     })
     MakeNote(child, L["Prints the addon's CPU time, memory and load times in chat."], true)
@@ -1088,7 +1101,7 @@ local function BuildTools()
     MakeSubheader(child, L["Reset"])
     MakeButtons(child, {
         { text = L["Reset settings"], width = 140, confirm = L["Click again to reset"], onClick = function()
-            Call(BGV.ResetSettings)
+            CallIfThere(BGV.ResetSettings)
         end },
     })
     MakeNote(child, L["Puts every option back to its default. What the addon learned about this season's rewards is kept."], true)
@@ -1121,17 +1134,10 @@ local function BuildAbout()
     end
 end
 
-local function Build()
-    if panel then
-        return panel
-    end
-
+-- What's on the page, made the first time it shows (Build): until then the game's settings list
+-- needs only the frame, registered at login, and most sessions never open the settings.
+local function BuildContent()
     scrollAnim = { play = false, from = 0, to = 0, t = 0 }
-
-    panel = CreateFrame("Frame", "BetterGreatVaultSettings", UIParent)
-    panel:SetSize(FRAME_W, FRAME_H)
-    panel:EnableMouse(true)
-    panel:Hide()
 
     local left = CreateFrame("Frame", nil, panel)
     left:SetPoint("TOPLEFT")
@@ -1274,7 +1280,23 @@ local function Build()
         CategoryFromScroll()
     end
 
+end
+
+local function Build()
+    if panel then
+        return panel
+    end
+
+    panel = CreateFrame("Frame", "BetterGreatVaultSettings", UIParent)
+    panel:SetSize(FRAME_W, FRAME_H)
+    panel:EnableMouse(true)
+    panel:Hide()
+
     panel:SetScript("OnShow", function(self)
+        if not self.bgvBuilt then
+            self.bgvBuilt = true
+            BuildContent()
+        end
         if self.bgvFit then
             self.bgvFit()
         end
@@ -1310,24 +1332,32 @@ function BGV.Settings.Refresh()
     end
 end
 
--- The keys shown under Key bindings follow changes made in the game's Key Bindings.
+-- The keys shown under Key bindings follow changes made in the game's Key Bindings (any addon's
+-- binding changes send this too): while the page shows; showing it refreshes it anyway.
 local bindingEvents = CreateFrame("Frame")
 bindingEvents:RegisterEvent("UPDATE_BINDINGS")
 bindingEvents:SetScript("OnEvent", function()
-    BGV.Settings.Refresh()
+    if panel and panel:IsVisible() then
+        BGV.Settings.Refresh()
+    end
 end)
 
-function BGV.Settings.Show()
-    BGV.Settings.Toggle()
+-- Blizzard's settings panel closed, unless settings changed elsewhere in it wait to be applied:
+-- then it stays open for its own buttons (its Close asks whether to apply or discard them).
+local function CloseSettingsPanel()
+    if type(SettingsPanel.HasUnappliedSettings) == "function" and SettingsPanel:HasUnappliedSettings() then
+        return
+    end
+    if type(HideUIPanel) == "function" then
+        HideUIPanel(SettingsPanel)
+    else
+        SettingsPanel:Hide()
+    end
 end
 
 function BGV.Settings.Hide()
     if SettingsPanel and type(SettingsPanel.IsShown) == "function" and SettingsPanel:IsShown() then
-        if type(HideUIPanel) == "function" then
-            HideUIPanel(SettingsPanel)
-        else
-            SettingsPanel:Hide()
-        end
+        CloseSettingsPanel()
     end
 end
 
@@ -1342,20 +1372,10 @@ function BGV.Settings.Toggle()
     local optionsOpen = SettingsPanel and type(SettingsPanel.IsShown) == "function" and SettingsPanel:IsShown()
     local pageVisible = panel and type(panel.IsVisible) == "function" and panel:IsVisible()
     if optionsOpen and pageVisible then
-        if type(HideUIPanel) == "function" then
-            HideUIPanel(SettingsPanel)
-        else
-            SettingsPanel:Hide()
-        end
+        CloseSettingsPanel()
         return
     end
-    if not optionsOpen and SettingsPanel then
-        if type(ShowUIPanel) == "function" then
-            ShowUIPanel(SettingsPanel)
-        elseif type(SettingsPanel.Show) == "function" then
-            SettingsPanel:Show()
-        end
-    end
+    -- opens Blizzard's settings panel too (it answers SETTINGS_PANEL_OPEN itself)
     Settings.OpenToCategory(bridgeCategory:GetID())
 end
 

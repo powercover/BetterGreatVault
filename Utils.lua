@@ -11,16 +11,18 @@ function Utils.IsSecret(value)
         return false
     end
 
+    -- a check that fails counts as secret: the value isn't safe to compare or do sums with
     local ok, secret = pcall(issecretvalue, value)
-    return ok and secret == true
+    return not ok or secret == true
 end
 
 function Utils.IsUsableNumber(value)
     return type(value) == "number" and not Utils.IsSecret(value)
 end
 
+-- Checked for a secret before it's compared: comparing a secret string is itself an error.
 function Utils.IsUsableString(value)
-    return type(value) == "string" and value ~= "" and not Utils.IsSecret(value)
+    return type(value) == "string" and not Utils.IsSecret(value) and value ~= ""
 end
 
 local function Answered(ok, first, ...)
@@ -47,8 +49,11 @@ BGV.errors = {}
 local MAX_ERRORS = 10
 
 function Utils.NoteError(label, err)
-    local message = tostring(err)
-    BGV.lastError = message
+    -- an error carrying a secret value can't be compared with the ones noted before
+    local message = Utils.IsSecret(err) and "(secret value)" or tostring(err)
+    if Utils.IsSecret(message) then
+        message = "(secret value)"
+    end
     for _, known in ipairs(BGV.errors) do
         if known.message == message then
             known.count = known.count + 1
@@ -211,12 +216,27 @@ function Utils.Print(message)
     DEFAULT_CHAT_FRAME:AddMessage(prefix .. ": " .. tostring(message))
 end
 
+-- The player's specializations come from C_SpecializationInfo: in 12.x the bare GetSpecialization
+-- and GetSpecializationInfo are deprecation fallbacks only (the loadDeprecationFallbacks setting)
+-- and will go. The globals stay as a fallback.
+local function SpecializationInfo(index)
+    local get = C_SpecializationInfo and C_SpecializationInfo.GetSpecializationInfo or GetSpecializationInfo
+    if type(get) == "function" then
+        return Utils.Call(get, index)
+    end
+end
+
+-- The active specialization's ID (nil without one).
 function Utils.CurrentSpecID()
-    local specIndex = type(GetSpecialization) == "function" and GetSpecialization() or nil
-    if not specIndex or type(GetSpecializationInfo) ~= "function" then
+    local get = C_SpecializationInfo and C_SpecializationInfo.GetSpecialization or GetSpecialization
+    local specIndex = type(get) == "function" and Utils.Call(get) or nil
+    if not Utils.IsUsableNumber(specIndex) then
         return nil
     end
-    return GetSpecializationInfo(specIndex)
+    local specID = SpecializationInfo(specIndex)
+    if Utils.IsUsableNumber(specID) and specID ~= 0 then
+        return specID
+    end
 end
 
 -- The spec whose gear should be shown: Blizzard's Loot Specialization setting when the
@@ -249,12 +269,12 @@ end
 -- Every specialization the player's own class can be, regardless of which is active.
 function Utils.AvailableSpecs()
     local list = {}
-    if type(GetNumSpecializations) ~= "function" or type(GetSpecializationInfo) ~= "function" then
+    if type(GetNumSpecializations) ~= "function" then
         return list
     end
     local count = Utils.Call(GetNumSpecializations) or 0
-    for index = 1, count do
-        local id, name, _, icon = Utils.Call(GetSpecializationInfo, index)
+    for index = 1, Utils.IsUsableNumber(count) and count or 0 do
+        local id, name, _, icon = SpecializationInfo(index)
         if Utils.IsUsableNumber(id) and Utils.IsUsableString(name) then
             list[#list + 1] = { id = id, name = name, icon = icon }
         end
@@ -357,6 +377,18 @@ end
 -- Best-in-Slot tiers (Bis.lua) color the reels' items and fill the loot table's Tier column.
 function Utils.ShowBisTiers()
     return not BetterGreatVaultDB or BetterGreatVaultDB.showBisTiers ~= false
+end
+
+-- Slot animations off (settings): the vault's slots show still gates, and rewards stay Blizzard's.
+function Utils.AnimationsOff()
+    return BetterGreatVaultDB ~= nil and BetterGreatVaultDB.disableAnimations == true
+end
+
+-- The vault shows this week's progress, not rewards rolled (to choose at the vault, or waiting
+-- away from it): the only time the addon lays out the slots itself (Rewards.ShowingWeeklyProgress).
+function Utils.ProgressWeek()
+    local rewards = BGV.Rewards
+    return not (rewards and type(rewards.ShowingWeeklyProgress) == "function") or rewards.ShowingWeeklyProgress() == true
 end
 
 -- The Loot Spec button used by both the Great Vault and the loot table; callers only position it.

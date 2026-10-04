@@ -495,10 +495,7 @@ local function ResetText()
 end
 
 -- The vault shows this week's progress (not last week's rewards to claim); same test as the vault's.
-local function ProgressWeek()
-    return not (BGV.Rewards and type(BGV.Rewards.ShowingWeeklyProgress) == "function")
-        or BGV.Rewards.ShowingWeeklyProgress()
-end
+local ProgressWeek = Utils.ProgressWeek
 
 -- The vault's slots for each row, from the snapshot the vault itself shows (cached until the
 -- vault's data changes).

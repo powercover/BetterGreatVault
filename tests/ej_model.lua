@@ -1263,7 +1263,7 @@ C_WeeklyRewards = {
 }
 
 M.mythicPlus = {
-    season = 15,
+    season = 18, -- Midnight Season 2
     rewardLevels = { [2] = 305, [3] = 305, [4] = 308, [5] = 308, [6] = 311, [7] = 315, [8] = 305, [9] = 315, [10] = 318 },
 }
 

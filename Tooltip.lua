@@ -116,13 +116,8 @@ function Tooltip.ShowStandalone(activityFrame)
         return
     end
 
+    -- only a slot the addon shows (UI.Apply gave it bgvSlot); it never takes one over from here
     local slot = activityFrame.bgvSlot
-    if type(slot) ~= "table" and activityFrame.type ~= nil and activityFrame.index ~= nil then
-        slot = BGV.GreatVault.SlotFor(activityFrame.type, activityFrame.index)
-        if type(slot) == "table" then
-            activityFrame.bgvSlot = slot
-        end
-    end
     if type(slot) ~= "table" then
         return
     end

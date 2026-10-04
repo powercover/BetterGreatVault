@@ -149,6 +149,10 @@ BGV.Locale.Register("ruRU", {
     ["All specs"] = "Все специализации",
     ["Shield"] = "Щит",
     ["Other"] = "Прочее",
+    -- where world loot comes from (WorldLoot.lua)
+    ["Delves"] = "Вылазки",
+    ["Prey"] = "Добыча",
+    ["World Boss"] = "Мировой босс",
     ["Item"] = "Предмет",
     ["Vault item level not known yet"] = "Уровень предмета из хранилища пока неизвестен",
     ["Vault reward: %d item level, %d from the raid's last two bosses"] = "Награда хранилища: уровень предмета %d, %d с двух последних боссов рейда",

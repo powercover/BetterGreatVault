@@ -40,26 +40,27 @@ local LEFT_W = 188
 local NAME_X = 40
 
 -- Sizes that follow the text size setting (Utils.FontOffset), set by UpdateMetrics before each
--- layout: row and line heights grow with the text, and the text columns widen with it.
-local LIST_TOP, ROW_H, TIER_W, LEVEL_W, STATS_W, SLOT_W, GROUP_H, STAT_LINE_H
-local SOURCE_H, HEADER_H, LINK_H, SOURCE_ROW_H, SOURCE_GAP
+-- layout: row and line heights grow with the text, and the text columns widen with it. LIST_TOP,
+-- ROW_H, TIER_W, LEVEL_W, STATS_W, SLOT_W, GROUP_H, STAT_LINE_H, SOURCE_H, HEADER_H, LINK_H,
+-- SOURCE_ROW_H, SOURCE_GAP.
+local size = {}
 
 local function UpdateMetrics()
     local offset = BGV.Utils.FontOffset()
     local scale = BGV.Utils.FontScale(10)
-    LIST_TOP = 132 + 2 * offset
-    ROW_H = 30 + offset
-    TIER_W = 44 + offset
-    LEVEL_W = math.floor(80 * scale + 0.5)
-    STATS_W = math.floor(150 * scale + 0.5)
-    SLOT_W = math.floor(130 * scale + 0.5)
-    GROUP_H = 26 + offset
-    STAT_LINE_H = 12 + offset
-    SOURCE_H = 22 + offset
-    HEADER_H = 24 + offset
-    LINK_H = 28 + offset
-    SOURCE_ROW_H = 54 + 2 * offset
-    SOURCE_GAP = 8
+    size.LIST_TOP = 132 + 2 * offset
+    size.ROW_H = 30 + offset
+    size.TIER_W = 44 + offset
+    size.LEVEL_W = math.floor(80 * scale + 0.5)
+    size.STATS_W = math.floor(150 * scale + 0.5)
+    size.SLOT_W = math.floor(130 * scale + 0.5)
+    size.GROUP_H = 26 + offset
+    size.STAT_LINE_H = 12 + offset
+    size.SOURCE_H = 22 + offset
+    size.HEADER_H = 24 + offset
+    size.LINK_H = 28 + offset
+    size.SOURCE_ROW_H = 54 + 2 * offset
+    size.SOURCE_GAP = 8
 end
 
 UpdateMetrics()
@@ -67,10 +68,10 @@ UpdateMetrics()
 -- Column x offsets within a row of the given width; the header uses the same geometry.
 -- Without Best-in-Slot tiers (settings) the Tier column takes no room.
 local function Columns(width)
-    local slotX = width - SLOT_W - 8
-    local statsX = slotX - STATS_W
-    local levelX = statsX - LEVEL_W
-    local tierX = BGV.Utils.ShowBisTiers() and levelX - TIER_W or levelX
+    local slotX = width - size.SLOT_W - 8
+    local statsX = slotX - size.STATS_W
+    local levelX = statsX - size.LEVEL_W
+    local tierX = BGV.Utils.ShowBisTiers() and levelX - size.TIER_W or levelX
     return tierX, levelX, statsX, slotX
 end
 
@@ -84,17 +85,11 @@ local TIER_TEXT = {
     D = { 0.62, 0.62, 0.64 },
 }
 
-local frame
-local rail
-local columnHeader
-local scroll
-local child
-local headerTitle
-local headerReward
-local gearFilterButton
-local statFilterButton
-local searchBox
-local specButton
+-- The window and its parts, made once (Build): frame, rail, columnHeader, scroll, child (the
+-- list), headerTitle, headerReward, gearFilterButton, statFilterButton, searchBox, specButton,
+-- classButton, windowTitle, railTitle and dbRows (the database's rail rows).
+local ui = {}
+ui.dbRows = {}
 local filterID = "ALL"
 -- The item name search (lower case, trimmed); empty lists everything.
 local searchText = ""
@@ -111,8 +106,13 @@ local linkRows = {}
 local itemCache = {}
 local Layout
 local RefreshHeaderFilters
-local pendingWatch
-local chunkQueued
+-- The list's loading, watched across redraws: `mark` (what the last redraw had), `queued` (a redraw
+-- is on its way), `stalls` (redraws in a row that brought nothing new), `lastLayoutAt` (when the
+-- list was last laid out, GetTime: the redraws while it loads are paced by it) and `loading` (the
+-- loot table's own timing for /bgv perf, BGV.LootTable.lastLoad: the redraws from opening or
+-- changing the list until it has loaded, their time in all and the longest).
+local watch = {}
+watch.stalls = 0
 
 -- The list as lines, top to bottom (Layout): a source's divider, a group's header, an item or a
 -- message, each with its place (y) and height. Only the lines in view get a row (PaintVisible),
@@ -123,11 +123,6 @@ local painted = {}
 local paintedFirst, paintedLast
 local listWidth
 local paintTiers, paintSpecs
--- When the list was last laid out (GetTime), to pace the redraws while it loads.
-local lastLayoutAt
--- The loot table's own timing for /bgv perf (BGV.LootTable.lastLoad): the redraws from opening
--- or changing the list until it has loaded, their time in all and the longest.
-local loading
 
 -- Smooth scrolling (like the settings panel): the mouse wheel sets a target the list eases to.
 -- `tipWaiting`: a row came under the pointer while the list moved (see ListMoving).
@@ -138,8 +133,8 @@ local UpdateScrollThumb
 local function JumpScroll(offset)
     scrollTarget = nil
     tipWaiting = false
-    if scroll then
-        scroll:SetVerticalScroll(offset or 0)
+    if ui.scroll then
+        ui.scroll:SetVerticalScroll(offset or 0)
     end
     if UpdateScrollThumb then
         UpdateScrollThumb()
@@ -164,10 +159,6 @@ local TIER_FROM_TITLES = { raid = "Raid", mplus = "Mythic+", world = "World" }
 -- the tier set, Raid and M+ to start with), the level per source, class and spec (classID 0:
 -- all classes; specID 0: all of the class's specs).
 local db = { sources = { tier = true, raid = true, mplus = true }, levels = {} }
-local classButton
-local windowTitle
-local railTitle
-local dbRows = {}
 
 local Pixel = BGV.Utils.Pixel
 
@@ -266,11 +257,11 @@ local NO_STATS = {}
 -- fills in over a few redraws instead of stalling one frame.
 local STAT_LOOKUPS_PER_PASS = 40
 local STAT_BUDGET_MS = 2
-local statLookups = STAT_LOOKUPS_PER_PASS
-local statSpent = 0
--- Whether the redraw left stats unread because it had read its share, so the next redraw can
--- come as soon as it may (see Layout's Continue).
-local statsCut = false
+-- This redraw's reading: `lookups` (the stat lookups it may still make), `spent` (its time reading
+-- stats, ms), `cut` (whether it left stats unread because it had read its share, so the next
+-- redraw can come as soon as it may, see Layout's Continue) and `reads` (how many instances it
+-- read from the journal, DatabaseSection's budget).
+local pass = { lookups = STAT_LOOKUPS_PER_PASS, spent = 0, cut = false, reads = 0 }
 
 -- The stat cache's key for an entry, kept on it: every redraw looks up every entry's stats.
 local function StatKey(entry)
@@ -308,11 +299,11 @@ local function EntryStats(entry)
     end
     local info = C_TooltipInfo
     local key = StatKey(entry)
-    if statLookups <= 0 or statSpent >= STAT_BUDGET_MS then
-        statsCut = true
+    if pass.lookups <= 0 or pass.spent >= STAT_BUDGET_MS then
+        pass.cut = true
         return nil
     end
-    statLookups = statLookups - 1
+    pass.lookups = pass.lookups - 1
     local started = type(debugprofilestop) == "function" and debugprofilestop() or nil
     local data
     if BGV.Utils.IsUsableNumber(entry.itemLevel) then
@@ -321,7 +312,7 @@ local function EntryStats(entry)
         data = BGV.Utils.Call(info.GetItemByID, entry.itemID)
     end
     if started then
-        statSpent = statSpent + (debugprofilestop() - started)
+        pass.spent = pass.spent + (debugprofilestop() - started)
     end
     local lines = type(data) == "table" and data.lines
     if type(lines) ~= "table" or #lines < 3 then
@@ -477,7 +468,7 @@ local function NoMatchText()
     if searchText ~= "" and otherFilters then
         return L["No items match the search and filters."]
     elseif searchText ~= "" then
-        local typed = BGV.Utils.Trim(searchBox and searchBox:GetText() or searchText)
+        local typed = BGV.Utils.Trim(ui.searchBox and ui.searchBox:GetText() or searchText)
         return string.format(L["No items match \"%s\"."], (typed:gsub("|", "||")))
     end
     return L["No items match these filters."]
@@ -583,7 +574,7 @@ local function DatabaseItems(source, budget)
         -- A redraw that read the journal leaves the item stats to the next one, so no redraw does
         -- both of the heavy jobs.
         if budget and budget.reads > 0 then
-            statLookups = 0
+            pass.lookups = 0
         end
     end
     local list, statsPending = FilterEntries(found)
@@ -638,11 +629,10 @@ end
 -- still loading without anything new to trigger the next one.
 local POLL_DELAY = 0.25
 local MAX_STALLS = 40
-local stalls = 0
 
 local function ResetWatch()
-    pendingWatch = nil
-    stalls = 0
+    watch.mark = nil
+    watch.stalls = 0
 end
 
 function BGV.LootTable.Invalidate()
@@ -652,7 +642,7 @@ function BGV.LootTable.Invalidate()
     if BGV.Rewards and type(BGV.Rewards.InvalidateIcons) == "function" then
         BGV.Rewards.InvalidateIcons()
     end
-    if frame and type(frame.IsShown) == "function" and frame:IsShown() then
+    if ui.frame and type(ui.frame.IsShown) == "function" and ui.frame:IsShown() then
         Layout()
     end
 end
@@ -668,7 +658,7 @@ function BGV.LootTable.Reload()
 end
 
 function BGV.LootTable.RefreshPending(delay)
-    if chunkQueued or not frame or type(frame.IsShown) ~= "function" or not frame:IsShown() then
+    if watch.queued or not ui.frame or type(ui.frame.IsShown) ~= "function" or not ui.frame:IsShown() then
         return
     end
     if not (C_Timer and type(C_Timer.After) == "function") then
@@ -678,20 +668,20 @@ function BGV.LootTable.RefreshPending(delay)
     -- of events, and each redraw reads the journal again.
     local PASS_GAP = 0.1
     local wait = delay or 0
-    if lastLayoutAt and type(GetTime) == "function" then
-        wait = math.max(wait, PASS_GAP - (GetTime() - lastLayoutAt))
+    if watch.lastLayoutAt and type(GetTime) == "function" then
+        wait = math.max(wait, PASS_GAP - (GetTime() - watch.lastLayoutAt))
     end
-    chunkQueued = true
+    watch.queued = true
     C_Timer.After(wait, function()
-        chunkQueued = false
-        if frame and frame:IsShown() then
+        watch.queued = false
+        if ui.frame and ui.frame:IsShown() then
             Layout(true)
         end
     end)
 end
 
 function BGV.LootTable.Nudge()
-    if not frame or type(frame.IsShown) ~= "function" or not frame:IsShown() then
+    if not ui.frame or type(ui.frame.IsShown) ~= "function" or not ui.frame:IsShown() then
         return
     end
     ResetWatch()
@@ -707,9 +697,6 @@ function BGV.LootTable.OnCharacterChanged()
     end
     seenCharacter = guid
     BGV.LootTable.Invalidate()
-    if BGV.Rewards and type(BGV.Rewards.InvalidateIcons) == "function" then
-        BGV.Rewards.InvalidateIcons()
-    end
 end
 
 local function BuildModel()
@@ -838,7 +825,9 @@ end
 
 if TooltipDataProcessor and type(TooltipDataProcessor.AddTooltipPostCall) == "function" and Enum and Enum.TooltipDataType then
     -- It runs for every item tooltip in the game: anything but a loot table row's leaves at once, and
-    -- an error in it is noted (Utils.Protect), never passed on to the game's tooltips.
+    -- an error in it is noted (Utils.Protect), never passed on to the game's tooltips. It paints a
+    -- row's title too (ShowItemTooltip then needn't).
+    BGV.LootTable.titleByPostCall = true
     TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, BGV.Utils.Protect("item tooltip", function(tooltip)
         if tooltip ~= GameTooltip or (tooltip.IsForbidden and tooltip:IsForbidden()) then
             return
@@ -883,7 +872,9 @@ local function ShowItemTooltip(owner, entry)
     end
     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
     FillTooltip(entry)
-    PaintTitle(GameTooltip, entry)
+    if not BGV.LootTable.titleByPostCall then
+        PaintTitle(GameTooltip, entry)
+    end
     owner.bgvCompare = ShouldCompare()
     if Item and type(Item.CreateFromItemID) == "function" then
         local item = BGV.Utils.Call(Item.CreateFromItemID, Item, entry.itemID)
@@ -892,7 +883,9 @@ local function ShowItemTooltip(owner, entry)
                 if owner:IsShown() and owner:IsMouseOver() and owner.entry == entry then
                     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
                     FillTooltip(entry)
-                    PaintTitle(GameTooltip, entry)
+                    if not BGV.LootTable.titleByPostCall then
+                        PaintTitle(GameTooltip, entry)
+                    end
                     owner.bgvCompare = ShouldCompare()
                 end
             end)
@@ -958,7 +951,7 @@ end
 -- nearly stopped (the scroll's OnUpdate): within SETTLING_PX of where it's going.
 local function ListMoving()
     local SETTLING_PX = 8
-    return scrollTarget ~= nil and math.abs(scrollTarget - (scroll:GetVerticalScroll() or 0)) > SETTLING_PX
+    return scrollTarget ~= nil and math.abs(scrollTarget - (ui.scroll:GetVerticalScroll() or 0)) > SETTLING_PX
 end
 
 -- The row the pointer is on: the one that gets mouse events there (not one merely beneath a
@@ -972,7 +965,7 @@ end
 
 local function ShowTipUnderPointer()
     tipWaiting = false
-    if not scroll:IsMouseOver() then
+    if not ui.scroll:IsMouseOver() then
         return
     end
     for _, row in pairs(painted) do
@@ -989,7 +982,7 @@ end
 local function Acquire()
     local row = table.remove(pool)
     if not row then
-        row = CreateFrame("Button", nil, child)
+        row = CreateFrame("Button", nil, ui.child)
         row.bgvLootRow = true
         row:RegisterForClicks("AnyUp")
         row.stripe = Pixel(row, "BACKGROUND", 1, 1, 1, 0.025)
@@ -1067,7 +1060,7 @@ local function Acquire()
             end
         end)
     end
-    row:SetHeight(ROW_H)
+    row:SetHeight(size.ROW_H)
     row.bgvTierClass, row.bgvBonusPending = nil, nil
     row.stripe:Hide()
     row.band:Hide()
@@ -1130,7 +1123,7 @@ local function PaintLinks(model)
             link = table.remove(linkPool)
         end
         if not link then
-            link = CreateFrame("Button", nil, rail)
+            link = CreateFrame("Button", nil, ui.rail)
             link:SetHeight(28)
             link.hover = Pixel(link, "HIGHLIGHT", 1, 1, 1, 0.05)
             link.hover:SetAllPoints()
@@ -1165,7 +1158,7 @@ local function PaintLinks(model)
             end)
             linkRows[shown] = link
         end
-        link:SetHeight(LINK_H)
+        link:SetHeight(size.LINK_H)
         link:Show()
         return link
     end
@@ -1178,13 +1171,13 @@ local function PaintLinks(model)
         header:SetScript("OnClick", nil)
         header.hover:Hide()
         header:ClearAllPoints()
-        header:SetPoint("TOPLEFT", rail, "TOPLEFT", 16, -y)
-        header:SetPoint("TOPRIGHT", rail, "TOPRIGHT", -8, -y)
+        header:SetPoint("TOPLEFT", ui.rail, "TOPLEFT", 16, -y)
+        header:SetPoint("TOPRIGHT", ui.rail, "TOPRIGHT", -8, -y)
         header.bar:Hide()
         header.underline:Hide()
         header.label:SetText(L[group.title])
         header.label:SetTextColor(0.85, 0.65, 0.2)
-        y = y + LINK_H
+        y = y + size.LINK_H
         for _, section in ipairs(group.slots) do
             local link = Take()
             local selected = section.id == selectedKey
@@ -1192,8 +1185,8 @@ local function PaintLinks(model)
             link.selected = selected
             link.hover:Show()
             link:ClearAllPoints()
-            link:SetPoint("TOPLEFT", rail, "TOPLEFT", 28, -y)
-            link:SetPoint("TOPRIGHT", rail, "TOPRIGHT", -8, -y)
+            link:SetPoint("TOPLEFT", ui.rail, "TOPLEFT", 28, -y)
+            link:SetPoint("TOPRIGHT", ui.rail, "TOPRIGHT", -8, -y)
             link.bar:SetShown(selected)
             link.underline:Hide()
             link.label:SetText(section.title)
@@ -1207,7 +1200,7 @@ local function PaintLinks(model)
                 selectedKey = sectionID
                 Layout()
             end)
-            y = y + LINK_H
+            y = y + size.LINK_H
         end
         y = y + 8
     end
@@ -1312,14 +1305,14 @@ local function PlaceColumns(row, rowWidth)
     row.tierBadge:SetSize(20 + BGV.Utils.FontOffset(), 16 + BGV.Utils.FontOffset())
     row.tier:ClearAllPoints()
     row.tier:SetPoint("CENTER", row.tierBadge, "CENTER", 0, 0)
-    row.tier:SetWidth(TIER_W - 8)
+    row.tier:SetWidth(size.TIER_W - 8)
     row.level:ClearAllPoints()
     row.level:SetPoint("LEFT", row, "LEFT", levelX, 0)
-    row.level:SetWidth(LEVEL_W - 8)
+    row.level:SetWidth(size.LEVEL_W - 8)
     row.statsX = statsX
     row.slot:ClearAllPoints()
     row.slot:SetPoint("LEFT", row, "LEFT", slotX, 0)
-    row.slot:SetWidth(SLOT_W - 8)
+    row.slot:SetWidth(size.SLOT_W - 8)
 end
 
 -- Draws `texts` in the stats column, one line each, centred vertically in the row.
@@ -1334,8 +1327,8 @@ local function PaintStats(row, texts, r, g, b)
             row.statLines[index] = line
         end
         line:ClearAllPoints()
-        line:SetPoint("LEFT", row, "LEFT", row.statsX or 0, ((count + 1) / 2 - index) * STAT_LINE_H)
-        line:SetWidth(STATS_W - 8)
+        line:SetPoint("LEFT", row, "LEFT", row.statsX or 0, ((count + 1) / 2 - index) * size.STAT_LINE_H)
+        line:SetWidth(size.STATS_W - 8)
         line:SetText(text)
         line:SetTextColor(r, g, b)
         line:Show()
@@ -1366,34 +1359,34 @@ local function FitHeaderColumn(label, room, button)
 end
 
 local function PlaceHeader(rowWidth)
-    if not columnHeader then
+    if not ui.columnHeader then
         return
     end
     local tierX, levelX, statsX, slotX = Columns(rowWidth)
-    local labels = columnHeader.labels
-    labels.item:SetPoint("LEFT", columnHeader, "LEFT", 4 + 9, 0)
-    labels.tier:SetPoint("LEFT", columnHeader, "LEFT", 4 + tierX, 0)
+    local labels = ui.columnHeader.labels
+    labels.item:SetPoint("LEFT", ui.columnHeader, "LEFT", 4 + 9, 0)
+    labels.tier:SetPoint("LEFT", ui.columnHeader, "LEFT", 4 + tierX, 0)
     labels.tier:SetShown(BGV.Utils.ShowBisTiers())
     labels.tier.hover:SetShown(BGV.Utils.ShowBisTiers())
-    labels.level:SetPoint("LEFT", columnHeader, "LEFT", 4 + levelX, 0)
-    labels.stats:SetPoint("LEFT", columnHeader, "LEFT", 4 + statsX, 0)
-    labels.slot:SetPoint("LEFT", columnHeader, "LEFT", 4 + slotX, 0)
+    labels.level:SetPoint("LEFT", ui.columnHeader, "LEFT", 4 + levelX, 0)
+    labels.stats:SetPoint("LEFT", ui.columnHeader, "LEFT", 4 + statsX, 0)
+    labels.slot:SetPoint("LEFT", ui.columnHeader, "LEFT", 4 + slotX, 0)
     -- The header's controls follow the text size; each label keeps to its column, like the rows.
     local offset = BGV.Utils.FontOffset()
-    for _, button in ipairs({ statFilterButton, gearFilterButton }) do
+    for _, button in ipairs({ ui.statFilterButton, ui.gearFilterButton }) do
         button:SetHeight(16 + offset)
     end
-    FitHeaderColumn(labels.tier, TIER_W - 8)
-    FitHeaderColumn(labels.level, LEVEL_W - 8)
-    FitHeaderColumn(labels.stats, STATS_W - 8, statFilterButton)
-    FitHeaderColumn(labels.slot, SLOT_W - 8, gearFilterButton)
+    FitHeaderColumn(labels.tier, size.TIER_W - 8)
+    FitHeaderColumn(labels.level, size.LEVEL_W - 8)
+    FitHeaderColumn(labels.stats, size.STATS_W - 8, ui.statFilterButton)
+    FitHeaderColumn(labels.slot, size.SLOT_W - 8, ui.gearFilterButton)
     -- The search box fits between the Item label and the Tier column, at least 50 wide.
-    FitHeaderColumn(labels.item, tierX - 9 - 8 - (searchBox and 66 or 0))
-    if searchBox then
+    FitHeaderColumn(labels.item, tierX - 9 - 8 - (ui.searchBox and 66 or 0))
+    if ui.searchBox then
         local left = 9 + labels.item:GetWidth() + 6
         local room = tierX - left - 10
         local width = math.floor(150 * BGV.Utils.FontScale(10) + 0.5)
-        searchBox:SetSize(math.max(50, math.min(width, room)), 16 + offset)
+        ui.searchBox:SetSize(math.max(50, math.min(width, room)), 16 + offset)
     end
 end
 
@@ -1484,10 +1477,10 @@ end
 -- hovered (ShowSetBonusTooltip).
 local function AddGroupHeader(group, rowWidth, y)
     local row = Acquire()
-    row:SetHeight(GROUP_H)
+    row:SetHeight(size.GROUP_H)
     row:SetWidth(rowWidth)
     row:ClearAllPoints()
-    row:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -y)
+    row:SetPoint("TOPLEFT", ui.child, "TOPLEFT", 4, -y)
     row.entry = nil
     row.bgvTierClass = group.entries[1] and group.entries[1].tierClass or nil
     row.band:Show()
@@ -1507,10 +1500,10 @@ end
 local function AddSourceHeader(text, rowWidth, y)
     local row = Acquire()
     row.hover:Hide()
-    row:SetHeight(SOURCE_H)
+    row:SetHeight(size.SOURCE_H)
     row:SetWidth(rowWidth)
     row:ClearAllPoints()
-    row:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -y)
+    row:SetPoint("TOPLEFT", ui.child, "TOPLEFT", 4, -y)
     row.entry = nil
     row.name:ClearAllPoints()
     row.name:SetPoint("LEFT", row, "LEFT", 2, 0)
@@ -1525,7 +1518,7 @@ local function ShowMessage(text, rowWidth, y)
     local row = Acquire()
     row.hover:Hide()
     row:ClearAllPoints()
-    row:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -y)
+    row:SetPoint("TOPLEFT", ui.child, "TOPLEFT", 4, -y)
     row:SetWidth(rowWidth)
     row.entry = nil
     row.name:ClearAllPoints()
@@ -1543,7 +1536,7 @@ local function PaintItem(line)
     local row = Acquire()
     row:SetWidth(listWidth)
     row:ClearAllPoints()
-    row:SetPoint("TOPLEFT", child, "TOPLEFT", 4, -line.y)
+    row:SetPoint("TOPLEFT", ui.child, "TOPLEFT", 4, -line.y)
     PlaceColumns(row, listWidth)
     row.entry = entry
     row.icon:SetTexture(entry.icon)
@@ -1638,10 +1631,10 @@ local function AddLine(kind, y, height)
 end
 
 local function ViewHeight()
-    local height = scroll:GetHeight()
+    local height = ui.scroll:GetHeight()
     if type(height) ~= "number" or height < 40 then
         -- Not laid out yet: the list's place in the window (see Layout).
-        height = (frame and frame:GetHeight() or 560) - LIST_TOP - 16
+        height = (ui.frame and ui.frame:GetHeight() or 560) - size.LIST_TOP - 16
     end
     return height
 end
@@ -1651,7 +1644,7 @@ end
 -- kept (a redraw while loading), so repaint only the rows that no longer show their line.
 local function PaintVisible(recheck)
     -- A hidden window paints nothing; showing it lays it out (OnShow).
-    if not (scroll and child and listWidth and frame:IsVisible()) then
+    if not (ui.scroll and ui.child and listWidth and ui.frame:IsVisible()) then
         return
     end
     if lineCount == 0 then
@@ -1660,7 +1653,7 @@ local function PaintVisible(recheck)
     end
     -- Painted beyond the visible area, so rows are ready before they scroll into view.
     local OVERSCAN = 64
-    local top = scroll:GetVerticalScroll() or 0
+    local top = ui.scroll:GetVerticalScroll() or 0
     local from, to = top - OVERSCAN, top + ViewHeight() + OVERSCAN
     -- The first line reaching below `from` (lines are in order, top to bottom), then every line
     -- starting above `to`.
@@ -1741,8 +1734,6 @@ local function SourceName(source, info)
     return L[source.header] .. " • " .. info.label
 end
 
--- How many instances the last redraw read from the journal (DatabaseSection's budget).
-local passReads = 0
 
 -- The database mode's section: every selected source at its chosen level, for the chosen class
 -- and spec. A source whose item level isn't known yet lists nothing rather than items at a
@@ -1778,7 +1769,7 @@ local function DatabaseSection()
             rewards[#rewards + 1] = string.format(L["%s not known yet"], L[source.header])
         end
     end
-    passReads = budget and budget.reads or 0
+    pass.reads = budget and budget.reads or 0
     local section = {
         key = table.concat(keys, ":"),
         title = table.concat(titles, "  +  "),
@@ -1803,16 +1794,16 @@ local function PaintDatabaseRail()
     end
     local y = 36
     for _, source in ipairs(DB_SOURCES) do
-        local row = dbRows[source.id]
+        local row = ui.dbRows[source.id]
         if row then
             local selected = db.sources[source.id] == true
             local info = DatabaseLevel(source.id)
             row:ClearAllPoints()
-            row:SetPoint("TOPLEFT", rail, "TOPLEFT", 16, -y)
-            row:SetPoint("TOPRIGHT", rail, "TOPRIGHT", -8, -y)
-            row:SetHeight(SOURCE_ROW_H)
+            row:SetPoint("TOPLEFT", ui.rail, "TOPLEFT", 16, -y)
+            row:SetPoint("TOPRIGHT", ui.rail, "TOPRIGHT", -8, -y)
+            row:SetHeight(size.SOURCE_ROW_H)
             row.level:ClearAllPoints()
-            row.level:SetPoint("TOPLEFT", row, "TOPLEFT", 12, -(SOURCE_ROW_H - 28))
+            row.level:SetPoint("TOPLEFT", row, "TOPLEFT", 12, -(size.SOURCE_ROW_H - 28))
             row.level:SetPoint("RIGHT", row, "RIGHT", -8, 0)
             row.level:SetHeight(20 + BGV.Utils.FontOffset())
             row.bar:SetShown(selected)
@@ -1836,12 +1827,12 @@ local function PaintDatabaseRail()
             row.level:SetText(levelText)
             row:Show()
         end
-        y = y + SOURCE_ROW_H + SOURCE_GAP
+        y = y + size.SOURCE_ROW_H + size.SOURCE_GAP
     end
 end
 
 local function HideDatabaseRail()
-    for _, row in pairs(dbRows) do
+    for _, row in pairs(ui.dbRows) do
         row:Hide()
     end
 end
@@ -1859,25 +1850,25 @@ end
 
 local function RefreshModeWidgets()
     local database = mode == "database"
-    if windowTitle then
-        windowTitle:SetText(database and L["Loot database"] or L["Great Vault loot"])
+    if ui.windowTitle then
+        ui.windowTitle:SetText(database and L["Loot database"] or L["Great Vault loot"])
     end
-    if railTitle then
-        railTitle:SetText(database and L["Loot sources"] or L["Contents"])
+    if ui.railTitle then
+        ui.railTitle:SetText(database and L["Loot sources"] or L["Contents"])
     end
     if database then
-        if specButton then
-            specButton:Hide()
+        if ui.specButton then
+            ui.specButton:Hide()
         end
-        if classButton then
-            classButton:SetText(ClassSpecLabel())
-            classButton:Show()
+        if ui.classButton then
+            ui.classButton:SetText(ClassSpecLabel())
+            ui.classButton:Show()
         end
     else
-        if classButton then
-            classButton:Hide()
+        if ui.classButton then
+            ui.classButton:Hide()
         end
-        BGV.Utils.RefreshLootSpecButton(specButton)
+        BGV.Utils.RefreshLootSpecButton(ui.specButton)
     end
 end
 
@@ -1888,31 +1879,33 @@ local function NoteRedraw(started, keepRows, pending)
         return
     end
     local spent = debugprofilestop() - started
-    if not (keepRows and loading) then
-        loading = { redraws = 0, time = 0, peak = 0 }
+    if not (keepRows and watch.loading) then
+        watch.loading = { redraws = 0, time = 0, peak = 0 }
     end
-    loading.redraws = loading.redraws + 1
-    loading.time = loading.time + spent
-    loading.peak = math.max(loading.peak, spent)
+    watch.loading.redraws = watch.loading.redraws + 1
+    watch.loading.time = watch.loading.time + spent
+    watch.loading.peak = math.max(watch.loading.peak, spent)
     if not pending then
-        BGV.LootTable.lastLoad = loading
-        loading = nil
+        BGV.LootTable.lastLoad = watch.loading
+        watch.loading = nil
     end
 end
 
 -- `keepRows`: a redraw while the list loads (RefreshPending), which keeps the rows that would
 -- look the same; any other redraw paints every row in view anew.
 function Layout(keepRows)
-    if not child or not scroll then
+    -- a hidden window lays nothing out (a menu pick or the search box's timer can come after it
+    -- closed); showing it lays it out (OnShow)
+    if not ui.child or not ui.scroll or not ui.frame:IsShown() then
         return
     end
     local started = type(debugprofilestop) == "function" and debugprofilestop() or nil
-    lastLayoutAt = type(GetTime) == "function" and GetTime() or nil
+    watch.lastLayoutAt = type(GetTime) == "function" and GetTime() or nil
     local database = mode == "database"
-    statLookups = STAT_LOOKUPS_PER_PASS
-    statSpent = 0
-    statsCut = false
-    passReads = 0
+    pass.lookups = STAT_LOOKUPS_PER_PASS
+    pass.spent = 0
+    pass.cut = false
+    pass.reads = 0
     UpdateMetrics()
     PaintAccent()
     RefreshModeWidgets()
@@ -1929,21 +1922,21 @@ function Layout(keepRows)
         section = VaultSection(model)
     end
     local key = section and section.key or selectedKey
-    if scroll.bgvKey ~= key then
+    if ui.scroll.bgvKey ~= key then
         JumpScroll(0)
-        scroll.bgvKey = key
+        ui.scroll.bgvKey = key
     end
 
     local showRail = database or not solo
-    if rail then
-        rail:SetShown(showRail)
+    if ui.rail then
+        ui.rail:SetShown(showRail)
     end
-    scroll:ClearAllPoints()
-    scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", showRail and (LEFT_W + 16) or 16, -LIST_TOP)
-    if columnHeader then
-        columnHeader:SetHeight(HEADER_H)
+    ui.scroll:ClearAllPoints()
+    ui.scroll:SetPoint("TOPLEFT", ui.frame, "TOPLEFT", showRail and (LEFT_W + 16) or 16, -size.LIST_TOP)
+    if ui.columnHeader then
+        ui.columnHeader:SetHeight(size.HEADER_H)
     end
-    scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 16)
+    ui.scroll:SetPoint("BOTTOMRIGHT", ui.frame, "BOTTOMRIGHT", -16, 16)
     if database then
         PaintDatabaseRail()
     else
@@ -1953,27 +1946,27 @@ function Layout(keepRows)
         end
     end
 
-    if headerTitle then
-        local titleWidth = (frame:GetWidth() or 1000) - (showRail and (LEFT_W + 40) or 36)
+    if ui.headerTitle then
+        local titleWidth = (ui.frame:GetWidth() or 1000) - (showRail and (LEFT_W + 40) or 36)
         if titleWidth < 180 then
             titleWidth = 180
         end
-        headerTitle:SetWidth(titleWidth)
-        headerReward:SetWidth(titleWidth)
+        ui.headerTitle:SetWidth(titleWidth)
+        ui.headerReward:SetWidth(titleWidth)
         if section then
-            headerTitle:SetText(section.title)
-            headerReward:SetText(section.reward or "")
+            ui.headerTitle:SetText(section.title)
+            ui.headerReward:SetText(section.reward or "")
         else
-            headerTitle:SetText(L["Great Vault loot"])
-            headerReward:SetText("")
+            ui.headerTitle:SetText(L["Great Vault loot"])
+            ui.headerReward:SetText("")
         end
     end
 
-    local width = scroll:GetWidth()
+    local width = ui.scroll:GetWidth()
     if not width or width < 160 then
         width = solo and 680 or 500
     end
-    child:SetWidth(width)
+    ui.child:SetWidth(width)
     local rowWidth = width - 8
     listWidth = rowWidth
     PlaceHeader(rowWidth)
@@ -1986,18 +1979,18 @@ function Layout(keepRows)
         -- Progress: new items, or a redraw that stopped reading (the journal or stats) because it
         -- had read its share.
         local mark = tostring(key) .. ":" .. tostring(#(section.items or {}))
-        if mark ~= pendingWatch or statsCut or passReads > 0 then
-            pendingWatch = mark
-            stalls = 0
+        if mark ~= watch.mark or pass.cut or pass.reads > 0 then
+            watch.mark = mark
+            watch.stalls = 0
             BGV.LootTable.RefreshPending()
             return
         end
         -- No progress this pass; poll a little later, and stop after ~10s of nothing new.
         -- A journal event (Nudge) or reopening the window starts it again.
-        stalls = stalls + 1
-        if stalls <= MAX_STALLS then
+        watch.stalls = watch.stalls + 1
+        if watch.stalls <= MAX_STALLS then
             BGV.LootTable.RefreshPending(POLL_DELAY)
-        elseif stalls == MAX_STALLS + 1 and BetterGreatVaultDB and BetterGreatVaultDB.debug then
+        elseif watch.stalls == MAX_STALLS + 1 and BetterGreatVaultDB and BetterGreatVaultDB.debug then
             BGV.Utils.Print(string.format("Loot table stopped waiting on %s (%d items so far): no new items for 10s.",
                 section.title, #(section.items or {})))
             local trace = BGV.Rewards and type(BGV.Rewards.LastLoadTrace) == "function" and BGV.Rewards.LastLoadTrace()
@@ -2007,8 +2000,8 @@ function Layout(keepRows)
         end
     end
     local function Message(text)
-        AddLine("message", 8, ROW_H).text = text
-        child:SetHeight(48)
+        AddLine("message", 8, size.ROW_H).text = text
+        ui.child:SetHeight(48)
         PaintVisible(keepRows)
         Continue()
     end
@@ -2023,7 +2016,7 @@ function Layout(keepRows)
             Message(L["Locked."])
         elseif section.unknownLevel then
             Message(L["The vault hasn't shown item levels for this yet. Complete one of these in your Great Vault this season and they'll appear here."])
-        elseif section.pending and stalls >= MAX_STALLS then
+        elseif section.pending and watch.stalls >= MAX_STALLS then
             Message(L["Loot didn't finish loading. Close and reopen this window to try again."])
         elseif section.pending then
             -- Filters may still match items whose data hasn't arrived yet.
@@ -2045,12 +2038,12 @@ function Layout(keepRows)
         if not first then
             y = y + 6
         end
-        AddLine("group", y, GROUP_H).group = group
-        y = y + GROUP_H
+        AddLine("group", y, size.GROUP_H).group = group
+        y = y + size.GROUP_H
         for index, entry in ipairs(group.entries) do
             -- One stat a line (PaintItem): the row grows if there are more lines than fit.
             local stats = EntryStats(entry)
-            local height = math.max(ROW_H, #(stats or NO_STATS) * STAT_LINE_H + 8)
+            local height = math.max(size.ROW_H, #(stats or NO_STATS) * size.STAT_LINE_H + 8)
             local line = AddLine("item", y, height)
             line.entry, line.index, line.stats = entry, index, stats
             y = y + height
@@ -2063,8 +2056,8 @@ function Layout(keepRows)
             if partIndex > 1 then
                 y = y + 12
             end
-            AddLine("source", y, SOURCE_H).text = part.text
-            y = y + SOURCE_H
+            AddLine("source", y, size.SOURCE_H).text = part.text
+            y = y + size.SOURCE_H
             local first = true
             for _, group in ipairs(groups) do
                 if group.sourceOrder == part.order then
@@ -2078,7 +2071,7 @@ function Layout(keepRows)
             AddGroup(group, groupIndex == 1)
         end
     end
-    child:SetHeight(math.max(y + 8, 40))
+    ui.child:SetHeight(math.max(y + 8, 40))
     PaintVisible(keepRows)
     Continue()
 end
@@ -2110,12 +2103,12 @@ local function GearFilterLabel()
 end
 
 function RefreshHeaderFilters()
-    PaintHeaderFilter(gearFilterButton, filterID == "ALL" and "+" or GearFilterLabel(), filterID ~= "ALL")
+    PaintHeaderFilter(ui.gearFilterButton, filterID == "ALL" and "+" or GearFilterLabel(), filterID ~= "ALL")
     local letters = {}
     for _, stat in ipairs(SelectedStats()) do
         letters[#letters + 1] = StatLetter(stat)
     end
-    PaintHeaderFilter(statFilterButton, #letters > 0 and table.concat(letters) or "+", #letters > 0)
+    PaintHeaderFilter(ui.statFilterButton, #letters > 0 and table.concat(letters) or "+", #letters > 0)
 end
 
 local function ApplyFilter(id)
@@ -2198,7 +2191,7 @@ local function OpenStatMenu(anchor)
 end
 
 local function CreateHeaderFilter(label, onClick, describe)
-    local button = CreateFrame("Button", nil, columnHeader)
+    local button = CreateFrame("Button", nil, ui.columnHeader)
     button:SetHeight(16)
     button:SetPoint("LEFT", label, "RIGHT", 5, 0)
     button.back = Pixel(button, "BACKGROUND", 0.24, 0.24, 0.26, 0.95)
@@ -2231,7 +2224,7 @@ end
 -- The item name search, in the column header after the Item label like the other filters. The
 -- list redraws a moment after typing stops, not on every letter.
 local function CreateSearchBox(label)
-    local box = CreateFrame("EditBox", nil, columnHeader)
+    local box = CreateFrame("EditBox", nil, ui.columnHeader)
     box:SetSize(150, 16)
     box:SetPoint("LEFT", label, "RIGHT", 6, 0)
     box:SetAutoFocus(false)
@@ -2450,64 +2443,64 @@ function BGV.LootTable.SetStatFilter(ids)
 end
 
 local function Build()
-    if frame then
-        return frame
+    if ui.frame then
+        return ui.frame
     end
-    frame = CreateFrame("Frame", "BetterGreatVaultLootTable", UIParent)
-    frame:SetSize(1000, 560)
-    frame:SetPoint("CENTER")
-    frame:SetFrameStrata("DIALOG")
-    frame:SetToplevel(true)
-    frame:SetClampedToScreen(true)
-    frame:SetMovable(true)
-    frame:EnableMouse(true)
-    frame:SetResizable(true)
-    if frame.SetResizeBounds then
-        frame:SetResizeBounds(840, 400, 1400, 900)
+    ui.frame = CreateFrame("Frame", "BetterGreatVaultLootTable", UIParent)
+    ui.frame:SetSize(1000, 560)
+    ui.frame:SetPoint("CENTER")
+    ui.frame:SetFrameStrata("DIALOG")
+    ui.frame:SetToplevel(true)
+    ui.frame:SetClampedToScreen(true)
+    ui.frame:SetMovable(true)
+    ui.frame:EnableMouse(true)
+    ui.frame:SetResizable(true)
+    if ui.frame.SetResizeBounds then
+        ui.frame:SetResizeBounds(840, 400, 1400, 900)
     end
-    frame:Hide()
+    ui.frame:Hide()
     -- Flat, like the settings panel: a soft shadow, a dark body with a 1px border, and a title
     -- bar with a thin gold rule.
     for step, alpha in ipairs({ 0.22, 0.14, 0.07 }) do
-        local shadow = Pixel(frame, "BACKGROUND", 0, 0, 0, alpha)
+        local shadow = Pixel(ui.frame, "BACKGROUND", 0, 0, 0, alpha)
         shadow:SetDrawLayer("BACKGROUND", -8)
         shadow:SetPoint("TOPLEFT", -2 * step, 2 * step)
         shadow:SetPoint("BOTTOMRIGHT", 2 * step, -2 * step)
     end
-    local body = Pixel(frame, "BACKGROUND", 0.055, 0.055, 0.065, 0.97)
+    local body = Pixel(ui.frame, "BACKGROUND", 0.055, 0.055, 0.065, 0.97)
     body:SetDrawLayer("BACKGROUND", -7)
     body:SetAllPoints()
-    BGV.Utils.Border(frame, 0.24, 0.24, 0.27, 1)
+    BGV.Utils.Border(ui.frame, 0.24, 0.24, 0.27, 1)
 
-    local titleBar = Pixel(frame, "BACKGROUND", 0.085, 0.085, 0.097, 1)
+    local titleBar = Pixel(ui.frame, "BACKGROUND", 0.085, 0.085, 0.097, 1)
     titleBar:SetPoint("TOPLEFT", 1, -1)
     titleBar:SetPoint("TOPRIGHT", -1, -1)
     titleBar:SetHeight(39)
-    local titleRule = Accent(Pixel(frame, "ARTWORK", 1, 1, 1, 1), 0.6)
+    local titleRule = Accent(Pixel(ui.frame, "ARTWORK", 1, 1, 1, 1), 0.6)
     titleRule:SetHeight(1)
     titleRule:SetPoint("TOPLEFT", titleBar, "BOTTOMLEFT", 0, 0)
     titleRule:SetPoint("TOPRIGHT", titleBar, "BOTTOMRIGHT", 0, 0)
 
-    local title = BGV.Utils.FontString(frame, "OVERLAY", "Normal")
+    local title = BGV.Utils.FontString(ui.frame, "OVERLAY", "Normal")
     title:SetPoint("TOPLEFT", 16, -14)
     title:SetText(L["Great Vault loot"])
     title:SetTextColor(0.85, 0.65, 0.2)
-    windowTitle = title
+    ui.windowTitle = title
 
-    local drag = CreateFrame("Button", nil, frame)
+    local drag = CreateFrame("Button", nil, ui.frame)
     drag:SetPoint("TOPLEFT")
     drag:SetPoint("TOPRIGHT", -180, 0)
     drag:SetHeight(40)
     drag:RegisterForDrag("LeftButton")
     drag:SetScript("OnDragStart", function()
-        frame:StartMoving()
+        ui.frame:StartMoving()
     end)
     drag:SetScript("OnDragStop", function()
-        frame:StopMovingOrSizing()
+        ui.frame:StopMovingOrSizing()
     end)
 
     -- A flat close button: two thin crossed lines, red glow on hover.
-    local close = CreateFrame("Button", nil, frame)
+    local close = CreateFrame("Button", nil, ui.frame)
     close:SetSize(26, 26)
     close:SetPoint("TOPRIGHT", -7, -7)
     local closeGlow = Pixel(close, "HIGHLIGHT", 0.85, 0.2, 0.2, 0.35)
@@ -2533,41 +2526,41 @@ local function Build()
         end
     end)
     close:SetScript("OnClick", function()
-        frame:Hide()
+        ui.frame:Hide()
     end)
 
-    specButton = BGV.Utils.CreateLootSpecButton(frame, true)
-    specButton:SetPoint("TOPRIGHT", -42, -9)
+    ui.specButton = BGV.Utils.CreateLootSpecButton(ui.frame, true)
+    ui.specButton:SetPoint("TOPRIGHT", -42, -9)
 
     -- Database mode: the class and spec to list loot for, in the loot spec button's place.
-    classButton = BGV.Utils.CreateFlatButton(frame, 200, 22)
-    classButton:SetPoint("TOPRIGHT", -42, -9)
-    classButton:SetScript("OnClick", function(self)
+    ui.classButton = BGV.Utils.CreateFlatButton(ui.frame, 200, 22)
+    ui.classButton:SetPoint("TOPRIGHT", -42, -9)
+    ui.classButton:SetScript("OnClick", function(self)
         OpenClassMenu(self)
     end)
-    classButton:Hide()
+    ui.classButton:Hide()
 
     -- The drag strip spans most of the title bar; keep the header buttons above it so
     -- clicks reach them instead of starting a window drag.
-    specButton:SetFrameLevel(drag:GetFrameLevel() + 2)
-    classButton:SetFrameLevel(drag:GetFrameLevel() + 2)
+    ui.specButton:SetFrameLevel(drag:GetFrameLevel() + 2)
+    ui.classButton:SetFrameLevel(drag:GetFrameLevel() + 2)
 
-    rail = CreateFrame("Frame", nil, frame)
-    rail:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -40)
-    rail:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 0, 0)
-    rail:SetWidth(LEFT_W)
-    local railBack = Pixel(rail, "BACKGROUND", 0.035, 0.035, 0.042, 0.8)
-    railBack:SetPoint("TOPLEFT", rail, "TOPLEFT", 1, 0)
-    railBack:SetPoint("BOTTOMRIGHT", rail, "BOTTOMRIGHT", 0, 1)
-    local contents = BGV.Utils.FontString(rail, "OVERLAY", "Normal")
-    contents:SetPoint("TOPLEFT", rail, "TOPLEFT", 16, -12)
+    ui.rail = CreateFrame("Frame", nil, ui.frame)
+    ui.rail:SetPoint("TOPLEFT", ui.frame, "TOPLEFT", 0, -40)
+    ui.rail:SetPoint("BOTTOMLEFT", ui.frame, "BOTTOMLEFT", 0, 0)
+    ui.rail:SetWidth(LEFT_W)
+    local railBack = Pixel(ui.rail, "BACKGROUND", 0.035, 0.035, 0.042, 0.8)
+    railBack:SetPoint("TOPLEFT", ui.rail, "TOPLEFT", 1, 0)
+    railBack:SetPoint("BOTTOMRIGHT", ui.rail, "BOTTOMRIGHT", 0, 1)
+    local contents = BGV.Utils.FontString(ui.rail, "OVERLAY", "Normal")
+    contents:SetPoint("TOPLEFT", ui.rail, "TOPLEFT", 16, -12)
     contents:SetText(L["Contents"])
     contents:SetTextColor(0.85, 0.65, 0.2)
-    railTitle = contents
+    ui.railTitle = contents
 
     -- Database mode's sources, each with its level picker (difficulty, keystone level or tier).
     for _, source in ipairs(DB_SOURCES) do
-        local row = CreateFrame("Button", nil, rail)
+        local row = CreateFrame("Button", nil, ui.rail)
         row:SetHeight(54)
         row.hover = Pixel(row, "HIGHLIGHT", 1, 1, 1, 0.05)
         row.hover:SetAllPoints()
@@ -2600,52 +2593,52 @@ local function Build()
             OpenLevelMenu(self, sourceID)
         end)
         row:Hide()
-        dbRows[sourceID] = row
+        ui.dbRows[sourceID] = row
     end
-    local divider = Pixel(frame, "BORDER", 0.18, 0.18, 0.2, 1)
+    local divider = Pixel(ui.frame, "BORDER", 0.18, 0.18, 0.2, 1)
     divider:SetWidth(1)
-    divider:SetPoint("TOPLEFT", rail, "TOPRIGHT", 0, 0)
-    divider:SetPoint("BOTTOMLEFT", rail, "BOTTOMRIGHT", 0, 1)
-    rail.divider = divider
+    divider:SetPoint("TOPLEFT", ui.rail, "TOPRIGHT", 0, 0)
+    divider:SetPoint("BOTTOMLEFT", ui.rail, "BOTTOMRIGHT", 0, 1)
+    ui.rail.divider = divider
 
-    headerTitle = BGV.Utils.FontString(frame, "OVERLAY", "NormalLarge")
-    headerTitle:SetPoint("TOPLEFT", frame, "TOPLEFT", LEFT_W + 20, -46)
-    headerTitle:SetJustifyH("LEFT")
-    headerTitle:SetWordWrap(false)
-    headerTitle:SetTextColor(0.96, 0.96, 0.96)
-    headerReward = BGV.Utils.FontString(frame, "OVERLAY", "Highlight")
-    headerReward:SetPoint("TOPLEFT", headerTitle, "BOTTOMLEFT", 0, -4)
-    headerReward:SetJustifyH("LEFT")
-    headerReward:SetWordWrap(false)
-    headerReward:SetTextColor(1, 0.82, 0)
-    local rule = Accent(Pixel(frame, "ARTWORK", 1, 1, 1, 1), 0.9)
+    ui.headerTitle = BGV.Utils.FontString(ui.frame, "OVERLAY", "NormalLarge")
+    ui.headerTitle:SetPoint("TOPLEFT", ui.frame, "TOPLEFT", LEFT_W + 20, -46)
+    ui.headerTitle:SetJustifyH("LEFT")
+    ui.headerTitle:SetWordWrap(false)
+    ui.headerTitle:SetTextColor(0.96, 0.96, 0.96)
+    ui.headerReward = BGV.Utils.FontString(ui.frame, "OVERLAY", "Highlight")
+    ui.headerReward:SetPoint("TOPLEFT", ui.headerTitle, "BOTTOMLEFT", 0, -4)
+    ui.headerReward:SetJustifyH("LEFT")
+    ui.headerReward:SetWordWrap(false)
+    ui.headerReward:SetTextColor(1, 0.82, 0)
+    local rule = Accent(Pixel(ui.frame, "ARTWORK", 1, 1, 1, 1), 0.9)
     rule:SetSize(36, 2)
-    rule:SetPoint("TOPLEFT", headerReward, "BOTTOMLEFT", 0, -6)
+    rule:SetPoint("TOPLEFT", ui.headerReward, "BOTTOMLEFT", 0, -6)
 
-    scroll = CreateFrame("ScrollFrame", nil, frame)
-    scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", LEFT_W + 16, -LIST_TOP)
-    scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 16)
-    scroll:EnableMouseWheel(true)
+    ui.scroll = CreateFrame("ScrollFrame", nil, ui.frame)
+    ui.scroll:SetPoint("TOPLEFT", ui.frame, "TOPLEFT", LEFT_W + 16, -size.LIST_TOP)
+    ui.scroll:SetPoint("BOTTOMRIGHT", ui.frame, "BOTTOMRIGHT", -16, 16)
+    ui.scroll:EnableMouseWheel(true)
 
-    columnHeader = CreateFrame("Frame", nil, frame)
-    columnHeader:SetHeight(24)
-    columnHeader:SetPoint("BOTTOMLEFT", scroll, "TOPLEFT", 0, 4)
-    columnHeader:SetPoint("BOTTOMRIGHT", scroll, "TOPRIGHT", 0, 4)
-    Pixel(columnHeader, "BACKGROUND", 0.1, 0.1, 0.112, 1):SetAllPoints()
-    local headerRule = Accent(Pixel(columnHeader, "ARTWORK", 1, 1, 1, 1), 0.45)
+    ui.columnHeader = CreateFrame("Frame", nil, ui.frame)
+    ui.columnHeader:SetHeight(24)
+    ui.columnHeader:SetPoint("BOTTOMLEFT", ui.scroll, "TOPLEFT", 0, 4)
+    ui.columnHeader:SetPoint("BOTTOMRIGHT", ui.scroll, "TOPRIGHT", 0, 4)
+    Pixel(ui.columnHeader, "BACKGROUND", 0.1, 0.1, 0.112, 1):SetAllPoints()
+    local headerRule = Accent(Pixel(ui.columnHeader, "ARTWORK", 1, 1, 1, 1), 0.45)
     headerRule:SetHeight(1)
     headerRule:SetPoint("BOTTOMLEFT")
     headerRule:SetPoint("BOTTOMRIGHT")
-    columnHeader.labels = {}
+    ui.columnHeader.labels = {}
     for _, column in ipairs({ { "item", "Item" }, { "tier", "Tier" }, { "level", "Item Level" }, { "stats", "Secondary stats" }, { "slot", "Slot" } }) do
-        local label = BGV.Utils.FontString(columnHeader, "OVERLAY", "NormalSmall")
+        local label = BGV.Utils.FontString(ui.columnHeader, "OVERLAY", "NormalSmall")
         label:SetText(BGV.Utils.Upper(L[column[2]]))
         label:SetTextColor(0.66, 0.66, 0.7)
         label:SetJustifyH("LEFT")
         label:SetWordWrap(false)
-        columnHeader.labels[column[1]] = label
+        ui.columnHeader.labels[column[1]] = label
         -- A label cut short to fit its column (PlaceHeader) shows its full name on hover.
-        local hover = CreateFrame("Frame", nil, columnHeader)
+        local hover = CreateFrame("Frame", nil, ui.columnHeader)
         hover:SetAllPoints(label)
         hover:EnableMouse(true)
         hover:SetScript("OnEnter", function(self)
@@ -2663,43 +2656,43 @@ local function Build()
         label.hover = hover
     end
     -- The gear and secondary stat filters, as small buttons after their columns' labels.
-    statFilterButton = CreateHeaderFilter(columnHeader.labels.stats, function(self)
+    ui.statFilterButton = CreateHeaderFilter(ui.columnHeader.labels.stats, function(self)
         OpenStatMenu(self)
     end, function(tooltip)
         tooltip:SetText(L["Secondary stats filter"])
         tooltip:AddLine(StatFilterSummary(), 1, 1, 1)
         tooltip:AddLine(L["Pick one stat for items with it, two for items with both, three or more for items with any of them."], 0.7, 0.7, 0.72, true)
     end)
-    gearFilterButton = CreateHeaderFilter(columnHeader.labels.slot, function(self)
+    ui.gearFilterButton = CreateHeaderFilter(ui.columnHeader.labels.slot, function(self)
         OpenGearMenu(self)
     end, function(tooltip)
         tooltip:SetText(L["Gear filter"])
         tooltip:AddLine(filterID == "ALL" and L["Showing all gear"] or string.format(L["Showing: %s"], GearFilterLabel()), 1, 1, 1)
     end)
-    searchBox = CreateSearchBox(columnHeader.labels.item)
+    ui.searchBox = CreateSearchBox(ui.columnHeader.labels.item)
     RefreshHeaderFilters()
-    child = CreateFrame("Frame", nil, scroll)
-    child:SetSize(520, 40)
-    scroll:SetScrollChild(child)
+    ui.child = CreateFrame("Frame", nil, ui.scroll)
+    ui.child:SetSize(520, 40)
+    ui.scroll:SetScrollChild(ui.child)
     -- A thin scroll indicator in the right margin, shown only when the list overflows.
-    local track = Pixel(frame, "ARTWORK", 1, 1, 1, 0.05)
+    local track = Pixel(ui.frame, "ARTWORK", 1, 1, 1, 0.05)
     track:SetWidth(3)
-    track:SetPoint("TOPLEFT", scroll, "TOPRIGHT", 6, 0)
-    track:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", 6, 0)
-    local thumb = Accent(Pixel(frame, "OVERLAY", 1, 1, 1, 1), 0.7)
+    track:SetPoint("TOPLEFT", ui.scroll, "TOPRIGHT", 6, 0)
+    track:SetPoint("BOTTOMLEFT", ui.scroll, "BOTTOMRIGHT", 6, 0)
+    local thumb = Accent(Pixel(ui.frame, "OVERLAY", 1, 1, 1, 1), 0.7)
     thumb:SetWidth(3)
     -- The thumb's size and its distance from the track's top, as last drawn.
     local thumbHeight, thumbOffset = 0, 0
     UpdateScrollThumb = function()
-        local range = scroll:GetVerticalScrollRange() or 0
-        local height = scroll:GetHeight() or 0
+        local range = ui.scroll:GetVerticalScrollRange() or 0
+        local height = ui.scroll:GetHeight() or 0
         if range <= 0 or height <= 0 then
             track:Hide()
             thumb:Hide()
             return
         end
         thumbHeight = math.max(24, height * height / (height + range))
-        thumbOffset = (scroll:GetVerticalScroll() or 0) / range * (height - thumbHeight)
+        thumbOffset = (ui.scroll:GetVerticalScroll() or 0) / range * (height - thumbHeight)
         thumb:SetHeight(thumbHeight)
         thumb:ClearAllPoints()
         thumb:SetPoint("TOP", track, "TOP", 0, -thumbOffset)
@@ -2709,7 +2702,7 @@ local function Build()
     -- The scroll bar can be dragged: grabbing the thumb moves it with the pointer, and pressing
     -- the track elsewhere brings the thumb's middle there first. The grab area is wider than the
     -- 3px bar, and the thumb widens while it's hovered or dragged.
-    local grab = CreateFrame("Frame", nil, frame)
+    local grab = CreateFrame("Frame", nil, ui.frame)
     grab.bgvScrollGrab = true
     grab:SetPoint("TOPLEFT", track, "TOPLEFT", -5, 0)
     grab:SetPoint("BOTTOMRIGHT", track, "BOTTOMRIGHT", 5, 0)
@@ -2720,13 +2713,13 @@ local function Build()
         return (grab:GetTop() or 0) - y / grab:GetEffectiveScale()
     end
     local function DragTo(top)
-        local range = scroll:GetVerticalScrollRange() or 0
-        local free = (scroll:GetHeight() or 0) - thumbHeight
+        local range = ui.scroll:GetVerticalScrollRange() or 0
+        local free = (ui.scroll:GetHeight() or 0) - thumbHeight
         if range <= 0 or free <= 0 then
             return
         end
         scrollTarget = nil
-        scroll:SetVerticalScroll(math.max(0, math.min(free, top)) / free * range)
+        ui.scroll:SetVerticalScroll(math.max(0, math.min(free, top)) / free * range)
     end
     local function StopDrag()
         dragFrom = nil
@@ -2762,14 +2755,14 @@ local function Build()
             thumb:SetWidth(3)
         end
     end)
-    scroll:SetScript("OnScrollRangeChanged", function()
+    ui.scroll:SetScript("OnScrollRangeChanged", function()
         UpdateScrollThumb()
     end)
-    scroll:SetScript("OnVerticalScroll", function()
+    ui.scroll:SetScript("OnVerticalScroll", function()
         UpdateScrollThumb()
         PaintVisible()
     end)
-    scroll:SetScript("OnSizeChanged", function()
+    ui.scroll:SetScript("OnSizeChanged", function()
         PaintVisible()
     end)
     -- The wheel glides the list to its target; the glide's OnUpdate runs only while it moves.
@@ -2791,58 +2784,45 @@ local function Build()
             ShowTipUnderPointer()
         end
     end
-    scroll:SetScript("OnMouseWheel", function(self, delta)
+    ui.scroll:SetScript("OnMouseWheel", function(self, delta)
         local maxScroll = self:GetVerticalScrollRange() or 0
         local target = (scrollTarget or self:GetVerticalScroll()) - delta * 64
         scrollTarget = math.max(0, math.min(maxScroll, target))
         self:SetScript("OnUpdate", Glide)
     end)
 
-    local sizer = CreateFrame("Button", nil, frame)
+    local sizer = CreateFrame("Button", nil, ui.frame)
     sizer:SetSize(14, 14)
     sizer:SetPoint("BOTTOMRIGHT", -3, 3)
     sizer:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
     sizer:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
     sizer:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
     sizer:SetScript("OnMouseDown", function()
-        frame:StartSizing("BOTTOMRIGHT")
+        ui.frame:StartSizing("BOTTOMRIGHT")
     end)
     sizer:SetScript("OnMouseUp", function()
-        frame:StopMovingOrSizing()
+        ui.frame:StopMovingOrSizing()
         Layout()
     end)
 
-    frame:SetScript("OnShow", function()
+    ui.frame:SetScript("OnShow", function()
         Layout()
     end)
-    -- The database's reads are only kept while it's open.
-    frame:HookScript("OnHide", function()
+    -- The database's reads are only kept while it's open, and so is its list (it can be hundreds of
+    -- entries for all classes).
+    ui.frame:HookScript("OnHide", function()
         if mode == "database" then
+            ReleaseRows()
+            grouped = {}
+            lines, lineCount = {}, 0
+            statCache = {}
             itemCache = {}
             if BGV.Rewards and type(BGV.Rewards.ClearDatabase) == "function" then
                 BGV.Rewards.ClearDatabase()
             end
         end
     end)
-    frame:RegisterEvent("CHALLENGE_MODE_MAPS_UPDATE")
-    frame:RegisterEvent("EJ_LOOT_DATA_RECIEVED")
-    frame:RegisterEvent("PLAYER_ENTERING_WORLD")
-    frame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
-    frame:RegisterEvent("PLAYER_LOOT_SPEC_UPDATED")
-    frame:SetScript("OnEvent", function(_, event)
-        if event == "PLAYER_ENTERING_WORLD" then
-            BGV.LootTable.OnCharacterChanged()
-            return
-        end
-        if event == "EJ_LOOT_DATA_RECIEVED" then
-            -- Our own scans fire it too, with the journal changes they make.
-            if not (BGV.Rewards and type(BGV.Rewards.IsScanning) == "function" and BGV.Rewards.IsScanning()) then
-                BGV.LootTable.Nudge()
-            end
-            return
-        end
-        BGV.LootTable.Invalidate()
-    end)
+    -- The game's events reach the table through Core.lua (OnCharacterChanged, Invalidate, Nudge).
 
     -- Escape closes the window through the game's list of windows to close, with the others.
     -- Never replace or wrap the game's CloseWindows to close it first (an earlier version did):
@@ -2861,23 +2841,23 @@ local function Build()
             table.insert(UISpecialFrames, "BetterGreatVaultLootTable")
         end
     end
-    return frame
+    return ui.frame
 end
 
 local function PlaceHeaders()
-    if not headerTitle then
+    if not ui.headerTitle then
         return
     end
-    headerTitle:ClearAllPoints()
+    ui.headerTitle:ClearAllPoints()
     if solo then
-        headerTitle:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -46)
-        if rail and rail.divider then
-            rail.divider:Hide()
+        ui.headerTitle:SetPoint("TOPLEFT", ui.frame, "TOPLEFT", 16, -46)
+        if ui.rail and ui.rail.divider then
+            ui.rail.divider:Hide()
         end
     else
-        headerTitle:SetPoint("TOPLEFT", frame, "TOPLEFT", LEFT_W + 20, -46)
-        if rail and rail.divider then
-            rail.divider:Show()
+        ui.headerTitle:SetPoint("TOPLEFT", ui.frame, "TOPLEFT", LEFT_W + 20, -46)
+        if ui.rail and ui.rail.divider then
+            ui.rail.divider:Show()
         end
     end
 end
@@ -2916,7 +2896,7 @@ end
 
 -- Repaints an open table (the accent color changed in the settings).
 function BGV.LootTable.RefreshStyle()
-    if frame and frame:IsShown() then
+    if ui.frame and ui.frame:IsShown() then
         Layout()
     end
 end

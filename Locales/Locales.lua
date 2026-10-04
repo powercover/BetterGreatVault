@@ -23,6 +23,7 @@ Locale.LANGUAGES = {
     { code = "enUS", name = "English" },
     { code = "deDE", name = "Deutsch (German)" },
     { code = "esES", name = "Español (Spanish)" },
+    { code = "esMX", name = "Español de Latinoamérica (Latin American Spanish)" },
     { code = "frFR", name = "Français (French)" },
     { code = "itIT", name = "Italiano (Italian)" },
     { code = "ptBR", name = "Português (Portuguese)" },
@@ -36,8 +37,14 @@ Locale.LANGUAGES = {
 -- Game locales that share another's translation.
 local SAME_AS = { enGB = "enUS" }
 
+-- A language's translation. The game's own language speaks from the moment its file loads, so the
+-- text the other files make as they load is in it; the saved choice is known only once the saved
+-- settings are (ADDON_LOADED: Locale.Apply).
 function Locale.Register(code, strings)
     translations[code] = strings
+    if code == Locale.Current() then
+        active = strings
+    end
 end
 
 -- The saved choice: "auto" (the game's language) or a locale code.
@@ -79,6 +86,3 @@ function Locale.Name(code)
     end
     return code
 end
-
--- Until the saved choice is known (ADDON_LOADED), the game's language.
-Locale.Apply()

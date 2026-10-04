@@ -149,6 +149,10 @@ BGV.Locale.Register("esMX", {
     ["All specs"] = "Todas las especializaciones",
     ["Shield"] = "Escudo",
     ["Other"] = "Otros",
+    -- where world loot comes from (WorldLoot.lua)
+    ["Delves"] = "Abismos",
+    ["Prey"] = "Presa",
+    ["World Boss"] = "Jefe del mundo",
     ["Item"] = "Objeto",
     ["Vault item level not known yet"] = "Nivel de objeto de la bóveda aún desconocido",
     ["Vault reward: %d item level, %d from the raid's last two bosses"] = "Recompensa de la bóveda: nivel de objeto %d, %d de los dos últimos jefes de la banda",

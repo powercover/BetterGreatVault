@@ -149,6 +149,10 @@ BGV.Locale.Register("deDE", {
     ["All specs"] = "Alle Spezialisierungen",
     ["Shield"] = "Schild",
     ["Other"] = "Sonstiges",
+    -- where world loot comes from (WorldLoot.lua)
+    ["Delves"] = "Tiefen",
+    ["Prey"] = "Beute",
+    ["World Boss"] = "Weltboss",
     ["Item"] = "Gegenstand",
     ["Vault item level not known yet"] = "Gegenstandsstufe der Schatzkammer noch unbekannt",
     ["Vault reward: %d item level, %d from the raid's last two bosses"] = "Schatzkammerbelohnung: Gegenstandsstufe %d, %d von den letzten zwei Bossen des Schlachtzugs",

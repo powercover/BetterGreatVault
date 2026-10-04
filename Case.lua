@@ -146,11 +146,17 @@ local function Random(low, high)
     return low + math.random() * (high - low)
 end
 
+-- The animations' clock: the game's, run ahead by what was played in one go (Case.ShowClaims), so a
+-- case played to its end at once sees the times it would have seen playing.
+local clockAhead = 0
+
+local function Now()
+    return GetTime() + clockAhead
+end
+
 local atan2 = math.atan2 or math.atan
 
-local function AnimationsDisabled()
-    return BetterGreatVaultDB and BetterGreatVaultDB.disableAnimations == true
-end
+local AnimationsDisabled = Utils.AnimationsOff
 
 local function ColorTexture(texture, r, g, b, a)
     if texture.SetColorTexture then
@@ -575,31 +581,33 @@ local function FaceMode(fx, mode)
     end
 end
 
+-- One gate covering `cover` of the slot from its edge (none: hidden). Styles set the gates every
+-- frame, mostly to what they already are, so only what changed is set. Every change of a gate's
+-- size or showing goes through here (GateLayout forgets what was set), which keeps that true.
+local function SetGate(gate, cover, across)
+    if cover > 0.01 then
+        if gate.cover ~= cover then
+            if across then
+                gate:SetWidth(cover)
+            else
+                gate:SetHeight(cover)
+            end
+        end
+        if not (gate.cover and gate.cover > 0.01) then
+            gate:Show()
+        end
+    elseif gate.cover == nil or gate.cover > 0.01 then
+        gate:Hide()
+    end
+    gate.cover = cover
+end
+
 -- How much of the slot each gate covers, from its own edge: the top and bottom gates (in
 -- "columns", the left and right ones; in "right", one gate from the right edge).
 local function Doors(fx, topCover, bottomCover)
-    local top, bottom = fx.topDoor, fx.bottomDoor
     local across = fx.gateLayout == "columns" or fx.gateLayout == "right"
-    if topCover > 0.01 then
-        if across then
-            top:SetWidth(topCover)
-        else
-            top:SetHeight(topCover)
-        end
-        top:Show()
-    else
-        top:Hide()
-    end
-    if bottomCover > 0.01 then
-        if across then
-            bottom:SetWidth(bottomCover)
-        else
-            bottom:SetHeight(bottomCover)
-        end
-        bottom:Show()
-    else
-        bottom:Hide()
-    end
+    SetGate(fx.topDoor, topCover, across)
+    SetGate(fx.bottomDoor, bottomCover, across)
 end
 
 -- Where the gates hang: "rows" (top and bottom, the usual), "columns" (left and right) or
@@ -629,8 +637,9 @@ local function GateLayout(fx, layout)
         bottom:SetPoint("BOTTOMLEFT", fx, "BOTTOMLEFT", 0, 0)
         bottom:SetPoint("BOTTOMRIGHT", fx, "BOTTOMRIGHT", 0, 0)
     end
-    -- the faces sit by the gates' edges: placed again for the new layout
+    -- the faces sit by the gates' edges: placed again for the new layout; the gates' sizes too
     fx.faceMode = nil
+    top.cover, bottom.cover = nil, nil
 end
 
 local function DoorsClosed(fx)
@@ -647,18 +656,29 @@ end
 -- The gates' face tinted (1, 1, 1: as it is), and grey when `grey`: the gates catching a style's
 -- light, heat or rot. Rest puts it back.
 local function FaceTint(fx, r, g, b, grey)
+    -- styles tint every frame, mostly the same; Prepare forgets it for each opening
+    grey = grey == true
+    if fx.tintR == r and fx.tintG == g and fx.tintB == b and fx.tintGrey == grey then
+        return
+    end
+    fx.tintR, fx.tintG, fx.tintB, fx.tintGrey = r, g, b, grey
     local top, bottom = fx.topDoor.face, fx.bottomDoor.face
     top:SetVertexColor(r, g, b)
     bottom:SetVertexColor(r, g, b)
     if top.SetDesaturated then
-        top:SetDesaturated(grey == true)
-        bottom:SetDesaturated(grey == true)
+        top:SetDesaturated(grey)
+        bottom:SetDesaturated(grey)
     end
     fx.faceTinted = true
 end
 
 -- The seams along the gates' inner edges, `top` and `bottom` from the slot's edges (nil: none).
+-- Only Seams moves them, so it skips what's already so.
 local function Seams(fx, top, bottom)
+    if fx.seamTop == top and fx.seamBottom == bottom then
+        return
+    end
+    fx.seamTop, fx.seamBottom = top, bottom
     if top then
         fx.topSeam:ClearAllPoints()
         fx.topSeam:SetPoint("LEFT", fx, "TOPLEFT", REEL_LEFT, -top)
@@ -684,7 +704,7 @@ local function Shake(fx, dt)
     fx.shake = amount
     local x, y = 0, 0
     if amount > 0 then
-        local time = GetTime()
+        local time = Now()
         x, y = math.sin(time * 97) * amount, math.cos(time * 83) * amount * 0.6
     end
     fx:ClearAllPoints()
@@ -837,7 +857,7 @@ local function StartLanding(fx)
     local item = math.ceil(at) + CLAIM_PASS
     local distance = (item - at) * CASE_STRIDE
     fx.landItem = item
-    fx.landEntry = { icon = fx.claim.icon, itemID = fx.claim.itemID }
+    fx.landEntry = fx.claim
     fx.land = { distance = distance, done = 0, t = 0, length = 3 * distance / CLAIM_SPIN }
     PaintReel(fx)
 end
@@ -866,7 +886,7 @@ local function MoveClaimReel(fx, dt)
     land.done = goal
     if k >= 1 then
         fx.land = nil
-        fx.landedAt = fx.landedAt or GetTime()
+        fx.landedAt = fx.landedAt or Now()
         fx.reelSpeed = 0
     end
 end
@@ -906,7 +926,7 @@ end
 local function DressCells(fx, zoom, ghosts, hop, bob, shimmer)
     local marker = (fx.windowWidth or (SLOT_W - REEL_LEFT - REEL_RIGHT)) / 2 + 1
     local speed = fx.reelSpeed or 0
-    local time = GetTime()
+    local time = Now()
     local trail = 0
     if ghosts then
         trail = Clamp01((math.abs(speed) - 260) / 700)
@@ -914,8 +934,13 @@ local function DressCells(fx, zoom, ghosts, hop, bob, shimmer)
     -- a reward landed at the marker (Case.OpenClaim): it grows and the rest dims
     local focus = fx.landedAt and Clamp01((time - fx.landedAt) / CLAIM_GROW) or 0
     fx.dressed = true
+    local windowWidth = fx.windowWidth or (SLOT_W - REEL_LEFT - REEL_RIGHT)
     for index, cell in ipairs(fx.cells) do
         local center = (fx.offset or 0) + (index - 0.5) * CASE_STRIDE
+        -- the cells go left to right: past here (a stride's margin for the blur trails) none shows
+        if center - CASE_STRIDE >= windowWidth then
+            break
+        end
         local near = 1 - math.abs(center - marker) / CASE_STRIDE
         if near < 0 then
             near = 0
@@ -977,15 +1002,24 @@ local function DressCells(fx, zoom, ghosts, hop, bob, shimmer)
     end
 end
 
+-- The reel's items back to how they are at rest: only what changed (the case rests often, and
+-- only DressCells and ResetCells size, place, fade and trail them, keeping track as they do).
 local function ResetCells(fx)
     for _, cell in ipairs(fx.cells) do
-        cell:SetAlpha(1)
-        cell.dressA = 1
-        cell.icon:SetSize(CASE_ICON, CASE_ICON)
-        cell.icon:SetPoint("CENTER", cell, "CENTER", 0, 0)
-        cell.dressW, cell.dressH, cell.dressY = CASE_ICON, CASE_ICON, 0
+        if cell.dressA ~= 1 then
+            cell:SetAlpha(1)
+            cell.dressA = 1
+        end
+        if cell.dressW ~= CASE_ICON or cell.dressH ~= CASE_ICON then
+            cell.icon:SetSize(CASE_ICON, CASE_ICON)
+            cell.dressW, cell.dressH = CASE_ICON, CASE_ICON
+        end
+        if cell.dressY ~= 0 then
+            cell.icon:SetPoint("CENTER", cell, "CENTER", 0, 0)
+            cell.dressY = 0
+        end
         cell.back:SetAlpha(1)
-        if cell.ghosts then
+        if cell.ghostsShown then
             for _, ghost in ipairs(cell.ghosts) do
                 ghost:Hide()
             end
@@ -1066,6 +1100,10 @@ end
 -- seconds, `size` across. Returns it so the caller can set the rest (g, drag, grow, spin, alpha,
 -- late, the texture's color), or nil while the pool is all in use.
 local function Spawn(fx, kind, x, y, vx, vy, life, size)
+    -- played out of sight in one go (Case.ShowClaims): an effect would be gone before it was seen
+    if fx.playingOut then
+        return nil
+    end
     local parts = EnsureParticles(fx)
     for index = 1, PARTICLES do
         local p = parts[index]
@@ -1218,9 +1256,19 @@ local function MaskOff(fx)
     end
 end
 
+-- The circle (or shape) at (x, y) from the slot's centre. Styles set it every frame, mostly as it
+-- is; only MaskCircle sizes and places it, so it skips what's already so.
 local function MaskCircle(fx, x, y, radius, radiusY)
-    fx.circle:SetSize(math.max(1, 2 * radius), math.max(1, 2 * (radiusY or radius)))
-    fx.circle:SetPoint("CENTER", fx, "CENTER", x, y)
+    local circle = fx.circle
+    local w, h = math.max(1, 2 * radius), math.max(1, 2 * (radiusY or radius))
+    if circle.bgvW ~= w or circle.bgvH ~= h then
+        circle:SetSize(w, h)
+        circle.bgvW, circle.bgvH = w, h
+    end
+    if circle.bgvX ~= x or circle.bgvY ~= y then
+        circle:SetPoint("CENTER", fx, "CENTER", x, y)
+        circle.bgvX, circle.bgvY = x, y
+    end
 end
 
 -- The hole's shape: a mask file (white, the shape in alpha), or nil for the circle.
@@ -1262,8 +1310,10 @@ local function RestCommon(fx)
     ColorMarker(fx)
 end
 
-local function Cover(fx, reveal)
-    local _, h = SlotSize(fx)
+-- How much each gate covers once `reveal` (0 to 1) of the reel shows (the slot was measured as the
+-- case opened, Prepare).
+local function GateCover(fx, reveal)
+    local h = fx.slotHeight or SLOT_H
     return math.min(h / 2, GATE_CORNER + (h / 2 - GATE_CORNER) * (1 - reveal))
 end
 
@@ -1296,7 +1346,7 @@ STYLE.classic = {
         else
             reveal = 1 - Smooth(fx.t / 0.5)
         end
-        local cover = Cover(fx, reveal)
+        local cover = GateCover(fx, reveal)
         Doors(fx, cover, cover)
         Seams(fx, cover, cover)
         MoveReel(fx, reveal > 0 and 100 or 0, dt)
@@ -1374,7 +1424,7 @@ STYLE.vault = {
             local b = Clamp01((t - 0.26) / 0.24)
             gap = 4 * math.sin(math.pi * b) * (1 - b)
         end
-        local cover = math.max(0, Cover(fx, reveal) - gap / 2)
+        local cover = math.max(0, GateCover(fx, reveal) - gap / 2)
         Doors(fx, cover, cover)
         Seams(fx, cover, cover)
         MoveReel(fx, speed, dt)
@@ -1524,8 +1574,9 @@ local function PaintBandit(fx, art)
                     local index = ((k + column.seed) % count) + 1
                     local entry = icons[index]
                     if fx.claim and column.mode ~= "spin" and k == column.k then
-                        -- a reward to choose (Case.OpenClaim): every reel stops on it
-                        index, entry = "reward", { icon = fx.claim.icon, itemID = fx.claim.itemID }
+                        -- a reward to choose (Case.OpenClaim): every reel stops on it (the reward
+                        -- itself marks the cell, so another reward paints anew)
+                        index, entry = fx.claim, fx.claim
                     end
                     if cell.item ~= index then
                         cell.item = index
@@ -1562,7 +1613,7 @@ local function PaintBandit(fx, art)
 end
 
 local function Bulbs(fx, art)
-    local now = GetTime()
+    local now = Now()
     local flashing = (fx.flash or 0) > 0
     local key
     if flashing then
@@ -1649,7 +1700,7 @@ STYLE.bandit = {
             face:SetPoint("TOPLEFT", fx, "TOPLEFT", 0, blind * h)
             face:SetPoint("TOPRIGHT", fx, "TOPRIGHT", 0, blind * h)
             art.slats:SetAlpha((blind > 0.002 and blind < 0.998) and 1 or 0)
-            fx.topDoor:SetShown(blind < 0.998)
+            Doors(fx, blind < 0.998 and h or 0, 0)
         end
         -- the reels: all spin, then stop left to right; the middle one landing on an S-tier
         -- item hits the jackpot
@@ -1672,7 +1723,8 @@ STYLE.bandit = {
                 if p >= 1 then
                     column.mode = "held"
                     local count = type(fx.icons) == "table" and #fx.icons or 0
-                    if c == 2 and count > 0 then
+                    -- the middle reel's item, unless it stops on a reward (its jackpot comes below)
+                    if c == 2 and count > 0 and not fx.claim then
                         local color = TierColor(fx.icons[((column.k + column.seed) % count) + 1])
                         if color == TIER_BACK.S then
                             Jackpot(fx)
@@ -1685,7 +1737,7 @@ STYLE.bandit = {
         end
         if fx.claim and held == 3 and not fx.landedAt then
             -- three of the reward: the jackpot, and they stay
-            fx.landedAt = GetTime()
+            fx.landedAt = Now()
             Jackpot(fx)
         end
         if fx.phase == "open" and held == 3 and not fx.claim and fx.cycle >= 0.65 + 0.6 + 0.95 + 1.3 then
@@ -1823,7 +1875,7 @@ STYLE.arcane = {
             art.ring:SetSize(2 * radius / 0.965, 2 * radius / 0.965)
             art.ring:Show()
             art.edge:SetSize(2 * (radius + 5) / 0.92, 2 * (radius + 5) / 0.92)
-            art.edge:SetRotation(-GetTime() * 2)
+            art.edge:SetRotation(-Now() * 2)
             art.edge:Show()
             if math.random() < dt * 30 then
                 local a = Random(0, math.pi * 2)
@@ -1836,7 +1888,7 @@ STYLE.arcane = {
         if fx.phase == "open" and math.random() < dt * 9 then
             Sparkle(fx, Random(-fx.windowWidth / 2 + 6, fx.windowWidth / 2 - 6), -fx.slotHeight / 2 + GATE_CORNER + 4, Random(-6, 6), Random(12, 26), Random(0.8, 1.3), Random(4, 6), 0.81, 0.65, 1)
         end
-        art.runes:SetRotation(GetTime() * 0.5)
+        art.runes:SetRotation(Now() * 0.5)
         fx.flashAmount = math.max(0, fx.flashAmount - dt * 6)
         if fx.flashAmount > 0 then
             local size = 8 + 68 * (1 - fx.flashAmount)
@@ -2258,9 +2310,15 @@ STYLE.cartoon = {
                 InkPuff(fx, cx, 0, 0, 10, 0.45, 14)
             end
         end
-        -- squash and stretch: a spring toward `target`, so it overshoots
-        fx.squashSpeed = fx.squashSpeed + ((target - fx.squash) * 320 - fx.squashSpeed * 14) * dt
-        fx.squash = fx.squash + fx.squashSpeed * dt
+        -- squash and stretch: a spring toward `target`, so it overshoots. A stiff spring stepped a
+        -- long frame at a time runs away (from about 12 fps), so it's stepped at most 1/60 s at a time.
+        local left = dt
+        while left > 0 do
+            local step = math.min(left, REEL_TICK)
+            fx.squashSpeed = fx.squashSpeed + ((target - fx.squash) * 320 - fx.squashSpeed * 14) * step
+            fx.squash = fx.squash + fx.squashSpeed * step
+            left = left - step
+        end
         local fw, fh = w * (1 - fx.squash * 0.5), h * (1 + fx.squash)
         fx.topDoor.face:SetSize(fw, fh)
         fx.bottomDoor.face:SetSize(fw, fh)
@@ -2320,18 +2378,16 @@ end
 
 -- What CaseStyles.lua builds its styles from.
 Case.kit = {
-    MEDIA = MEDIA, WHITE = WHITE, GATE_CORNER = GATE_CORNER, CASE_STRIDE = CASE_STRIDE,
-    REEL_LEFT = REEL_LEFT, REEL_RIGHT = REEL_RIGHT, KINDS = KINDS, STYLE = STYLE,
+    MEDIA = MEDIA, GATE_CORNER = GATE_CORNER, CASE_STRIDE = CASE_STRIDE, KINDS = KINDS, STYLE = STYLE,
     Clamp01 = Clamp01, Smooth = Smooth, EaseOutCubic = EaseOutCubic, EaseInCubic = EaseInCubic,
     EaseInOut = EaseInOut, EaseOutBack = EaseOutBack, EaseOutBounce = EaseOutBounce, Random = Random,
     ColorTexture = ColorTexture, FaceAtlas = FaceAtlas, SlotSize = SlotSize, Levels = Levels,
     FaceMode = FaceMode, Doors = Doors, DoorsClosed = DoorsClosed, GateLayout = GateLayout,
     Seams = Seams, Shake = Shake, MarkerTint = MarkerTint, EnsureMarkerGlow = EnsureMarkerGlow,
-    MoveReel = MoveReel, MoveReelBy = MoveReelBy, EnsureGhosts = EnsureGhosts, DressCells = DressCells,
-    CellBacksAlpha = CellBacksAlpha, EnsureParticles = EnsureParticles, Spawn = Spawn, Dust = Dust,
-    Sparkle = Sparkle, MaskOn = MaskOn, MaskCircle = MaskCircle, MaskShape = MaskShape,
-    RestCommon = RestCommon, Cover = Cover, FrostArt = FrostArt, Shatter = Shatter, FlyShards = FlyShards,
-    FaceTint = FaceTint, PARTICLES = PARTICLES,
+    MoveReel = MoveReel, EnsureGhosts = EnsureGhosts, DressCells = DressCells,
+    CellBacksAlpha = CellBacksAlpha, Spawn = Spawn, MaskOn = MaskOn, MaskCircle = MaskCircle,
+    MaskShape = MaskShape, RestCommon = RestCommon, Shatter = Shatter, FlyShards = FlyShards,
+    FaceTint = FaceTint, Now = Now,
 }
 
 -- --- the vault's rewards to choose from ---------------------------------------------------------------------
@@ -2367,7 +2423,7 @@ end
 -- The reward's name, quality and item level, once the game has the item (asked at most four times
 -- a second). The item level is the vault's own, from the reward's link.
 local function ResolveClaim(claim)
-    local now = GetTime()
+    local now = Now()
     if claim.triedAt and now - claim.triedAt < 0.25 then
         return
     end
@@ -2405,15 +2461,21 @@ local function ClaimTick(fx)
     if not fx.dressed then
         DressCells(fx, 0, false, false, 0, 0)
     end
-    local landed = fx.landedAt and GetTime() - fx.landedAt or -1
-    fx.marker:SetAlpha(landed < 0 and 1 or 1 - Clamp01(landed / 0.25))
+    local landed = fx.landedAt and Now() - fx.landedAt or -1
+    local markerAlpha = landed < 0 and 1 or 1 - Clamp01(landed / 0.25)
+    if fx.markerAlpha ~= markerAlpha then
+        fx.markerAlpha = markerAlpha
+        fx.marker:SetAlpha(markerAlpha)
+    end
     local label = EnsureClaimLabel(fx)
     local shown = 0
     if landed >= 0 and fx.phase == "open" then
         shown = math.min(Clamp01((landed - 0.1) / 0.3), Clamp01(fx.t / 0.2))
     end
     if shown <= 0 then
-        label:Hide()
+        if label:IsShown() then
+            label:Hide()
+        end
         return
     end
     if not claim.name then
@@ -2439,8 +2501,13 @@ local function ClaimTick(fx)
         label:SetFrameLevel(frameLevel)
         label.frameLevel = frameLevel
     end
-    label:SetAlpha(shown)
-    label:SetShown(claim.name ~= nil)
+    if label.shownAlpha ~= shown then
+        label.shownAlpha = shown
+        label:SetAlpha(shown)
+    end
+    if label:IsShown() ~= (claim.name ~= nil) then
+        label:SetShown(claim.name ~= nil)
+    end
 end
 
 -- The case lets go of its reward: back to how any case is.
@@ -2453,6 +2520,7 @@ local function ClearClaim(fx)
     fx.land, fx.landedAt, fx.landItem, fx.landEntry = nil, nil, nil, nil
     fx.reelReady = nil
     fx.marker:SetAlpha(1)
+    fx.markerAlpha = nil
     if fx.claimLabel then
         fx.claimLabel:Hide()
         fx.claimLabel.shownFor = nil
@@ -2465,7 +2533,7 @@ end
 -- game's frame rate. It's set only while a slot animates; with none, nothing runs.
 local driver = CreateFrame("Frame", nil, UIParent)
 local active, activeCount = {}, 0
-local Tick, Drive
+local Tick, Drive, Failed
 
 -- What the animations cost, for /bgv perf: this run of frames, and the last finished one.
 Case.stats = { frames = 0, time = 0, peak = 0, seconds = 0 }
@@ -2525,10 +2593,7 @@ function Drive(_, elapsed)
         if fx and fx.driven then
             local ok, err = pcall(Tick, fx, elapsed)
             if not ok then
-                -- a style that fails puts its slot to rest, rather than failing every frame
-                Utils.NoteError("slot animation", err)
-                fx.driven = false
-                pcall(Case.Rest, fx.owner)
+                Failed(fx, err)
             end
         end
     end
@@ -2577,6 +2642,16 @@ function Case.ActiveCount()
     return count
 end
 
+-- A style's Enter or Rest, protected like its Update (Drive): one that fails is noted, and the
+-- slot's common rest runs in its place.
+local function CallStyle(fx, name)
+    local ok, err = pcall(fx.style[name], fx)
+    if not ok then
+        Utils.NoteError("slot animation", err)
+        RestCommon(fx)
+    end
+end
+
 -- The common setup for any style: the slot's face on the gates, the reel and marker showing.
 local function Prepare(fx)
     local atlas = FaceAtlas(fx.owner)
@@ -2588,6 +2663,7 @@ local function Prepare(fx)
     end
     SlotSize(fx)
     ClearShake(fx)
+    fx.tintR = nil
     fx.window:Show()
     fx.marker:Show()
     ColorMarker(fx)
@@ -2599,7 +2675,7 @@ end
 -- The case opens in its style (the reel as it is). A reward's case keeps the style it was revealed
 -- with until it lets go of the reward: closed for Collect and open again, it's the same case.
 local function StartCase(fx)
-    fx.settling, fx.settled = nil, nil
+    fx.settling, fx.settled, fx.covered = nil, nil, nil
     Prepare(fx)
     if fx.claim and fx.claimStyle then
         fx.style, fx.styleID = fx.claimStyle, fx.claimStyleID
@@ -2612,15 +2688,28 @@ local function StartCase(fx)
     fx.phase, fx.t, fx.entered = "opening", 0, true
     fx.flags = {}
     ShowCase(fx, true)
-    fx.style.Enter(fx)
+    CallStyle(fx, "Enter")
     EnsureTicker(fx)
     FadeCaption(fx.owner, 0)
+end
+
+-- A style that fails puts its slot to rest rather than failing every frame. A reward's case opens
+-- again in the Classic style, so the reward still shows.
+function Failed(fx, err)
+    Utils.NoteError("slot animation", err)
+    fx.driven = false
+    pcall(Case.Rest, fx.owner)
+    if fx.claim and fx.claimStyleID ~= "classic" and STYLE.classic then
+        fx.claimStyle, fx.claimStyleID = STYLE.classic, "classic"
+        fx.claimHeld, fx.want = true, true
+        pcall(StartCase, fx)
+    end
 end
 
 local function Finish(fx)
     local owner = fx.owner
     if fx.style then
-        fx.style.Rest(fx)
+        CallStyle(fx, "Rest")
     end
     fx.phase, fx.t = "closed", 0
     fx.marker:Hide()
@@ -2712,7 +2801,7 @@ function Tick(fx, elapsed)
     style.Update(fx, dt)
     if fx.claim then
         ClaimTick(fx)
-        local since = fx.landedAt and GetTime() - fx.landedAt
+        local since = fx.landedAt and Now() - fx.landedAt
         if fx.claimHeld and fx.phase == "open" and not fx.land and fx.t > CLAIM_SETTLE and since and since > CLAIM_SETTLE
             and (fx.claim.name or since > CLAIM_NAME_WAIT) then
             fx.settling = true
@@ -2764,9 +2853,10 @@ end
 -- The slot at rest: its gates shut over the face, nothing running.
 function Case.Rest(activityFrame)
     local fx = EnsureFX(activityFrame)
+    fx.covered = nil
     StopTicker(fx)
     if fx.style then
-        fx.style.Rest(fx)
+        CallStyle(fx, "Rest")
     else
         RestCommon(fx)
     end
@@ -2794,17 +2884,17 @@ function Case.Stop(activityFrame)
         return
     end
     ClearClaim(fx)
+    fx.covered = nil
     StopTicker(fx)
     if fx.style then
-        fx.style.Rest(fx)
+        CallStyle(fx, "Rest")
     end
     ClearParticles(fx)
     fx.phase, fx.t, fx.want = "closed", 0, false
     ShowCase(fx, false)
     fx.marker:Hide()
     Seams(fx, nil)
-    fx.topDoor:Hide()
-    fx.bottomDoor:Hide()
+    Doors(fx, 0, 0)
     FadeCaption(activityFrame, 1)
 end
 
@@ -2817,9 +2907,10 @@ function Case.Shut(activityFrame)
     end
     local wasOpen = fx.phase ~= "closed" and fx.phase ~= "tail"
     ClearClaim(fx)
+    fx.covered = nil
     StopTicker(fx)
     if fx.style then
-        fx.style.Rest(fx)
+        CallStyle(fx, "Rest")
     end
     ClearParticles(fx)
     fx.phase, fx.t, fx.want = "closed", 0, false
@@ -2836,13 +2927,6 @@ function Case.Shut(activityFrame)
         end
         text.bgvFadeTarget = 1
         text:SetAlpha(1)
-    end
-end
-
-function Case.RepaintAccent(activityFrame)
-    local fx = activityFrame and activityFrame.bgvFX
-    if fx and fx.phase == "closed" then
-        ColorMarker(fx)
     end
 end
 
@@ -2870,6 +2954,9 @@ function Case.OpenClaim(activityFrame, reward, icons)
     PlaceReel(fx)
     if fx.phase == "closed" or fx.phase == "tail" then
         StartCase(fx)
+    else
+        -- open, perhaps settled (its ticker stopped): it spins again and lands on the new reward
+        EnsureTicker(fx)
     end
 end
 
@@ -2889,6 +2976,13 @@ function Case.Cover(activityFrame)
     DoorsClosed(fx)
     fx.marker:Hide()
     ShowCase(fx, true)
+    fx.covered = true
+end
+
+-- Whether the slot is shut waiting for its reward (Case.Cover).
+function Case.IsCovered(activityFrame)
+    local fx = activityFrame and activityFrame.bgvFX
+    return fx ~= nil and fx.covered == true
 end
 
 -- A reward's reel gets a fuller list (it was still loading): swapped in while it still spins.
@@ -2930,6 +3024,50 @@ end
 function Case.HasClaim(activityFrame)
     local fx = activityFrame and activityFrame.bgvFX
     return fx ~= nil and fx.claim ~= nil
+end
+
+-- Away from the vault once the rewards are rolled (UI.lua), each slot holding a reward shows it as
+-- the reveal leaves it, at once and still. Every case in `list` ({ frame, reward, icons }) opens
+-- onto its reward (Case.OpenClaim) and is played to its end in one go, on the animations' clock run
+-- ahead, so it ends just as it would have. A reward whose name the game hasn't loaded yet carries on
+-- in real time from there, as at the vault, until it has. A case already holding its reward stays.
+-- Nothing it would throw into the air is made: it would be gone before it was seen.
+local PLAY_STEP, PLAY_LIMIT = 0.1, 15
+
+function Case.ShowClaims(list)
+    local playing = {}
+    for _, entry in ipairs(list) do
+        local fx = entry.frame.bgvFX
+        if not (fx and fx.claim and fx.claim.itemDBID == entry.reward.itemDBID) then
+            Case.OpenClaim(entry.frame, entry.reward, entry.icons)
+            fx = entry.frame.bgvFX
+            if fx and fx.claim == entry.reward and fx.driven then
+                fx.playingOut = true
+                playing[#playing + 1] = fx
+            end
+        end
+    end
+    local played = 0
+    while #playing > 0 and played < PLAY_LIMIT do
+        clockAhead = clockAhead + PLAY_STEP
+        played = played + PLAY_STEP
+        for index = #playing, 1, -1 do
+            local fx = playing[index]
+            local ok, err = pcall(Tick, fx, PLAY_STEP)
+            if not ok then
+                Failed(fx, err)
+            end
+            -- done: settled (the ticker stopped), or landed and waiting for the reward's name
+            local waiting = fx.claim and not fx.claim.name and fx.landedAt and Now() - fx.landedAt > CLAIM_SETTLE
+            if not fx.driven or waiting then
+                fx.playingOut = nil
+                table.remove(playing, index)
+            end
+        end
+    end
+    for _, fx in ipairs(playing) do
+        fx.playingOut = nil
+    end
 end
 
 -- --- the settings' preview -----------------------------------------------------------------------------------
