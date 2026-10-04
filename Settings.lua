@@ -14,8 +14,8 @@ local BUTTON_H = 24
 -- Where to find the addon online, listed in About. A link without an address yet shows "Coming
 -- soon"; set its `url` once the page exists.
 BGV.Settings.LINKS = {
-    { name = "CurseForge" },
-    { name = "Wago" },
+    { name = "CurseForge", url = "https://www.curseforge.com/wow/addons/better-great-vault" },
+    { name = "Wago", url = "https://addons.wago.io/addons/better-great-vault" },
 }
 
 local panel

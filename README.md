@@ -136,7 +136,9 @@ All specs or All classes.
 
 ### CurseForge and Wago
 
-Coming soon.
+Install it with the CurseForge app or the Wago app, or download it from
+[CurseForge](https://www.curseforge.com/wow/addons/better-great-vault) or
+[Wago](https://addons.wago.io/addons/better-great-vault).
 
 ### Manual
 
