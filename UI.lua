@@ -514,16 +514,143 @@ local function IsSkinPiece(frame)
     return (frame._euiFill and frame._euiTrack) or frame._euiTileBg or frame._euiDarkOverlay
 end
 
+-- The slots the addon shows itself: a completed slot's gates and case, or a reward's case.
+local function Held(activityFrame)
+    local slot = activityFrame.bgvSlot
+    return (slot ~= nil and slot.unlocked == true) or activityFrame.bgvClaim ~= nil
+end
+
+-- Blizzard's selection frames: once a reward is selected, the selected card's frame
+-- (SelectedTexture) and the others' dimmed frame (UnselectedFrame, over their cases). On the addon's
+-- slots they go as soon as Blizzard sets them (SetSelectionState); let go, Blizzard's next
+-- selection shows them as it should. The selected reward's golden glow behind its slot
+-- (SelectionGlow) stays: it's how the selection shows around the case.
+local SELECTION_ART = { "SelectedTexture", "UnselectedFrame" }
+
+local function HideSelectionArt(activityFrame)
+    for _, key in ipairs(SELECTION_ART) do
+        local region = activityFrame[key]
+        if type(region) == "table" and type(region.Hide) == "function" then
+            region:Hide()
+        end
+    end
+end
+
 local function SyncSkin(activityFrame)
     if not activityFrame or type(activityFrame.GetChildren) ~= "function" then
         return
     end
-    local slot = activityFrame.bgvSlot
-    local alpha = ((slot and slot.unlocked) or activityFrame.bgvClaim) and 0 or 1
+    local held = Held(activityFrame)
+    local alpha = held and 0 or 1
     for _, child in ipairs({ activityFrame:GetChildren() }) do
         if IsSkinPiece(child) and child:GetAlpha() ~= alpha then
             child:SetAlpha(alpha)
         end
+    end
+    -- Blizzard's own card (Background) goes too: the gates show its face, and once they open only
+    -- the case shows. Blizzard sets its atlas on each refresh but never shows or hides it, and a
+    -- skin (EllesmereUI) hides it by its alpha, which stays the skin's: so it's hidden and shown here,
+    -- and only where the addon hid it.
+    if (activityFrame.bgvCardHidden or false) ~= held then
+        activityFrame.bgvCardHidden = held
+        local card = activityFrame.Background
+        if type(card) == "table" and type(card.SetShown) == "function" then
+            card:SetShown(not held)
+        end
+    end
+    if held then
+        if not activityFrame.bgvSelectionHook and type(activityFrame.SetSelectionState) == "function" then
+            activityFrame.bgvSelectionHook = true
+            Hook(activityFrame, "SetSelectionState", function(self)
+                if Held(self) then
+                    HideSelectionArt(self)
+                end
+            end)
+        end
+        HideSelectionArt(activityFrame)
+    end
+end
+
+-- EllesmereUI's square Collect buttons: the skin strips Blizzard's golden "selected" frame (drawn
+-- for Blizzard's rounded button) and only tints a selected one, so a selected one gets a square
+-- golden glow of the addon's own, like Blizzard's: a gold edge and a soft halo around it. It needs
+-- the skin's card (an inset frame of the button, marked _euiBorderCreated), so on the default
+-- interface, where Blizzard's own frame shows, it never does.
+local COLLECT_GLOW = 12
+local COLLECT_EDGE = 2
+local GOLD_R, GOLD_G, GOLD_B = 1, 0.8, 0.22
+
+local function SkinCard(button)
+    for _, child in ipairs({ button:GetChildren() }) do
+        if child._euiBorderCreated then
+            return child
+        end
+    end
+end
+
+local function CollectGlow(button)
+    local glow = button.bgvGlow
+    if glow then
+        return glow
+    end
+    glow = CreateFrame("Frame", nil, button)
+    glow:EnableMouse(false)
+    -- the halo: the soft round glow's quarters at the corners, its middle along the edges, so it
+    -- fades the same way all round
+    local file = "Interface\\AddOns\\BetterGreatVault\\Media\\CaseGlow"
+    local function Halo(point, relativePoint, u1, u2, v1, v2, across)
+        local texture = glow:CreateTexture(nil, "ARTWORK")
+        texture:SetTexture(file)
+        texture:SetTexCoord(u1, u2, v1, v2)
+        texture:SetBlendMode("ADD")
+        texture:SetVertexColor(GOLD_R, GOLD_G, GOLD_B, 0.85)
+        texture:SetPoint(point, glow, relativePoint, 0, 0)
+        if across == "width" then
+            texture:SetHeight(COLLECT_GLOW)
+        elseif across == "height" then
+            texture:SetWidth(COLLECT_GLOW)
+        else
+            texture:SetSize(COLLECT_GLOW, COLLECT_GLOW)
+        end
+        return texture
+    end
+    Halo("BOTTOMRIGHT", "TOPLEFT", 0, 0.5, 0, 0.5)
+    Halo("BOTTOMLEFT", "TOPRIGHT", 0.5, 1, 0, 0.5)
+    Halo("TOPRIGHT", "BOTTOMLEFT", 0, 0.5, 0.5, 1)
+    Halo("TOPLEFT", "BOTTOMRIGHT", 0.5, 1, 0.5, 1)
+    Halo("BOTTOMLEFT", "TOPLEFT", 0.49, 0.51, 0, 0.5, "width"):SetPoint("BOTTOMRIGHT", glow, "TOPRIGHT", 0, 0)
+    Halo("TOPLEFT", "BOTTOMLEFT", 0.49, 0.51, 0.5, 1, "width"):SetPoint("TOPRIGHT", glow, "BOTTOMRIGHT", 0, 0)
+    Halo("TOPRIGHT", "TOPLEFT", 0, 0.5, 0.49, 0.51, "height"):SetPoint("BOTTOMRIGHT", glow, "BOTTOMLEFT", 0, 0)
+    Halo("TOPLEFT", "TOPRIGHT", 0.5, 1, 0.49, 0.51, "height"):SetPoint("BOTTOMLEFT", glow, "BOTTOMRIGHT", 0, 0)
+    -- the edge: a fine gold line on the card's own
+    for _, side in ipairs({ { "TOPLEFT", "TOPRIGHT", true }, { "BOTTOMLEFT", "BOTTOMRIGHT", true },
+        { "TOPLEFT", "BOTTOMLEFT", false }, { "TOPRIGHT", "BOTTOMRIGHT", false } }) do
+        local line = Utils.Pixel(glow, "OVERLAY", GOLD_R, GOLD_G, GOLD_B, 1)
+        line:SetPoint(side[1], glow, side[1], 0, 0)
+        line:SetPoint(side[2], glow, side[2], 0, 0)
+        if side[3] then
+            line:SetHeight(COLLECT_EDGE)
+        else
+            line:SetWidth(COLLECT_EDGE)
+        end
+    end
+    glow:Hide()
+    button.bgvGlow = glow
+    return glow
+end
+
+-- After Blizzard sets a Collect button's selection (state 3: selected).
+local function SyncCollectGlow(button, state)
+    local card = SkinCard(button)
+    if card and state == 3 then
+        local glow = CollectGlow(button)
+        -- on the skin's card, as the skin lays it out, above its own edge
+        glow:ClearAllPoints()
+        glow:SetAllPoints(card)
+        glow:SetFrameLevel(card:GetFrameLevel() + 1)
+        glow:Show()
+    elseif button.bgvGlow then
+        button.bgvGlow:Hide()
     end
 end
 
@@ -1270,6 +1397,17 @@ function UI.Hook()
         Hook(WeeklyRewardsFrame, "UpdateOverlay", function(self)
             RefreshAwayNote(self)
         end)
+    end
+
+    -- EllesmereUI's square Collect buttons glow gold when selected (SyncCollectGlow).
+    local concessions = WeeklyRewardsFrame.ConcessionsFrame and WeeklyRewardsFrame.ConcessionsFrame.Rewards
+    if type(concessions) == "table" and type(concessions.GetChildren) == "function" then
+        for _, button in ipairs({ concessions:GetChildren() }) do
+            if type(button) == "table" and type(button.SetSelectionState) == "function" and not button.bgvGlowHook then
+                button.bgvGlowHook = true
+                Hook(button, "SetSelectionState", SyncCollectGlow)
+            end
+        end
     end
 
     -- Pointing at Collect saddens the gates (Faces.lua).

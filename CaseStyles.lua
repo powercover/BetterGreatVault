@@ -445,6 +445,8 @@ end
 
 -- def.shape: a mask file (nil: a circle), def.fill: how much of the mask's half-size the shape
 -- surely covers, def.Radius(fx, art) -> the hole's radius (and its height, for an ellipse) this frame.
+-- The hole goes through the gates as well (K.CutGates), so once it's open nothing of them is left;
+-- def.uncut keeps them whole, for a style that takes them away itself.
 local function HoleStyle(id, def)
     local fill = def.fill or 1
     return {
@@ -461,6 +463,9 @@ local function HoleStyle(id, def)
             K.MaskShape(fx, def.shape and (MEDIA .. def.shape) or nil)
             K.MaskOn(fx, unpack(def.Masked and def.Masked(art) or {}))
             K.MaskCircle(fx, 0, 0, 0)
+            if not def.uncut then
+                K.CutGates(fx)
+            end
             def.Enter(fx, art)
         end,
         Update = function(fx, dt)
@@ -1115,7 +1120,9 @@ Register("blood", "Bonestorm", "DEATHKNIGHT", 250, HoleStyle("blood", {
         art.flash = Tex(art, fx.top, "CaseGlow", "ADD", 1, 0.3, 0.3, "OVERLAY", 5)
         art.wave = Tex(art, fx.top, "CaseRing", "ADD", 1, 0.14, 0.16, "OVERLAY", 5)
         art.burst = Tex(art, fx.top, "CaseVignette", "ADD", 0.95, 0.08, 0.1, "OVERLAY", 5)
+        -- the reel's window, not the slot: round it, once open, is the vault
         art.ambient = Tex(art, fx.mid, "CaseVignette", "ADD", 0.7, 0.03, 0.05)
+        art.ambient:SetAllPoints(fx.window)
     end,
     Enter = function(fx, art)
         Mood(fx, { 0.06, 0.01, 0.015 }, { 1, 0.2, 0.25 }, 0.8)
@@ -1233,10 +1240,11 @@ Register("blood", "Bonestorm", "DEATHKNIGHT", 250, HoleStyle("blood", {
         Ring(fx, art.wave, art.biteAt, 0.35, 0, 0, 40, 190, STORM_ASPECT, 0.75)
         Flash(fx, art.burst, art.burstAt, 0.32, 0, 0, w, h, 0.3)
 
-        -- open: blood light breathing at the slot's edges, the marker in time
+        -- open: blood light breathing at the reel's edges, the marker in time
         local breath = 0.5 + 0.5 * sin(Now() * 2.4)
         if fx.phase == "open" then
-            Put(fx, art.ambient, 0, 0, w, h, 0.12 + 0.08 * breath)
+            art.ambient:SetAlpha(0.12 + 0.08 * breath)
+            Show(art.ambient)
         else
             Off(art.ambient)
         end
@@ -2254,6 +2262,7 @@ local EYES = { { -62, 18 }, { 58, -14 }, { -20, -26 } }
 
 Register("demonology", "Demonic Gateway", "WARLOCK", 266, HoleStyle("demonology", {
     openFor = 0.8, closeFor = 0.55,
+    uncut = true, -- the gateway pulls the gates in under the reel itself
     Build = function(fx, art)
         art.swirl = Tex(art, fx.window, "CaseRunes", "ADD", 0.45, 1, 0.3, "BORDER", 1)
         art.core = Tex(art, fx.window, "CaseGlow", "ADD", 0.5, 0.2, 0.9, "BORDER", 2)
