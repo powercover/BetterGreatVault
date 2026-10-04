@@ -149,6 +149,10 @@ BGV.Locale.Register("frFR", {
     ["All specs"] = "Toutes les spécialisations",
     ["Shield"] = "Bouclier",
     ["Other"] = "Autre",
+    -- where world loot comes from (WorldLoot.lua)
+    ["Delves"] = "Gouffres",
+    ["Prey"] = "Proie",
+    ["World Boss"] = "Boss mondial",
     ["Item"] = "Objet",
     ["Vault item level not known yet"] = "Niveau d'objet de la chambre forte pas encore connu",
     ["Vault reward: %d item level, %d from the raid's last two bosses"] = "Récompense de la chambre forte : niveau d'objet %d, %d sur les deux derniers boss du raid",

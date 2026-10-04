@@ -149,6 +149,10 @@ BGV.Locale.Register("zhCN", {
     ["All specs"] = "所有专精",
     ["Shield"] = "盾牌",
     ["Other"] = "其他",
+    -- where world loot comes from (WorldLoot.lua)
+    ["Delves"] = "地下堡",
+    ["Prey"] = "猎物",
+    ["World Boss"] = "世界首领",
     ["Item"] = "物品",
     ["Vault item level not known yet"] = "宝库物品等级尚未知",
     ["Vault reward: %d item level, %d from the raid's last two bosses"] = "宝库奖励：物品等级 %d，团队副本最后两个首领为 %d",

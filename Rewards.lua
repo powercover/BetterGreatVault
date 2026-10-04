@@ -142,6 +142,15 @@ local MYTHIC_VAULT_ILVL = 334
 local MYTHIC_VAULT_STEP = 6
 -- Myth 9/6: the ceiling only the raid's last two bosses award, when killed on Mythic.
 local MYTHIC_CEILING_ILVL = 344
+-- The season those numbers are for (Midnight Season 2, C_MythicPlus.GetCurrentSeason). In another
+-- season the rule stands down: the vault's own reward links and levels are trusted instead.
+local MYTHIC_RULE_SEASON = 18
+
+local function MythicRuleApplies()
+    local season = C_MythicPlus and Utils.Call(C_MythicPlus.GetCurrentSeason)
+    -- not known yet (early in a login): this season's rule
+    return not (Utils.IsUsableNumber(season) and season > 0) or season == MYTHIC_RULE_SEASON
+end
 
 local function RaidMythicID()
     local ids = DifficultyUtil and DifficultyUtil.ID
@@ -152,6 +161,12 @@ local function RaidMythicID()
         return Enum.Difficulty.Mythic
     end
     return 16
+end
+
+-- Whether a boss was killed on Mythic. Difficulty IDs aren't in rank order (Raid Finder is 17,
+-- Mythic 16), and Mythic is the top raid difficulty: only its own ID counts.
+local function KilledOnMythic(difficultyID)
+    return Utils.IsUsableNumber(difficultyID) and difficultyID == RaidMythicID()
 end
 
 local function IsEndBossBand(info)
@@ -194,11 +209,9 @@ local function MythicEndBossKilled(encounters)
         return (left.uiOrder or 0) > (right.uiOrder or 0)
     end)
 
-    local mythicID = RaidMythicID()
     for index = 1, 2 do
         local encounter = raid[index]
-        local difficulty = encounter and encounter.difficultyID
-        if Utils.IsUsableNumber(difficulty) and difficulty >= mythicID then
+        if encounter and KilledOnMythic(encounter.difficultyID) then
             return true
         end
     end
@@ -206,7 +219,7 @@ local function MythicEndBossKilled(encounters)
 end
 
 local function CapRaidReward(activity, info)
-    if type(activity) ~= "table" or type(info) ~= "table" or not IsEndBossBand(info) then
+    if type(activity) ~= "table" or type(info) ~= "table" or not MythicRuleApplies() or not IsEndBossBand(info) then
         return info
     end
     if not Utils.SameType(activity.type, Utils.ThresholdType("Raid")) then
@@ -280,6 +293,8 @@ local iconLists = {}
 local journalBatches = {}
 local specKnown = {}
 local specAnswers = {}
+-- When a world item's spec answer was first asked for (WorldEntries gives up on it in time).
+local specAskedAt = {}
 
 -- Reads of an instance that didn't settle (see CollectEntries): batchKey -> { tries, since }.
 local readAttempts = {}
@@ -355,6 +370,7 @@ function Rewards.InvalidateIcons()
     -- World spec answers for the database's classes are keyed "class..spec..:item".
     specKnown = DatabaseKeysOnly(specKnown, "class")
     specAnswers = DatabaseKeysOnly(specAnswers, "class")
+    specAskedAt = {}
     mythicMaps = nil
     dbLevels = {}
     dbStamped = {}
@@ -421,7 +437,7 @@ local function SelectedInstance()
     if type(EJ_GetInstanceInfo) ~= "function" then
         return nil
     end
-    -- pcall directly: earlier returns can be nil, which Utils.Call's unpack may cut off at.
+    -- the link is its eighth return
     local ok, _, _, _, _, _, _, _, link = pcall(EJ_GetInstanceInfo)
     local instanceID = ok and type(link) == "string" and tonumber(link:match("journal:%d+:(%d+)")) or nil
     if Utils.IsUsableNumber(instanceID) and instanceID > 0 then
@@ -595,11 +611,7 @@ function Rewards.EnsureJournal()
     if type(EJ_SelectInstance) == "function" and type(EJ_GetNumLoot) == "function" then
         return true
     end
-    if C_AddOns and type(C_AddOns.LoadAddOn) == "function" then
-        C_AddOns.LoadAddOn("Blizzard_EncounterJournal")
-    elseif type(LoadAddOn) == "function" then
-        LoadAddOn("Blizzard_EncounterJournal")
-    end
+    Utils.LoadAddon("Blizzard_EncounterJournal")
     return type(EJ_SelectInstance) == "function" and type(EJ_GetNumLoot) == "function"
 end
 
@@ -692,25 +704,24 @@ local function RaidScope(slot)
         AddID(encounter.activityEncounterID)
         AddInstance(encounter.journalInstanceID)
         if type(encounter.name) == "string" then
-            local function Remember(encounterID)
+            local function RememberName(encounterID)
                 if Utils.IsUsableNumber(encounterID) then
                     names[encounterID] = encounter.name
                 end
             end
-            Remember(encounter.journalEncounterID)
-            Remember(encounter.dungeonEncounterID)
-            Remember(encounter.activityEncounterID)
+            RememberName(encounter.journalEncounterID)
+            RememberName(encounter.dungeonEncounterID)
+            RememberName(encounter.activityEncounterID)
         end
     end
 
     -- The vault's ceiling reward (above the season's normal Mythic cap) can only ever come
     -- from the raid's last two bosses in Journal order, and only if that specific boss was
-    -- itself killed at Mythic or higher. Earlier bosses stay at the normal cap even once the
+    -- itself killed on Mythic (KilledOnMythic). Earlier bosses stay at the normal cap even once the
     -- slot overall is eligible for the ceiling. Mark those specific bosses here so
     -- StampReward can cap every other entry back down regardless of the slot's own reward.
     local function MarkCeilingEncounter(encounter)
-        local mythicID = RaidMythicID()
-        if not (Utils.IsUsableNumber(encounter.difficultyID) and encounter.difficultyID >= mythicID) then
+        if not KilledOnMythic(encounter.difficultyID) then
             return
         end
         local function Mark(encounterID)
@@ -792,6 +803,12 @@ local function JournalInstanceForGameMap(mapID)
     end
 end
 
+-- Whether the season's Mythic+ dungeons are all known (MythicPlusMapInfo): until they are, the lists
+-- read without them are read again when the game's map info arrives (Core).
+function Rewards.MythicMapsKnown()
+    return mythicMaps ~= nil and mythicMaps.unresolved == 0
+end
+
 -- The season's Mythic+ dungeons, from its challenge maps: the journal instance IDs to scan, an
 -- instanceID -> dungeon name map, how many challenge maps there are and how many didn't resolve.
 -- Doesn't touch the journal's selection. Built once per cache reset; with no challenge maps yet
@@ -835,10 +852,12 @@ end
 
 -- Whether any of `specs` can use the item; nil while its data loads. No specs: no filter.
 local function SpecsCanUse(itemID, specs)
-    if type(GetItemSpecInfo) ~= "function" or type(specs) ~= "table" or #specs == 0 then
+    -- C_Item's (in 12.x the bare GetItemSpecInfo is a deprecation fallback only)
+    local getSpecs = C_Item and C_Item.GetItemSpecInfo or GetItemSpecInfo
+    if type(getSpecs) ~= "function" or type(specs) ~= "table" or #specs == 0 then
         return true
     end
-    local usable = GetItemSpecInfo(itemID)
+    local usable = getSpecs(itemID)
     if type(usable) ~= "table" then
         if C_Item and type(C_Item.RequestLoadItemDataByID) == "function" then
             C_Item.RequestLoadItemDataByID(itemID)
@@ -1552,7 +1571,7 @@ end
 -- but only loot from those specific bosses can actually reach it. Every other boss's loot in
 -- that slot stays at the normal cap.
 local function StampReward(entries, slot, ceilingEncounters)
-    local slotAtCeiling = ceilingEncounters ~= nil and IsEndBossBand(slot)
+    local slotAtCeiling = ceilingEncounters ~= nil and MythicRuleApplies() and IsEndBossBand(slot)
     local stamped = {}
     for index, source in ipairs(entries) do
         local entry = {}
@@ -1591,20 +1610,29 @@ local function WorldEntries(specs, answerKey)
     end
     local lookups = 0
     for _, itemID in ipairs(rows) do
-        if Utils.IsUsableNumber(itemID) and IsVaultGear(itemID) then
+        -- an ID the game has no record of (its instant info is there for any real item) is left
+        -- out, never waited for: WorldLoot.lua is kept by hand each season
+        if Utils.IsUsableNumber(itemID) and Utils.ItemInfoInstant(itemID) ~= nil and IsVaultGear(itemID) then
             local key = answerKey .. ":" .. tostring(itemID)
             local allowed
             if specKnown[key] then
                 allowed = specAnswers[key]
+            elseif type(debugprofilestop) == "function" and lookups >= 40 then
+                -- enough asked this pass: the rest on the next one (the answers known still list)
+                pending = true
             else
-                if type(debugprofilestop) == "function" and lookups >= 40 then
-                    pending = true
-                    break
-                end
                 lookups = lookups + 1
                 allowed = SpecsCanUse(itemID, specs)
                 if allowed == nil then
-                    pending = true
+                    -- its data is loading; one that never answers is left out in time, so the
+                    -- list settles
+                    local now = type(GetTime) == "function" and GetTime() or nil
+                    specAskedAt[key] = specAskedAt[key] or now
+                    if now and now - specAskedAt[key] >= ITEM_WAIT_SECONDS then
+                        specKnown[key], specAnswers[key] = true, false
+                    else
+                        pending = true
+                    end
                 else
                     specKnown[key] = true
                     specAnswers[key] = allowed and true or false
@@ -1620,7 +1648,7 @@ local function WorldEntries(specs, answerKey)
                         equipLoc = equipLoc,
                         equipLabel = EQUIP_LABEL[equipLoc] or "Gear",
                         quality = quality,
-                        source = BGV.WorldLootSource and BGV.WorldLootSource[itemID] or "World",
+                        source = BGV.L[BGV.WorldLootSource and BGV.WorldLootSource[itemID] or "World"],
                     }
                 else
                     pending = true
@@ -1855,11 +1883,14 @@ local function SourceSlotItems(slot)
         local instanceIDs, encounterSet, names, ceilingEncounters = RaidScope(slot)
         loadTrace = BetterGreatVaultDB and BetterGreatVaultDB.debug and {} or nil
         local entries, pending = CollectEntries(slot.level, instanceIDs, encounterSet, names)
-        local raidNames = {}
-        for _, instanceID in ipairs(instanceIDs) do
-            raidNames[instanceID] = JournalInstanceName(instanceID)
+        if loadTrace then
+            -- the raids' names, for the debug trace only
+            local raidNames = {}
+            for _, instanceID in ipairs(instanceIDs) do
+                raidNames[instanceID] = JournalInstanceName(instanceID)
+            end
+            ReportLoadTrace("Raid", instanceIDs, raidNames, pending, Utils.LootSpecID(), slot.level)
         end
-        ReportLoadTrace("Raid", instanceIDs, raidNames, pending, Utils.LootSpecID(), slot.level)
         return StampReward(entries, slot, ceilingEncounters), pending
     end
 
@@ -2061,7 +2092,7 @@ local function LearnFromVault()
         if slot.unlocked and Utils.IsUsableNumber(slot.level) and Utils.IsUsableNumber(slot.itemLevel) then
             if Utils.SameType(slot.type, Utils.ThresholdType("Raid")) then
                 -- Mythic follows the season's rule (MYTHIC_VAULT_ILVL, the ceiling for end bosses).
-                if slot.level ~= RaidMythicID() then
+                if slot.level ~= RaidMythicID() or not MythicRuleApplies() then
                     Remember(data, "raid", slot.level, slot.itemLevel)
                 end
             elseif Utils.SameType(slot.type, Utils.ThresholdType("Activities")) then
@@ -2201,7 +2232,7 @@ local function BuildDatabaseLevels(source)
     if source == "raid" then
         for _, difficultyID in ipairs(RaidDifficulties()) do
             local label = Utils.DifficultyName(difficultyID) or tostring(difficultyID)
-            if difficultyID == RaidMythicID() then
+            if difficultyID == RaidMythicID() and MythicRuleApplies() then
                 Add(difficultyID, label, MYTHIC_VAULT_ILVL, MYTHIC_CEILING_ILVL)
             else
                 Add(difficultyID, label, learned[difficultyID])
@@ -2290,7 +2321,7 @@ local function SeasonRaidScope()
     end
     local scope = { instanceIDs = {}, encounterSet = {}, names = {}, ceiling = {}, order = {} }
     local rows = BGV.GreatVault and type(BGV.GreatVault.RaidRows) == "function"
-        and BGV.GreatVault.RaidRows(Utils.ThresholdType("Raid"), 1, 0) or {}
+        and BGV.GreatVault.RaidRows(Utils.ThresholdType("Raid"), 1) or {}
     local byInstance = {}
     for _, row in ipairs(rows) do
         local instanceID = row.journalInstanceID
@@ -2335,13 +2366,14 @@ end
 
 -- A raid reward's pool, as far as it can be known now: last week's kills aren't, so the bosses of
 -- the reward's own raid up to the first one (in the journal's order) that drops it, every one of
--- which was in the pool. Nothing when the reward isn't boss loot (a class set piece).
-local function ClaimRaidEntries(rewardItemID)
+-- which was in the pool, read at the slot's difficulty. Nothing when the reward isn't boss loot
+-- (a class set piece).
+local function ClaimRaidEntries(rewardItemID, difficultyID)
     local scope = SeasonRaidScope()
     if #scope.instanceIDs == 0 then
         return {}, true
     end
-    local entries, pending = WithScan(CollectEntries, RaidMythicID(), scope.instanceIDs, scope.encounterSet, scope.names)
+    local entries, pending = WithScan(CollectEntries, difficultyID, scope.instanceIDs, scope.encounterSet, scope.names)
     local function Order(entry)
         local first
         for _, encounterID in ipairs(type(entry.encounterIDs) == "table" and entry.encounterIDs or { entry.encounterID }) do
@@ -2387,7 +2419,9 @@ function Rewards.ClaimIcons(info, rewardItemID)
     local entries, pending = TierEntries({ Utils.PlayerClassID() })
     local own, ownPending = {}, false
     if Utils.SameType(info.type, Utils.ThresholdType("Raid")) then
-        own, ownPending = ClaimRaidEntries(rewardItemID)
+        -- the slot's own difficulty (Blizzard's activity level): loot that only drops on Mythic
+        -- isn't in a Heroic slot's pool
+        own, ownPending = ClaimRaidEntries(rewardItemID, RAID_RANK[info.level] and info.level or RaidMythicID())
     elseif Utils.SameType(info.type, Utils.ThresholdType("Activities")) or Utils.SameType(info.type, Utils.ThresholdType("World")) then
         own, ownPending = WithScan(SourceSlotItems, { type = info.type, index = info.index, unlocked = true, activityTierID = info.activityTierID })
     end

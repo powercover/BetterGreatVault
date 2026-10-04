@@ -49,8 +49,9 @@ database list every reward for any class and specialization, so you know what to
 - **Your rewards, revealed.** At the Great Vault, with rewards to choose from, every slot holding
   one opens at once in your opening style. Its reel slows to a stop on the item it holds, which
   grows and shows its name and item level. Point at it for the item's own tooltip. Clicking still
-  selects it, and choosing works exactly as in Blizzard's vault. With slot animations off, the
-  vault is Blizzard's.
+  selects it, and choosing works exactly as in Blizzard's vault. Opened from elsewhere once the
+  rewards are rolled, the slots show them the same way, already open and still, under Blizzard's
+  "unclaimed rewards" notice. With slot animations off, the vault is Blizzard's.
 - **Sad gates.** Point at the vault's **Collect** button, which takes another reward instead of an
   item, and your completed slots look disappointed. The slot holding your best reward takes it
   hardest. At the vault, the open slots close over their rewards first, and open onto them again

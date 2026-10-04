@@ -60,14 +60,10 @@ local driver
 -- --- helpers -----------------------------------------------------------------------------------------------
 
 local function Enabled()
-    local saved = BetterGreatVaultDB
-    return not (saved and (saved.disableAnimations == true or saved.disableCollectFaces == true))
+    return not Utils.AnimationsOff() and not (BetterGreatVaultDB and BetterGreatVaultDB.disableCollectFaces == true)
 end
 
-local function ProgressWeek()
-    local rewards = BGV.Rewards
-    return not (rewards and rewards.ShowingWeeklyProgress) or rewards.ShowingWeeklyProgress()
-end
+local ProgressWeek = Utils.ProgressWeek
 
 local function Show(texture)
     if not texture.bgvOn then
@@ -320,9 +316,10 @@ local function Finish(face, stopping)
         -- the slot opened meanwhile: its case has the gates and the caption now
         return
     end
-    if face.handBack and Case.HasClaim(owner) then
-        -- the reward's case opens onto it again (the vault closing shuts it instead)
-        if not stopping then
+    if face.handBack then
+        -- a reward's case opens onto it again (the vault closing shuts it instead); one still
+        -- waiting for its reward stays shut over it
+        if not stopping and Case.HasClaim(owner) then
             Case.ResumeClaim(owner)
         end
     elseif face.claim then
@@ -526,8 +523,9 @@ function Begin(activityFrame, moodName, claim, button)
         K.Levels(fx, false)
         K.GateLayout(fx, "rows")
         K.FaceMode(fx, "wipe")
-        -- a reward's case (Case.OpenClaim) has just shut its gates: the face forms on them
-        face.handBack = Case.HasClaim(activityFrame)
+        -- a reward's case (Case.OpenClaim) has just shut its gates, or one waiting for its reward
+        -- is shut (Case.Cover): the face forms on them
+        face.handBack = Case.HasClaim(activityFrame) or Case.IsCovered(activityFrame)
         if face.handBack then
             face.gate = 1
             K.Doors(fx, fx.slotHeight / 2, fx.slotHeight / 2)

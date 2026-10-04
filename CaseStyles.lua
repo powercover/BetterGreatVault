@@ -13,6 +13,7 @@ local CASE_STRIDE = K.CASE_STRIDE
 local Clamp01, Smooth, EaseOutCubic, EaseInCubic = K.Clamp01, K.Smooth, K.EaseOutCubic, K.EaseInCubic
 local EaseInOut, EaseOutBack, EaseOutBounce = K.EaseInOut, K.EaseOutBack, K.EaseOutBounce
 local Random, Spawn, MoveReel, DressCells = K.Random, K.Spawn, K.MoveReel, K.DressCells
+local Now = K.Now
 local sin, cos, abs, max, min, pi = math.sin, math.cos, math.abs, math.max, math.min, math.pi
 local atan2 = math.atan2 or math.atan
 
@@ -161,10 +162,10 @@ local function Smoke(fx, x, y, vx, vy, life, size, alpha, r, g, b)
     return p
 end
 
--- A ring spreading from (x, y) since `at` (GetTime(); nil: none), over `life`: from `from` to `to`
+-- A ring spreading from (x, y) since `at` (Now(); nil: none), over `life`: from `from` to `to`
 -- across, `squash` its height against its width.
 local function Ring(fx, texture, at, life, x, y, from, to, squash, alpha)
-    local age = at and (GetTime() - at) or -1
+    local age = at and (Now() - at) or -1
     if age < 0 or age >= life then
         Off(texture)
         return
@@ -173,9 +174,9 @@ local function Ring(fx, texture, at, life, x, y, from, to, squash, alpha)
     Put(fx, texture, x, y, size, size * (squash or 1), (alpha or 1) * (1 - age / life))
 end
 
--- A flash that fades over `life` since `at` (GetTime(); nil: none).
+-- A flash that fades over `life` since `at` (Now(); nil: none).
 local function Flash(fx, texture, at, life, x, y, w, h, alpha)
-    local age = at and (GetTime() - at) or -1
+    local age = at and (Now() - at) or -1
     if age < 0 or age >= life then
         Off(texture)
         return
@@ -184,12 +185,12 @@ local function Flash(fx, texture, at, life, x, y, w, h, alpha)
     Put(fx, texture, x, y, w * (1 + 0.3 * k), h * (1 + 0.3 * k), (alpha or 1) * (1 - k) * (1 - k))
 end
 
--- How much of a short glow is left, `life` seconds after `at` (GetTime(); nil: none).
+-- How much of a short glow is left, `life` seconds after `at` (Now(); nil: none).
 local function Since(at, life)
     if not at then
         return 0
     end
-    local age = GetTime() - at
+    local age = Now() - at
     if age < 0 or age >= life then
         return 0
     end
@@ -580,11 +581,11 @@ end
 local function Drift(fx, texture, dt, du, dv, x, y, w, h, alpha)
     texture.bgvU = ((texture.bgvU or 0) + du * dt) % 1
     texture.bgvV = ((texture.bgvV or 0) + dv * dt) % 1
-    local u, v = texture.bgvU, texture.bgvV
-    texture:SetTexCoord(u, u + w / 300, v, v + h / 300)
     if alpha <= 0 then
         Off(texture)
     else
+        local u, v = texture.bgvU, texture.bgvV
+        texture:SetTexCoord(u, u + w / 300, v, v + h / 300)
         Put(fx, texture, x, y, w, h, alpha)
     end
 end
@@ -668,13 +669,13 @@ Register("arms", "Mortal Strike", "WARRIOR", 71, PieceStyle("arms", {
     end,
     Split = function(fx, art)
         fx.shake = 1.6
-        art.flashAt = GetTime()
+        art.flashAt = Now()
         SparksAlong(fx, 14, 0, 0, CUT, 190, 1, 0.8, 0.45)
         Chips(fx, 6, 0, 0, 40, 120, 40)
     end,
     Join = function(fx, art)
         fx.shake = 1
-        art.weldAt = GetTime()
+        art.weldAt = Now()
         SparksAlong(fx, 8, 0, 0, CUT, 150, 1, 0.8, 0.45)
     end,
     Update = function(fx, art, dt)
@@ -753,13 +754,13 @@ Register("fury", "Rampage", "WARRIOR", 72, PieceStyle("fury", {
     end,
     Split = function(fx, art)
         fx.shake = 2
-        art.burstAt = GetTime()
+        art.burstAt = Now()
         Sparks(fx, 16, 0, 0, 0, pi, 120, 280, 1, 0.35, 0.2, 200)
         Chips(fx, 8, 0, 0, 60, 160, 30)
     end,
     Join = function(fx, art)
         fx.shake = 1.2
-        art.hitAt = GetTime()
+        art.hitAt = Now()
     end,
     Update = function(fx, art, dt)
         local t = fx.t
@@ -774,7 +775,7 @@ Register("fury", "Rampage", "WARRIOR", 72, PieceStyle("fury", {
                 if age >= 0 and not fx.flags[index] then
                     fx.flags[index] = true
                     fx.shake = 0.6 + 0.25 * index
-                    art.hitAt = GetTime()
+                    art.hitAt = Now()
                     SparksAlong(fx, 5, 0, 0, cut[2], 80, 1, 0.4, 0.25, 150)
                 end
             end
@@ -789,7 +790,7 @@ Register("fury", "Rampage", "WARRIOR", 72, PieceStyle("fury", {
                 Off(art.glows[index])
                 Off(art.cores[index])
             end
-            local pulse = fx.phase == "open" and 0.12 + 0.06 * sin(GetTime() * 5) or 0.12 * (1 - Clamp01(t / 0.3))
+            local pulse = fx.phase == "open" and 0.12 + 0.06 * sin(Now() * 5) or 0.12 * (1 - Clamp01(t / 0.3))
             Put(fx, art.rage, 0, 0, w * 1.1, h * 1.2, pulse)
             if fx.phase == "open" and Chance(6, dt) then
                 local p = Part(fx, "spark", Random(-fx.windowWidth / 2 + 6, fx.windowWidth / 2 - 6), -h / 2 + GATE_CORNER, Random(-8, 8), Random(30, 60),
@@ -1042,7 +1043,7 @@ local function PlaceBones(fx, art, orbit, omega, fade, scale)
     local streak = min(64, abs(omega) * orbit * 0.045)
     local trail = Clamp01((abs(omega) - 6) / 14) * 0.85
     local grow = (1 + 0.45 * Clamp01((orbit - 44) / 110)) * (scale or 1)
-    local time = GetTime()
+    local time = Now()
     for i, seat in ipairs(art.seat) do
         local a = art.phi + seat.angle
         local x, y, heading = OnOrbit(orbit + seat.out, a)
@@ -1164,7 +1165,7 @@ Register("blood", "Bonestorm", "DEATHKNIGHT", 250, HoleStyle("blood", {
             if t < STORM_GRIND then
                 -- the storm gathers: blood light at the lock, the gates reddening, sparks where bones scrape
                 local k = t / STORM_GRIND
-                Put(fx, art.core, 0, 0, 30 + 60 * EaseOutCubic(k), 26 + 44 * EaseOutCubic(k), 0.2 + 0.5 * k + 0.08 * sin(GetTime() * 31))
+                Put(fx, art.core, 0, 0, 30 + 60 * EaseOutCubic(k), 26 + 44 * EaseOutCubic(k), 0.2 + 0.5 * k + 0.08 * sin(Now() * 31))
                 fx.shake = max(fx.shake or 0, 0.12 + 0.55 * Clamp01((omega - 8) / 18))
                 if t >= STORM_SPIN and Chance(3 + omega * 1.1, dt) then
                     StormSpark(fx, art, orbit)
@@ -1175,7 +1176,7 @@ Register("blood", "Bonestorm", "DEATHKNIGHT", 250, HoleStyle("blood", {
                     -- it bites in: the middle of the gates goes at once
                     flags.bite = true
                     fx.shake = 1.4
-                    art.flashAt = GetTime()
+                    art.flashAt = Now()
                     art.biteAt = art.flashAt
                     Sparks(fx, 12, 0, 0, 0, pi, 130, 280, 1, 0.18, 0.18, 220)
                     Chips(fx, 6, 0, 0, 60, 160, 16)
@@ -1195,7 +1196,7 @@ Register("blood", "Bonestorm", "DEATHKNIGHT", 250, HoleStyle("blood", {
                     -- flung past the edges: a last flare of blood light around the slot
                     flags.fling = true
                     fx.shake = 0.9
-                    art.burstAt = GetTime()
+                    art.burstAt = Now()
                 end
             end
             local red = 0.3 * Clamp01(t / STORM_GRIND)
@@ -1209,7 +1210,7 @@ Register("blood", "Bonestorm", "DEATHKNIGHT", 250, HoleStyle("blood", {
                 -- into the lock, and gone
                 flags.snapped = true
                 fx.shake = 0.9
-                art.flashAt = GetTime()
+                art.flashAt = Now()
                 Burst(fx, "bone", 5, 0, 0, 80, 170, 0.45, 9, 1, 1, 1)
                 Sparks(fx, 6, 0, 0, 0, pi, 70, 150, 1, 0.2, 0.2, 160)
             end
@@ -1222,7 +1223,7 @@ Register("blood", "Bonestorm", "DEATHKNIGHT", 250, HoleStyle("blood", {
         -- the torn edge: blood light on it, the gates darkened around it
         if hole > 1 and hole < art.reach then
             local across = 2 * hole / STORM_FILL
-            Put(fx, art.rim, 0, 0, across, across * STORM_ASPECT, 0.85 + 0.15 * sin(GetTime() * 27))
+            Put(fx, art.rim, 0, 0, across, across * STORM_ASPECT, 0.85 + 0.15 * sin(Now() * 27))
             Put(fx, art.edge, 0, 0, across * 1.07, across * 1.07 * STORM_ASPECT, 0.85)
         else
             Off(art.rim)
@@ -1233,7 +1234,7 @@ Register("blood", "Bonestorm", "DEATHKNIGHT", 250, HoleStyle("blood", {
         Flash(fx, art.burst, art.burstAt, 0.32, 0, 0, w, h, 0.3)
 
         -- open: blood light breathing at the slot's edges, the marker in time
-        local breath = 0.5 + 0.5 * sin(GetTime() * 2.4)
+        local breath = 0.5 + 0.5 * sin(Now() * 2.4)
         if fx.phase == "open" then
             Put(fx, art.ambient, 0, 0, w, h, 0.12 + 0.08 * breath)
         else
@@ -1275,7 +1276,7 @@ Register("destruction", "Chaos Bolt", "WARLOCK", 267, PieceStyle("destruction", 
     end,
     Split = function(fx, art)
         fx.shake = 2.6
-        art.flashAt, art.boomAt = GetTime(), GetTime()
+        art.flashAt, art.boomAt = Now(), Now()
         Off(art.tail)
         Off(art.comet)
         Off(art.core)
@@ -1296,7 +1297,7 @@ Register("destruction", "Chaos Bolt", "WARLOCK", 267, PieceStyle("destruction", 
     end,
     Join = function(fx, art)
         fx.shake = 0.8
-        art.flashAt = GetTime()
+        art.flashAt = Now()
         Burst(fx, "sparkle", 6, 0, 0, 30, 70, 0.4, 7, 0.75, 0.35, 1)
     end,
     Update = function(fx, art, dt)
@@ -1609,7 +1610,7 @@ Register("vengeance", "Sigil Flames", "DEMONHUNTER", 581, WipeStyle("vengeance",
                 Off(column)
             end
             -- the sigil stays, faint, below the reel; soul fragments drift up from it
-            local faint = fx.phase == "open" and 0.3 + 0.1 * sin(GetTime() * 3) or 0.3 * (1 - Clamp01(t / 0.3))
+            local faint = fx.phase == "open" and 0.3 + 0.1 * sin(Now() * 3) or 0.3 * (1 - Clamp01(t / 0.3))
             Put(fx, art.floor, 0, base, w * 0.86, 30, faint)
             if fx.phase == "open" and Chance(3, dt) then
                 local p = Part(fx, "soul", Random(-fx.windowWidth / 2 + 10, fx.windowWidth / 2 - 10), base, Random(-6, 6), Random(18, 32), Random(1.1, 1.6), Random(9, 12), 0.75, 0.5, 1, 0.7)
@@ -1677,7 +1678,7 @@ Register("retribution", "Wake of Ashes", "PALADIN", 70, WipeStyle("retribution",
                 if not fx.flags.struck then
                     fx.flags.struck = true
                     fx.shake = 2.2
-                    art.hitAt = GetTime()
+                    art.hitAt = Now()
                     Sparks(fx, 14, 0, floor, pi / 2, 1.1, 120, 280, 1, 0.85, 0.45, 350)
                     for _ = 1, 3 do
                         Smoke(fx, Random(-40, 40), floor, Random(-40, 40), Random(10, 30), Random(0.6, 0.9), Random(30, 42), 0.5, 0.55, 0.5, 0.42)
@@ -2137,7 +2138,7 @@ Register("devourer", "Void Maw", "DEMONHUNTER", 1480, HoleStyle("devourer", {
         local pull = Clamp01(r / fx.rmax)
         K.FaceTint(fx, 1 - 0.35 * pull, 1 - 0.45 * pull, 1 - 0.15 * pull)
         if r < fx.rmax then
-            art.maw:SetRotation(-GetTime() * 1.6)
+            art.maw:SetRotation(-Now() * 1.6)
             Rim(fx, art.maw, r, r, 1 / 0.9, 1)
             -- bits of the gates are drawn in, spiralling
             if Chance(40, dt) then
@@ -2152,7 +2153,7 @@ Register("devourer", "Void Maw", "DEMONHUNTER", 1480, HoleStyle("devourer", {
             Off(art.maw)
         end
         -- the maw breathes while it's open
-        art.core:SetAlpha(0.45 + 0.2 * sin(GetTime() * 2.5))
+        art.core:SetAlpha(0.45 + 0.2 * sin(Now() * 2.5))
         if fx.phase == "open" and Chance(8, dt) then
             local a = Random(0, pi * 2)
             Part(fx, "sparkle", cos(a) * w * 0.45, sin(a) * h * 0.35, -cos(a) * 40, -sin(a) * 30, Random(0.6, 0.9), Random(4, 6), 0.75, 0.5, 1)
@@ -2160,7 +2161,7 @@ Register("devourer", "Void Maw", "DEMONHUNTER", 1480, HoleStyle("devourer", {
         if fx.phase == "closing" and t >= 0.3 and not fx.flags.bit then
             fx.flags.bit = true
             fx.shake = 1.6
-            art.bitAt = GetTime()
+            art.bitAt = Now()
             Sparks(fx, 8, 0, 0, 0, pi, 60, 140, 0.75, 0.5, 1, 0)
         end
         Flash(fx, art.flash, art.bitAt, 0.2, 0, 0, 60, 60, 1)
@@ -2224,7 +2225,7 @@ Register("shadow", "Void Rift", "PRIEST", 258, HoleStyle("shadow", {
                 local length = 70 * reach
                 local side = tendril[1]
                 -- each grips the rift's edge and reaches out past it, a little wavy
-                Put(fx, texture, side * (rx + length / 2 - 6), tendril[2] + 3 * sin(GetTime() * 6 + index), length, 18, reach)
+                Put(fx, texture, side * (rx + length / 2 - 6), tendril[2] + 3 * sin(Now() * 6 + index), length, 18, reach)
             else
                 Off(texture)
             end
@@ -2239,7 +2240,7 @@ Register("shadow", "Void Rift", "PRIEST", 258, HoleStyle("shadow", {
         end
         if fx.phase == "closing" and t >= 0.45 and not fx.flags.shut then
             fx.flags.shut = true
-            art.shutAt = GetTime()
+            art.shutAt = Now()
         end
         Flash(fx, art.flash, art.shutAt, 0.17, 0, 0, 30, 80, 1)
         MoveReel(fx, fx.phase == "closing" and 60 * (1 - Clamp01(t / 0.3)) or 60, dt)
@@ -2295,7 +2296,7 @@ Register("demonology", "Demonic Gateway", "WARLOCK", 266, HoleStyle("demonology"
         local opening = fx.phase == "opening" and t < 0.15
         if r < fx.rmax or opening then
             local ring = max(r, opening and 30 * t / 0.15 or 0)
-            art.runes:SetRotation(GetTime() * 4)
+            art.runes:SetRotation(Now() * 4)
             Rim(fx, art.ring, ring, ring, 1 / 0.965, 1)
             Rim(fx, art.runes, ring + 6, ring + 6, 1 / 0.92, 0.9)
             if Chance(30, dt) then
@@ -2306,7 +2307,7 @@ Register("demonology", "Demonic Gateway", "WARLOCK", 266, HoleStyle("demonology"
             Off(art.ring)
             Off(art.runes)
         end
-        art.swirl:SetRotation(-GetTime() * 1.2)
+        art.swirl:SetRotation(-Now() * 1.2)
         -- imps peek out of the gateway and blink
         if fx.phase == "open" then
             art.blink = art.blink - dt
@@ -2369,8 +2370,8 @@ Register("affliction", "Corruption", "WARLOCK", 265, HoleStyle("affliction", {
         K.FaceTint(fx, 1 - 0.3 * rot, 1 - 0.45 * rot, 1 - 0.2 * rot, rot > 0.6)
         local size = 2 * r / 0.62
         if r > 0.5 and r < fx.rmax then
-            art.rim:SetRotation(GetTime() * 0.3)
-            art.stain:SetRotation(GetTime() * 0.3)
+            art.rim:SetRotation(Now() * 0.3)
+            art.stain:SetRotation(Now() * 0.3)
             Put(fx, art.rim, 0, 0, size, size, 0.9)
             Put(fx, art.stain, 0, 0, size * 1.12, size * 1.12, 0.8)
             -- souls slip free of the rot and drift up
@@ -2448,7 +2449,7 @@ Register("fire", "Inferno", "MAGE", 63, HoleStyle("fire", {
             if fx.phase == "opening" and not fx.flags.hit then
                 fx.flags.hit = true
                 fx.shake = 1.6
-                art.hitAt = GetTime()
+                art.hitAt = Now()
                 Sparks(fx, 14, 0, 0, 0, pi, 100, 240, 1, 0.65, 0.2, 200)
                 Burst(fx, "ember", 8, 0, 0, 50, 140, 0.6, 7, 1, 0.6, 0.15)
             end
@@ -2459,7 +2460,7 @@ Register("fire", "Inferno", "MAGE", 63, HoleStyle("fire", {
         K.FaceTint(fx, 1 - 0.35 * burn, 1 - 0.55 * burn, 1 - 0.75 * burn)
         local size = 2 * r / 0.68
         if r > 0.5 and r < fx.rmax then
-            local flicker = 0.85 + 0.15 * sin(GetTime() * 23)
+            local flicker = 0.85 + 0.15 * sin(Now() * 23)
             Put(fx, art.rim, 0, 0, size, size, flicker)
             Put(fx, art.char, 0, 0, size * 1.1, size * 1.1, 0.9)
             if Chance(26, dt) then
@@ -2541,7 +2542,7 @@ Register("holypriest", "Halo", "PRIEST", 257, HoleStyle("holypriest", {
             Off(art.ring)
             Off(art.outer)
         end
-        art.warm:SetAlpha(0.2 + 0.08 * sin(GetTime() * 2))
+        art.warm:SetAlpha(0.2 + 0.08 * sin(Now() * 2))
         if fx.phase == "open" and Chance(6, dt) then
             Part(fx, "sparkle", Random(-fx.windowWidth / 2 + 6, fx.windowWidth / 2 - 6), -h / 2 + GATE_CORNER, Random(-4, 4), Random(14, 26), Random(0.8, 1.3), Random(4, 6), 1, 0.95, 0.7, 0.8)
         end
@@ -2705,7 +2706,7 @@ Register("holypaladin", "Divine Light", "PALADIN", 65, SlideStyle("holypaladin",
             Off(art.left)
         end
         local rays = fx.phase == "opening" and Clamp01((t - 0.2) / 0.5) or fx.phase == "open" and 1 or 1 - Clamp01(t / 0.4)
-        art.rays:SetRotation(GetTime() * 0.25)
+        art.rays:SetRotation(Now() * 0.25)
         Put(fx, art.rays, 0, 0, 240, 240, 0.35 * rays)
         if fx.phase == "open" and Chance(6, dt) then
             Part(fx, "sparkle", Random(-fx.windowWidth / 2 + 6, fx.windowWidth / 2 - 6), -h / 2 + GATE_CORNER, Random(-4, 4), Random(15, 30), Random(0.8, 1.2), Random(4, 6), 1, 0.85, 0.45, 0.8)
@@ -2771,7 +2772,7 @@ Register("marksmanship", "Bullseye", "HUNTER", 254, SlideStyle("marksmanship", {
                 PutTurned(fx, art.trail, x + 70, 0, 130, 0, 0.6)
             elseif t >= 0.56 then
                 if not art.hitAt then
-                    art.hitAt = GetTime()
+                    art.hitAt = Now()
                     fx.shake = 1.4
                     Sparks(fx, 8, 0, 0, 0, 1.2, 60, 160, 1, 0.8, 0.5, 300)
                     Chips(fx, 4, 0, 0, 30, 90, 4, 0.55, 0.38, 0.2)
@@ -2852,7 +2853,7 @@ Register("beastmastery", "Beast Bite", "HUNTER", 253, SlideStyle("beastmastery",
                 end
             elseif t < 0.34 then
                 if not art.bitAt then
-                    art.bitAt = GetTime()
+                    art.bitAt = Now()
                     fx.shake = 2.4
                     Burst(fx, "drop", 6, 0, 0, 40, 110, 0.5, 8, 0.7, 0.05, 0.05)
                     Chips(fx, 4, 0, 0, 40, 110, 40)
@@ -2932,7 +2933,7 @@ Register("survival", "Steel Trap", "HUNTER", 255, SlideStyle("survival", {
                 Off(art.ghostL)
                 Off(art.ghostR)
                 if not art.snapAt then
-                    art.snapAt = GetTime()
+                    art.snapAt = Now()
                     fx.shake = 2.6
                     for _ = 1, 16 do
                         local up = math.random() < 0.5 and 0 or pi
@@ -2963,7 +2964,7 @@ Register("survival", "Steel Trap", "HUNTER", 255, SlideStyle("survival", {
             if fx.phase == "closing" and t >= 0.4 and not fx.flags.clank then
                 fx.flags.clank = true
                 fx.shake = 1.4
-                art.snapAt = GetTime()
+                art.snapAt = Now()
                 for _ = 1, 6 do
                     Sparks(fx, 1, 0, Random(-h / 2 + 20, h / 2 - 20), math.random() < 0.5 and 0 or pi, 0.8, 60, 160, 1, 0.75, 0.35, 200, 0.35)
                 end
@@ -3033,7 +3034,7 @@ Register("protpaladin", "Avenger's Shield", "PALADIN", 66, SlideStyle("protpalad
                 if t >= hit[1] and not fx.flags[index] then
                     fx.flags[index] = true
                     fx.shake = 1.3
-                    art.hitAt, art.hitX, art.hitY = GetTime(), x, y
+                    art.hitAt, art.hitX, art.hitY = Now(), x, y
                     Sparks(fx, 10, x, y, hit[2], 0.9, 100, 240, 1, 0.9, 0.55, 150)
                     Chips(fx, 4, x, y, 40, 110, 6)
                 end
@@ -3051,7 +3052,7 @@ Register("protpaladin", "Avenger's Shield", "PALADIN", 66, SlideStyle("protpalad
         end
         if fx.phase == "closing" and t >= 0.4 and not fx.flags.shut then
             fx.flags.shut = true
-            art.shutAt = GetTime()
+            art.shutAt = Now()
             SparksAlong(fx, 6, 0, 0, 0, w * 0.7, 1, 0.9, 0.55, 0)
         end
         Flash(fx, art.seam, art.shutAt, 0.2, 0, 0, w, 24, 0.9)
@@ -3114,7 +3115,7 @@ Register("windwalker", "Palm Strike", "MONK", 269, SlideStyle("windwalker", {
                 speed = 0
             else
                 if not art.strikeAt then
-                    art.strikeAt = GetTime()
+                    art.strikeAt = Now()
                     fx.shake = 1.8
                     K.FaceTint(fx, 1, 1, 1)
                     Sparks(fx, 18, 0, 0, 0, pi, 200, 380, 0.75, 1, 0.85, 0, 0.3)
@@ -3152,8 +3153,15 @@ Register("windwalker", "Palm Strike", "MONK", 269, SlideStyle("windwalker", {
             Off(art.rings[3])
         end
         Flash(fx, art.flash, art.strikeAt, 0.15, 0, 0, w, h, 0.8)
-        art.lines:SetTexCoord((GetTime() * 0.8) % 1, (GetTime() * 0.8) % 1 + fx.windowWidth / 256, 0, 1)
-        Put(fx, art.lines, 0, 0, fx.windowWidth, fx.slotHeight - 2 * GATE_CORNER, Clamp01((speed - 250) / 400) * 0.6)
+        -- speed lines only at speed (cruising, none)
+        local lines = Clamp01((speed - 250) / 400) * 0.6
+        if lines > 0 then
+            local scroll = (Now() * 0.8) % 1
+            art.lines:SetTexCoord(scroll, scroll + fx.windowWidth / 256, 0, 1)
+            Put(fx, art.lines, 0, 0, fx.windowWidth, fx.slotHeight - 2 * GATE_CORNER, lines)
+        else
+            Off(art.lines)
+        end
         MoveReel(fx, speed, dt)
         DressCells(fx, 0, true, false, 0, 0)
         K.Shake(fx, dt)
@@ -3207,7 +3215,7 @@ Register("enhancement", "Stormstrike", "SHAMAN", 263, SlideStyle("enhancement", 
                 if age >= 0 and not fx.flags[index] then
                     fx.flags[index] = true
                     fx.shake = 1.5
-                    art.hitAt = GetTime()
+                    art.hitAt = Now()
                     Sparks(fx, 10, x, 0, side < 0 and pi or 0, 0.8, 120, 260, 0.7, 0.88, 1, 100)
                 end
             end
@@ -3229,7 +3237,7 @@ Register("enhancement", "Stormstrike", "SHAMAN", 263, SlideStyle("enhancement", 
                 Off(art.bolts[index])
             end
             if fx.phase == "closing" and t >= 0.4 and not art.clapAt then
-                art.clapAt = GetTime()
+                art.clapAt = Now()
                 fx.shake = 1.4
                 Sparks(fx, 10, 0, 0, pi / 2, pi, 80, 200, 0.7, 0.88, 1, 0)
             end
@@ -3588,10 +3596,10 @@ local CIRCLE = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 -- The dome: its rim, a faint fill, and a shimmering lattice inside it, `grow` times its size.
 local function Dome(fx, art, grow, alpha)
     local dw, dh = fx.slotWidth * 0.98 * grow, fx.slotHeight * 1.1 * grow
-    local shimmer = 0.85 + 0.15 * sin(GetTime() * 30)
+    local shimmer = 0.85 + 0.15 * sin(Now() * 30)
     Put(fx, art.dome, 0, 0, dw, dh, alpha * shimmer)
     Put(fx, art.fill, 0, 0, dw * 0.95, dh * 0.95, alpha * 0.2)
-    art.hex:SetRotation(GetTime() * 0.2)
+    art.hex:SetRotation(Now() * 0.2)
     art.hexMask:SetPoint("CENTER", fx, "CENTER", 0, 0)
     art.hexMask:SetSize(dw * 0.96, dh * 0.96)
     Put(fx, art.hex, 0, 0, dw * 1.2, dw * 1.2, alpha * 0.35 * shimmer)
@@ -3630,7 +3638,7 @@ Register("discipline", "Barrier", "PRIEST", 256, StillStyle("discipline", {
                 DoorsAlpha(fx, 1)
             else
                 if not art.popAt then
-                    art.popAt = GetTime()
+                    art.popAt = Now()
                     Off(art.dome)
                     Off(art.fill)
                     Off(art.hex)
@@ -3643,7 +3651,7 @@ Register("discipline", "Barrier", "PRIEST", 256, StillStyle("discipline", {
             end
         elseif fx.phase == "open" then
             DoorsAlpha(fx, 0)
-            Put(fx, art.shell, 0, 0, fx.windowWidth * 1.1, (h - 2 * GATE_CORNER) * 1.3, 0.12 + 0.05 * sin(GetTime() * 2))
+            Put(fx, art.shell, 0, 0, fx.windowWidth * 1.1, (h - 2 * GATE_CORNER) * 1.3, 0.12 + 0.05 * sin(Now() * 2))
         else
             -- the dome forms again, the gates come back under it, and it fades
             Off(art.shell)
@@ -3692,7 +3700,7 @@ Register("protwarrior", "Shield Slam", "WARRIOR", 73, StillStyle("protwarrior", 
                     Off(ghost)
                 end
                 if not art.slamAt then
-                    art.slamAt = GetTime()
+                    art.slamAt = Now()
                     fx.shake = 2.6
                     Chips(fx, 10, 0, 0, 80, 200, 30)
                     for n = 0, 7 do
@@ -3818,7 +3826,7 @@ Register("frostdk", "Runic Frost", "DEATHKNIGHT", 251, {
             Off(art.outer)
         end
         -- a faint rune ring turns behind the reel
-        art.behind:SetRotation(GetTime() * 0.4)
+        art.behind:SetRotation(Now() * 0.4)
         Put(fx, art.behind, 0, 0, 96, 96, fx.phase == "open" and 0.2 or 0.2 * Clamp01((t - 0.62) / 0.3))
         K.FlyShards(fx, frost, dt)
         MoveReel(fx, speed, dt)

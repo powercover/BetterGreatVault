@@ -86,14 +86,18 @@ local function RemindRewards()
     end
 end
 
+-- Every loot list read again: the loot table's (which drops Rewards' lists and journal reads too)
+-- and the vault's reels.
 local function RefreshLootLists()
-    if BGV.Rewards and type(BGV.Rewards.InvalidateIcons) == "function" then
-        BGV.Rewards.InvalidateIcons()
-    end
     if BGV.LootTable and type(BGV.LootTable.Invalidate) == "function" then
         BGV.LootTable.Invalidate()
+    elseif BGV.Rewards and type(BGV.Rewards.InvalidateIcons) == "function" then
+        BGV.Rewards.InvalidateIcons()
     end
 end
+
+-- The vault's slots when the loot lists were last read again (GreatVault.Signature).
+local listsSignature
 
 -- Restarts the vault's reel preload if it stopped to wait for journal data (or `always`).
 local function ResumePump(always)
@@ -120,10 +124,18 @@ function BGV.RetryLootLists(itemID)
     return true
 end
 
+-- Hooks Blizzard's vault once it has loaded (its ADDON_LOADED fires inside the LoadAddOn at login,
+-- so this can be asked twice). The addon's slots are laid out on its first show, by the hook on its
+-- own refresh: nothing of Blizzard's is run from here.
+local attached = false
+
 local function AttachToVault()
+    if attached then
+        return
+    end
     BGV.UI.Hook()
     if BGV.UI.hooked then
-        BGV.UI.Prepare()
+        attached = true
         BGV.UI.RefreshOpenFrame()
     end
 end
@@ -339,7 +351,11 @@ frame:SetScript("OnEvent", Utils.Protect("event", function(_, event, arg1)
     if event == "CHALLENGE_MODE_MAPS_UPDATE" then
         BGV.GreatVault.NoteMapsUpdated()
         BGV.GreatVault.Invalidate()
-        RefreshLootLists()
+        -- Blizzard's vault and Mythic+ tab ask for map info every time they show. The season's
+        -- dungeons don't change: the lists are read again only while they weren't all known.
+        if not (BGV.Rewards and type(BGV.Rewards.MythicMapsKnown) == "function" and BGV.Rewards.MythicMapsKnown()) then
+            RefreshLootLists()
+        end
         BGV.UI.RefreshOpenFrame()
         return
     end
@@ -365,6 +381,10 @@ frame:SetScript("OnEvent", Utils.Protect("event", function(_, event, arg1)
     end
 
     if event == "PLAYER_SPECIALIZATION_CHANGED" or event == "PLAYER_LOOT_SPEC_UPDATED" then
+        -- PLAYER_SPECIALIZATION_CHANGED comes for group members too (their unit)
+        if event == "PLAYER_SPECIALIZATION_CHANGED" and arg1 ~= nil and arg1 ~= "player" then
+            return
+        end
         RefreshLootLists()
         BGV.UI.RefreshOpenFrame()
         -- Start loading the new spec's reel lists right away, so hovering a slot doesn't find
@@ -386,7 +406,14 @@ frame:SetScript("OnEvent", Utils.Protect("event", function(_, event, arg1)
         if BGV.Minimap and type(BGV.Minimap.RefreshAttention) == "function" then
             BGV.Minimap.RefreshAttention()
         end
-        RefreshLootLists()
+        -- Blizzard's vault reports an update every time it's shown. The lists are read again when
+        -- the vault's slots have changed (a list is keyed by what its slot holds, so this only
+        -- spares reads nothing changed).
+        local signature = BGV.GreatVault.Signature()
+        if signature == nil or signature ~= listsSignature then
+            listsSignature = signature
+            RefreshLootLists()
+        end
         BGV.GreatVault.Invalidate()
         BGV.Minimap.RefreshBroker()
         if WeeklyRewardsFrame and type(WeeklyRewardsFrame.IsShown) == "function" and WeeklyRewardsFrame:IsShown() then

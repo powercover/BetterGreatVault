@@ -149,6 +149,10 @@ BGV.Locale.Register("itIT", {
     ["All specs"] = "Tutte le specializzazioni",
     ["Shield"] = "Scudo",
     ["Other"] = "Altro",
+    -- where world loot comes from (WorldLoot.lua)
+    ["Delves"] = "Scorribande",
+    ["Prey"] = "Preda",
+    ["World Boss"] = "Boss mondiale",
     ["Item"] = "Oggetto",
     ["Vault item level not known yet"] = "Livello oggetto della banca non ancora noto",
     ["Vault reward: %d item level, %d from the raid's last two bosses"] = "Ricompensa della banca: livello oggetto %d, %d dagli ultimi due boss dell'incursione",

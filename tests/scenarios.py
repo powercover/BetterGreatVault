@@ -816,7 +816,7 @@ def db_levels_persisted(t):
     t.slot("M1", "itemLevel", None)
     t.H.ClearDatabase()
     t.levels("mplus")
-    t.M.mythicPlus.season = 16
+    t.M.mythicPlus.season = 19
     t.M.weekly.steps = t.lua.table()
     t.H.ClearDatabase()
     t.H.DbExpectSteps("mplus", False)
