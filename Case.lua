@@ -1245,6 +1245,11 @@ local function MaskOn(fx, ...)
 end
 
 local function MaskOff(fx)
+    if fx.cut then
+        fx.cut = false
+        fx.topDoor.face:RemoveMaskTexture(fx.topDoor.cut)
+        fx.bottomDoor.face:RemoveMaskTexture(fx.bottomDoor.cut)
+    end
     if not fx.masked then
         return
     end
@@ -1264,11 +1269,57 @@ local function MaskCircle(fx, x, y, radius, radiusY)
     if circle.bgvW ~= w or circle.bgvH ~= h then
         circle:SetSize(w, h)
         circle.bgvW, circle.bgvH = w, h
+        if fx.cut then
+            local scale = fx.cutScale
+            fx.topDoor.cut:SetSize(w * scale, h * scale)
+            fx.bottomDoor.cut:SetSize(w * scale, h * scale)
+        end
     end
     if circle.bgvX ~= x or circle.bgvY ~= y then
         circle:SetPoint("CENTER", fx, "CENTER", x, y)
         circle.bgvX, circle.bgvY = x, y
+        if fx.cut then
+            fx.topDoor.cut:SetPoint("CENTER", fx, "CENTER", x, y)
+            fx.bottomDoor.cut:SetPoint("CENTER", fx, "CENTER", x, y)
+        end
     end
+end
+
+-- The hole through the gates. A style that opens a hole keeps the gates shut under the reel, and
+-- the reel shows only in its window, so round the window (the slot's edges) the gates would stay
+-- once it's open. So each gate's face is cut too, by the hole's inverse (white, the hole clear),
+-- sized and placed with the hole (MaskCircle); outside it the gates show (CLAMPTOWHITE). A shape's
+-- inverse is "<shape>Cut"; the circle's has a margin round it, so it's drawn that much larger.
+local CIRCLE_CUT, CIRCLE_CUT_SCALE = MEDIA .. "CaseCircleCut", 64 / 60
+
+local function CutGate(fx, gate, file, w, h)
+    local cut = gate.cut
+    if not cut then
+        cut = gate:CreateMaskTexture()
+        gate.cut = cut
+    end
+    if gate.cutFile ~= file then
+        cut:SetTexture(file, "CLAMPTOWHITE", "CLAMPTOWHITE")
+        gate.cutFile = file
+    end
+    cut:SetSize(w, h)
+    cut:SetPoint("CENTER", fx, "CENTER", fx.circle.bgvX or 0, fx.circle.bgvY or 0)
+    if not fx.cut then
+        gate.face:AddMaskTexture(cut)
+    end
+end
+
+-- Cuts the hole through the gates as well, from now until the style rests (MaskOff).
+local function CutGates(fx)
+    local circle = EnsureCircle(fx)
+    local file, scale = fx.circleFile .. "Cut", 1
+    if fx.circleFile == CIRCLE_MASK then
+        file, scale = CIRCLE_CUT, CIRCLE_CUT_SCALE
+    end
+    local w, h = (circle.bgvW or 1) * scale, (circle.bgvH or 1) * scale
+    CutGate(fx, fx.topDoor, file, w, h)
+    CutGate(fx, fx.bottomDoor, file, w, h)
+    fx.cut, fx.cutScale = true, scale
 end
 
 -- The hole's shape: a mask file (white, the shape in alpha), or nil for the circle.
@@ -1278,6 +1329,9 @@ local function MaskShape(fx, file)
     if fx.circleFile ~= file then
         fx.circle:SetTexture(file, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
         fx.circleFile = file
+        if fx.cut then
+            CutGates(fx)
+        end
     end
 end
 
@@ -2251,6 +2305,7 @@ STYLE.cartoon = {
         fx.rmax = math.sqrt(w * w + h * h) / 2 + 8
         MaskOn(fx, art.lines)
         MaskCircle(fx, 0, 0, 0)
+        CutGates(fx)
         art.lines:SetAlpha(0)
         art.lines:Show()
         fx.squash, fx.squashSpeed, fx.lineScroll = 0, 0, 0
@@ -2386,8 +2441,8 @@ Case.kit = {
     Seams = Seams, Shake = Shake, MarkerTint = MarkerTint, EnsureMarkerGlow = EnsureMarkerGlow,
     MoveReel = MoveReel, EnsureGhosts = EnsureGhosts, DressCells = DressCells,
     CellBacksAlpha = CellBacksAlpha, Spawn = Spawn, MaskOn = MaskOn, MaskCircle = MaskCircle,
-    MaskShape = MaskShape, RestCommon = RestCommon, Shatter = Shatter, FlyShards = FlyShards,
-    FaceTint = FaceTint, Now = Now,
+    MaskShape = MaskShape, CutGates = CutGates, RestCommon = RestCommon, Shatter = Shatter,
+    FlyShards = FlyShards, FaceTint = FaceTint, Now = Now,
 }
 
 -- --- the vault's rewards to choose from ---------------------------------------------------------------------
