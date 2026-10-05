@@ -142,11 +142,11 @@ Install it with the CurseForge app or the Wago app, or download it from
 
 ### Manual
 
-1. Download the latest version from GitHub (**Code → Download ZIP**).
-2. Extract it into `World of Warcraft/_retail_/Interface/AddOns/`.
-3. Rename the folder to `BetterGreatVault` (GitHub names it `BetterGreatVault-main`). The `.toc`
-   file must sit directly inside it: `Interface/AddOns/BetterGreatVault/BetterGreatVault.toc`.
-4. Restart the game and make sure **Better Great Vault** is enabled in the AddOns list.
+1. Download `BetterGreatVault-<version>.zip` from the
+   [latest release](https://github.com/powercover/BetterGreatVault/releases/latest) on GitHub.
+2. Extract it into `World of Warcraft/_retail_/Interface/AddOns/`, so that the `.toc` file ends up
+   at `Interface/AddOns/BetterGreatVault/BetterGreatVault.toc`.
+3. Restart the game and make sure **Better Great Vault** is enabled in the AddOns list.
 
 No other addons are required.
 

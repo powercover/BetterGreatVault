@@ -1,0 +1,29 @@
+# Packages the addon and publishes it to CurseForge, Wago and this repository's releases whenever a
+# version tag is pushed, with BigWigs' packager (https://github.com/BigWigsMods/packager). A tag
+# with "alpha" or "beta" in its name publishes that kind of file; any other tag is a release. The
+# project IDs come from the TOC, what goes in the zip from .pkgmeta, the notes from CHANGELOG.md.
+name: Release
+
+on:
+  push:
+    tags:
+      - "**"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      CF_API_KEY: ${{ secrets.CF_API_KEY }}
+      WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}
+      GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out the tagged commit, with the history the packager reads
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Package and publish
+        uses: BigWigsMods/packager@v2
