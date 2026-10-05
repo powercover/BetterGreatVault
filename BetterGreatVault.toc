@@ -4,6 +4,8 @@
 ## Author: powercover
 ## Version: 1.0.0
 ## X-License: All Rights Reserved
+## X-Curse-Project-ID: 1727385
+## X-Wago-ID: Q6aqX76W
 ## SavedVariablesPerCharacter: BetterGreatVaultCharDB
 ## AllowLoadGameType: mainline
 ## Category: Character Advancement

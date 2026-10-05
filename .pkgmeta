@@ -1,0 +1,11 @@
+# What the release zip holds (BigWigs' packager, run by .github/workflows/release.yml). Files and
+# folders whose names start with a dot never go in.
+package-as: BetterGreatVault
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
+ignore:
+  - tests
+  - Listing
