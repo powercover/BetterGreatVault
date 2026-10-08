@@ -192,6 +192,11 @@ function BGV.PrintPerformance()
     else
         Line(L["Point at an unlocked slot in the Great Vault, then run this again to see what its animation costs."])
     end
+    local reveal = BGV.UI and BGV.UI.lastReveal
+    if reveal then
+        Line(string.format(L["Last reward reveal: the vault opened in %.1f ms, then %d reel passes, %.1f ms at most"],
+            reveal.open, reveal.passes, reveal.passPeak))
+    end
     local load = BGV.LootTable and BGV.LootTable.lastLoad
     if load and load.redraws > 0 then
         Line(string.format(L["Last loot table load: %.1f ms in all, the longest redraw %.1f ms, redraws: %d"],

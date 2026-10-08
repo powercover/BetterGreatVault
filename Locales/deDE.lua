@@ -300,6 +300,7 @@ BGV.Locale.Register("deDE", {
     ["Last slot animation: %.3f ms a frame on average, %.3f ms at most, %d frames at %.0f fps"] = "Letzte Platz-Animation: %.3f ms pro Frame im Schnitt, höchstens %.3f ms, %d Frames bei %.0f FPS",
     ["Point at an unlocked slot in the Great Vault, then run this again to see what its animation costs."] = "Zeige in der Großen Schatzkammer auf einen freigeschalteten Platz und führe dies dann erneut aus, um die Kosten seiner Animation zu sehen.",
     ["Last loot table load: %.1f ms in all, the longest redraw %.1f ms, redraws: %d"] = "Letztes Laden der Beutetabelle: %.1f ms insgesamt, längstes Neuzeichnen %.1f ms, Neuzeichnungen: %d",
+    ["Last reward reveal: the vault opened in %.1f ms, then %d reel passes, %.1f ms at most"] = "Letzte Enthüllung der Belohnungen: die Schatzkammer öffnete sich in %.1f ms, danach %d Walzendurchgänge, höchstens %.1f ms",
     ["The AddOns list (Esc > AddOns) shows the same CPU figures for every addon."] = "Die AddOn-Liste (Esc > AddOns) zeigt dieselben CPU-Werte für jedes Addon.",
     ["Could not read Great Vault data."] = "Die Daten der Großen Schatzkammer konnten nicht gelesen werden.",
     ["Last error: %s"] = "Letzter Fehler: %s",

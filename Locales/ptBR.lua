@@ -300,6 +300,7 @@ BGV.Locale.Register("ptBR", {
     ["Last slot animation: %.3f ms a frame on average, %.3f ms at most, %d frames at %.0f fps"] = "Última animação de espaço: %.3f ms por quadro em média, %.3f ms no máximo, %d quadros a %.0f FPS",
     ["Point at an unlocked slot in the Great Vault, then run this again to see what its animation costs."] = "Passe o cursor sobre um espaço desbloqueado no Grande Cofre e execute isto de novo para ver quanto custa a animação dele.",
     ["Last loot table load: %.1f ms in all, the longest redraw %.1f ms, redraws: %d"] = "Último carregamento da tabela de saque: %.1f ms no total, o redesenho mais longo %.1f ms, redesenhos: %d",
+    ["Last reward reveal: the vault opened in %.1f ms, then %d reel passes, %.1f ms at most"] = "Última revelação de recompensas: o Cofre abriu em %.1f ms, depois %d passagens dos rolos, no máximo %.1f ms",
     ["The AddOns list (Esc > AddOns) shows the same CPU figures for every addon."] = "A lista de AddOns (Esc > AddOns) mostra os mesmos números de CPU para cada addon.",
     ["Could not read Great Vault data."] = "Não foi possível ler os dados do Grande Cofre.",
     ["Last error: %s"] = "Último erro: %s",

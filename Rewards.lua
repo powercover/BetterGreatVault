@@ -1876,13 +1876,15 @@ function Rewards.SetBonuses(classID, specID)
     return result
 end
 
-local function SourceSlotItems(slot)
+-- `budget` (optional) bounds the journal reading, as in CollectEntries; without one, each call
+-- gets the usual budget of its own.
+local function SourceSlotItems(slot, budget)
     Rewards.EnsureJournal()
 
     if Utils.SameType(slot.type, Utils.ThresholdType("Raid")) then
         local instanceIDs, encounterSet, names, ceilingEncounters = RaidScope(slot)
         loadTrace = BetterGreatVaultDB and BetterGreatVaultDB.debug and {} or nil
-        local entries, pending = CollectEntries(slot.level, instanceIDs, encounterSet, names)
+        local entries, pending = CollectEntries(slot.level, instanceIDs, encounterSet, names, budget)
         if loadTrace then
             -- the raids' names, for the debug trace only
             local raidNames = {}
@@ -1909,7 +1911,7 @@ local function SourceSlotItems(slot)
         end
         local groups = {}
         local pending = false
-        local budget = NewBudget()
+        budget = budget or NewBudget()
         local specID = Utils.LootSpecID()
         loadTrace = BetterGreatVaultDB and BetterGreatVaultDB.debug and {} or nil
         for _, instanceID in ipairs(instanceIDs) do
@@ -2367,13 +2369,13 @@ end
 -- A raid reward's pool, as far as it can be known now: last week's kills aren't, so the bosses of
 -- the reward's own raid up to the first one (in the journal's order) that drops it, every one of
 -- which was in the pool, read at the slot's difficulty. Nothing when the reward isn't boss loot
--- (a class set piece).
-local function ClaimRaidEntries(rewardItemID, difficultyID)
+-- (a class set piece). `budget` (optional) bounds the journal reading, as in CollectEntries.
+local function ClaimRaidEntries(rewardItemID, difficultyID, budget)
     local scope = SeasonRaidScope()
     if #scope.instanceIDs == 0 then
         return {}, true
     end
-    local entries, pending = WithScan(CollectEntries, difficultyID, scope.instanceIDs, scope.encounterSet, scope.names)
+    local entries, pending = WithScan(CollectEntries, difficultyID, scope.instanceIDs, scope.encounterSet, scope.names, budget)
     local function Order(entry)
         local first
         for _, encounterID in ipairs(type(entry.encounterIDs) == "table" and entry.encounterIDs or { entry.encounterID }) do
@@ -2412,7 +2414,9 @@ end
 -- own loot: a Mythic+ or world slot's whole pool, the same every week; a raid slot's as far as it
 -- can be known (ClaimRaidEntries). `info` is Blizzard's activity info for the slot. Returns
 -- { { itemID, icon } } and whether lists are still loading.
-function Rewards.ClaimIcons(info, rewardItemID)
+-- `budget` (optional, Rewards.NewReadBudget): the journal reading every reel of one pass shares,
+-- so a pass over the vault's rewards costs about one budget however many rewards there are.
+function Rewards.ClaimIcons(info, rewardItemID, budget)
     if type(info) ~= "table" then
         return {}, false
     end
@@ -2421,9 +2425,9 @@ function Rewards.ClaimIcons(info, rewardItemID)
     if Utils.SameType(info.type, Utils.ThresholdType("Raid")) then
         -- the slot's own difficulty (Blizzard's activity level): loot that only drops on Mythic
         -- isn't in a Heroic slot's pool
-        own, ownPending = ClaimRaidEntries(rewardItemID, RAID_RANK[info.level] and info.level or RaidMythicID())
+        own, ownPending = ClaimRaidEntries(rewardItemID, RAID_RANK[info.level] and info.level or RaidMythicID(), budget)
     elseif Utils.SameType(info.type, Utils.ThresholdType("Activities")) or Utils.SameType(info.type, Utils.ThresholdType("World")) then
-        own, ownPending = WithScan(SourceSlotItems, { type = info.type, index = info.index, unlocked = true, activityTierID = info.activityTierID })
+        own, ownPending = WithScan(SourceSlotItems, { type = info.type, index = info.index, unlocked = true, activityTierID = info.activityTierID }, budget)
     end
     local icons, seen = {}, {}
     local function Add(entry)

@@ -300,6 +300,7 @@ BGV.Locale.Register("itIT", {
     ["Last slot animation: %.3f ms a frame on average, %.3f ms at most, %d frames at %.0f fps"] = "Ultima animazione di uno slot: %.3f ms per fotogramma in media, %.3f ms al massimo, %d fotogrammi a %.0f FPS",
     ["Point at an unlocked slot in the Great Vault, then run this again to see what its animation costs."] = "Passa il puntatore su uno slot sbloccato della Gran Banca, poi esegui di nuovo questo comando per vedere quanto costa la sua animazione.",
     ["Last loot table load: %.1f ms in all, the longest redraw %.1f ms, redraws: %d"] = "Ultimo caricamento della tabella del bottino: %.1f ms in tutto, il ridisegno più lungo %.1f ms, ridisegni: %d",
+    ["Last reward reveal: the vault opened in %.1f ms, then %d reel passes, %.1f ms at most"] = "Ultima rivelazione delle ricompense: la Banca si è aperta in %.1f ms, poi %d passaggi dei rulli, al massimo %.1f ms",
     ["The AddOns list (Esc > AddOns) shows the same CPU figures for every addon."] = "L'elenco degli AddOn (Esc > AddOn) mostra gli stessi dati sulla CPU per ogni addon.",
     ["Could not read Great Vault data."] = "Impossibile leggere i dati della Gran Banca.",
     ["Last error: %s"] = "Ultimo errore: %s",

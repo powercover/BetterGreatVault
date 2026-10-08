@@ -300,6 +300,7 @@ BGV.Locale.Register("zhTW", {
     ["Last slot animation: %.3f ms a frame on average, %.3f ms at most, %d frames at %.0f fps"] = "上一次欄位動畫：平均每幀 %.3f 毫秒，最多 %.3f 毫秒，共 %d 幀，%.0f FPS",
     ["Point at an unlocked slot in the Great Vault, then run this again to see what its animation costs."] = "在宏偉寶庫中將滑鼠懸停在已解鎖的欄位上，然後再次執行此指令，即可查看其動畫開銷。",
     ["Last loot table load: %.1f ms in all, the longest redraw %.1f ms, redraws: %d"] = "上一次戰利品表載入：共 %.1f 毫秒，最長一次重繪 %.1f 毫秒，重繪次數：%d",
+    ["Last reward reveal: the vault opened in %.1f ms, then %d reel passes, %.1f ms at most"] = "上一次獎勵揭曉：寶庫在 %.1f 毫秒內打開，隨後 %d 次轉輪更新，最長 %.1f 毫秒",
     ["The AddOns list (Esc > AddOns) shows the same CPU figures for every addon."] = "插件列表（Esc > 插件）會顯示每個插件相同的 CPU 數據。",
     ["Could not read Great Vault data."] = "無法讀取宏偉寶庫資料。",
     ["Last error: %s"] = "最後的錯誤：%s",

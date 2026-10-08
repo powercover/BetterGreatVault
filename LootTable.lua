@@ -2824,11 +2824,36 @@ local function Build()
     end)
     -- The game's events reach the table through Core.lua (OnCharacterChanged, Invalidate, Nudge).
 
-    -- Escape closes the window through the game's list of windows to close, with the others.
-    -- Never replace or wrap the game's CloseWindows to close it first (an earlier version did):
-    -- the game closes windows that way on Escape, on death and on loading screens, and with the
-    -- addon's function in the chain, everything it closed was tainted. The Group Finder then
-    -- failed on protected values ("execution tainted by BetterGreatVault").
+    -- Escape closes the window on its own, the Great Vault staying open behind it: while shown,
+    -- the window takes the keyboard, passes every key on to the game (its bindings keep working)
+    -- and keeps Escape for itself. Never replace or wrap the game's CloseWindows to do this (an
+    -- earlier version did): the game closes windows that way on Escape, on death and on loading
+    -- screens, and with the addon's function in the chain, everything it closed was tainted. The
+    -- Group Finder then failed on protected values ("execution tainted by BetterGreatVault").
+    -- In combat an addon can't change what a frame keeps (SetPropagateKeyboardInput is restricted
+    -- since 10.1.5), so a window shown in combat leaves the keyboard alone, and Escape closes it
+    -- with the vault through the game's list below.
+    local function InCombat()
+        return type(InCombatLockdown) == "function" and InCombatLockdown() == true
+    end
+    ui.frame:EnableKeyboard(false)
+    ui.frame:HookScript("OnShow", function(self)
+        if InCombat() then
+            self:EnableKeyboard(false)
+        else
+            self:SetPropagateKeyboardInput(true)
+            self:EnableKeyboard(true)
+        end
+    end)
+    ui.frame:SetScript("OnKeyDown", function(self, key)
+        if key == "ESCAPE" and not InCombat() then
+            self:SetPropagateKeyboardInput(false)
+            self:Hide()
+        end
+    end)
+
+    -- The game's own closing still shuts it on death and on loading screens (and on Escape, in
+    -- combat).
     if type(UISpecialFrames) == "table" then
         local listed = false
         for _, name in ipairs(UISpecialFrames) do
