@@ -1,6 +1,6 @@
 local addonName, BGV = ...
 
-BGV.VERSION = "1.0.0"
+BGV.VERSION = "1.0.1"
 BGV.AUTHOR = "powercover"
 
 local Utils = BGV.Utils
