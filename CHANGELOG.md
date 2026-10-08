@@ -1,18 +1,11 @@
-# Better Great Vault 1.0.0
+# Better Great Vault 1.0.1
 
-The first release.
-
-- **Exact item levels on every slot.** Each Great Vault slot shows its progress and, once it
-  unlocks, the reward's upgrade track and exact item level.
-- **Loot reels.** Point at an unlocked slot and it opens onto a reel of the loot it can give,
-  colored by Best-in-Slot tier.
-- **An opening for every specialization.** 43 animated styles: one for each of the 40
-  specializations, plus three extras.
-- **Your rewards, revealed.** At the vault on reward day, every slot holding a reward opens and
-  lands on it, with its name and item level. Choosing works exactly as in Blizzard's vault.
-- **Loot table and loot database.** Every reward a slot can give, and everything the vault can
-  award this season for any class and specialization, at exact item levels, with search, filters
-  and set bonuses.
-- **Minimap button.** This week's vault at a glance, also in the addon compartment and on data
-  bars.
-- **11 languages**, including Ukrainian.
+- **Escape closes the loot table or loot database first.** The Great Vault stays open behind it;
+  a second Escape closes the vault. (In combat, Escape closes both, as the game forbids addons
+  to keep a key then.)
+- **Smoother reward reveal.** Opening the vault with rewards waiting reads the loot journal in
+  one small slice per pass, however many rewards there are, so the opening animations no longer
+  stutter the first time in a session.
+- **Smoother loot lists while they load.** Rows now move with their items as the list fills
+  instead of being repainted, so the row under the pointer keeps its tooltip.
+- `/bgv perf` reports what the last reward reveal cost.

@@ -2,7 +2,7 @@
 ## Title: Better Great Vault
 ## Notes: Shows Great Vault progress and reward item level on each slot.
 ## Author: powercover
-## Version: 1.0.0
+## Version: 1.0.1
 ## X-License: All Rights Reserved
 ## X-Curse-Project-ID: 1727385
 ## X-Wago-ID: Q6aqX76W

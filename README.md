@@ -5,7 +5,7 @@
 **See exactly what your Great Vault can give before you choose.**
 
 ![Game version](https://img.shields.io/badge/WoW-Retail%2012.1%20(Midnight)-1f6fb2)
-![Addon version](https://img.shields.io/badge/version-1.0.0-d9a633)
+![Addon version](https://img.shields.io/badge/version-1.0.1-d9a633)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-3c9a5f)
 ![Languages](https://img.shields.io/badge/languages-11-7a5cc2)
 ![License](https://img.shields.io/badge/license-all%20rights%20reserved-555555)
