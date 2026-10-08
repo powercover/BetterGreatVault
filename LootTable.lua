@@ -1087,12 +1087,16 @@ end
 
 -- Puts a painted row back in the pool. A row is either painted (in `painted`) or pooled, never
 -- both, so none is handed out twice.
-local function ReleaseRow(index)
-    local row = painted[index]
-    painted[index] = nil
+local function PoolRow(row)
     row:Hide()
     row.entry = nil
     pool[#pool + 1] = row
+end
+
+local function ReleaseRow(index)
+    local row = painted[index]
+    painted[index] = nil
+    PoolRow(row)
 end
 
 local function ReleaseRows()
@@ -1607,14 +1611,54 @@ local function Remember(row, line)
     row.bgvCount = group and #group.entries
 end
 
-local function StillShows(row, line)
+-- Whether `row` shows what `line` shows, wherever it sits.
+local function ShowsLine(row, line)
     local entry, group = line.entry, line.group
-    return row.bgvKind == line.kind and row.bgvY == line.y and row.bgvHeight == line.height
+    return row.bgvKind == line.kind and row.bgvHeight == line.height
         and row.bgvText == line.text and row.bgvStats == line.stats and row.bgvWidth == listWidth
         and row.bgvItem == (entry and entry.itemID) and row.bgvItemLevel == (entry and entry.itemLevel)
         and row.bgvName == (entry and entry.name) and row.bgvIcon == (entry and entry.icon)
-        and row.bgvQuality == (entry and entry.quality) and row.bgvStripe == (line.index and line.index % 2 == 0)
+        and row.bgvQuality == (entry and entry.quality)
         and row.bgvGroup == (group and group.name) and row.bgvCount == (group and #group.entries)
+end
+
+-- Whether `row` shows `line` where it is: a redraw while the list loads keeps such a row as it is.
+local function StillShows(row, line)
+    return row.bgvY == line.y and row.bgvStripe == (line.index and line.index % 2 == 0) and ShowsLine(row, line)
+end
+
+-- What a line or a row shows, as text, to find a row for a line that moved (PaintVisible);
+-- ShowsLine then judges the rest.
+local function LineKey(line)
+    local entry = line.entry
+    return line.kind .. "|" .. tostring(entry and entry.itemID) .. "|" .. tostring(entry and entry.itemLevel)
+        .. "|" .. tostring(line.text) .. "|" .. tostring(line.group and line.group.name)
+end
+
+local function RowKey(row)
+    return tostring(row.bgvKind) .. "|" .. tostring(row.bgvItem) .. "|" .. tostring(row.bgvItemLevel)
+        .. "|" .. tostring(row.bgvText) .. "|" .. tostring(row.bgvGroup)
+end
+
+-- A kept row's line, in a new copy perhaps (a redraw while the list loads): tooltips and clicks
+-- use the current one.
+local function Rebind(row, line)
+    row.entry = line.entry
+    local group = line.kind == "group" and line.group
+    row.bgvTierClass = group and group.entries[1] and group.entries[1].tierClass or nil
+end
+
+-- A row showing its line, moved to where the line went (items arriving above it pushed it down):
+-- the same frame as before, so a row under the pointer keeps its tooltip. Every row hangs at the
+-- same x (PaintItem and the headers); only the stripe follows the line's place in its group.
+local function MoveRow(row, line)
+    row:ClearAllPoints()
+    row:SetPoint("TOPLEFT", ui.child, "TOPLEFT", 4, -line.y)
+    if line.index then
+        row.stripe:SetShown(line.index % 2 == 0)
+    end
+    Rebind(row, line)
+    Remember(row, line)
 end
 
 -- Adds a line below the others; the line tables are reused from one layout to the next.
@@ -1641,7 +1685,8 @@ end
 
 -- Gives the lines in view a row, and takes rows back from lines scrolled out of view. Called by
 -- Layout and whenever the list scrolls or resizes. `recheck`: the lines are new but rows were
--- kept (a redraw while loading), so repaint only the rows that no longer show their line.
+-- kept (a redraw while loading): a row still showing its line stays, one whose line moved moves
+-- with it (MoveRow), and only the rest are painted anew.
 local function PaintVisible(recheck)
     -- A hidden window paints nothing; showing it lays it out (OnShow).
     if not (ui.scroll and ui.child and listWidth and ui.frame:IsVisible()) then
@@ -1674,14 +1719,55 @@ local function PaintVisible(recheck)
     if not recheck and first == paintedFirst and last == paintedLast then
         return
     end
+    -- Rows out of view go back to the pool. On a recheck, a row showing its line where it is
+    -- stays; one whose line moved is kept aside (`spare`, by what it shows) for the line that
+    -- went elsewhere, and whatever finds no line goes to the pool before new rows are painted.
+    local spare
     for index, row in pairs(painted) do
         if index < first or index > last or (recheck and not StillShows(row, lines[index])) then
-            ReleaseRow(index)
+            if recheck then
+                painted[index] = nil
+                spare = spare or {}
+                local key = RowKey(row)
+                local rows = spare[key]
+                if not rows then
+                    rows = {}
+                    spare[key] = rows
+                end
+                rows[#rows + 1] = row
+            else
+                ReleaseRow(index)
+            end
         elseif recheck then
-            -- The same item, maybe in a new copy: tooltips and clicks use the current one.
-            row.entry = lines[index].entry
-            local group = lines[index].kind == "group" and lines[index].group
-            row.bgvTierClass = group and group.entries[1] and group.entries[1].tierClass or nil
+            Rebind(row, lines[index])
+        end
+    end
+    if spare then
+        for index = first, last do
+            if not painted[index] then
+                local line = lines[index]
+                local rows = spare[LineKey(line)]
+                if rows then
+                    -- the nearest of the rows showing it (two alike: each stays closest to its place)
+                    local nearest, distance
+                    for position, row in ipairs(rows) do
+                        local apart = math.abs(row.bgvY - line.y)
+                        if ShowsLine(row, line) and (not nearest or apart < distance) then
+                            nearest, distance = position, apart
+                        end
+                    end
+                    if nearest then
+                        local row = table.remove(rows, nearest)
+                        MoveRow(row, line)
+                        painted[index] = row
+                    end
+                end
+            end
+        end
+        for _, rows in pairs(spare) do
+            for _, row in ipairs(rows) do
+                PoolRow(row)
+            end
         end
     end
     for index = first, last do
