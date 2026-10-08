@@ -300,6 +300,7 @@ BGV.Locale.Register("koKR", {
     ["Last slot animation: %.3f ms a frame on average, %.3f ms at most, %d frames at %.0f fps"] = "마지막 칸 애니메이션: 프레임당 평균 %.3f ms, 최대 %.3f ms, %d 프레임, %.0f FPS",
     ["Point at an unlocked slot in the Great Vault, then run this again to see what its animation costs."] = "위대한 금고에서 잠금 해제된 칸에 마우스를 올린 뒤 다시 실행하면 그 애니메이션의 비용을 볼 수 있습니다.",
     ["Last loot table load: %.1f ms in all, the longest redraw %.1f ms, redraws: %d"] = "마지막 전리품 표 불러오기: 총 %.1f ms, 가장 긴 다시 그리기 %.1f ms, 다시 그리기: %d회",
+    ["Last reward reveal: the vault opened in %.1f ms, then %d reel passes, %.1f ms at most"] = "마지막 보상 공개: 금고가 %.1f ms 만에 열렸고, 이후 릴 처리 %d회, 최대 %.1f ms",
     ["The AddOns list (Esc > AddOns) shows the same CPU figures for every addon."] = "애드온 목록(Esc > 애드온)에서 모든 애드온의 같은 CPU 수치를 볼 수 있습니다.",
     ["Could not read Great Vault data."] = "위대한 금고 정보를 읽을 수 없습니다.",
     ["Last error: %s"] = "마지막 오류: %s",

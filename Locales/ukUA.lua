@@ -300,6 +300,7 @@ BGV.Locale.Register("ukUA", {
     ["Last slot animation: %.3f ms a frame on average, %.3f ms at most, %d frames at %.0f fps"] = "Остання анімація комірки: в середньому %.3f мс на кадр, щонайбільше %.3f мс, %d кадрів при %.0f FPS",
     ["Point at an unlocked slot in the Great Vault, then run this again to see what its animation costs."] = "Наведіть курсор на відкриту комірку Великого сховища й виконайте команду знову, щоб побачити, скільки коштує її анімація.",
     ["Last loot table load: %.1f ms in all, the longest redraw %.1f ms, redraws: %d"] = "Останнє завантаження таблиці здобичі: усього %.1f мс, найдовше перемальовування %.1f мс, перемальовувань: %d",
+    ["Last reward reveal: the vault opened in %.1f ms, then %d reel passes, %.1f ms at most"] = "Останнє розкриття нагород: сховище відкрилося за %.1f мс, потім %d проходів барабанів, щонайбільше %.1f мс",
     ["The AddOns list (Esc > AddOns) shows the same CPU figures for every addon."] = "Список аддонів (Esc > AddOns) показує ті самі дані про ЦП для кожного аддона.",
     ["Could not read Great Vault data."] = "Не вдалося прочитати дані Великого сховища.",
     ["Last error: %s"] = "Остання помилка: %s",

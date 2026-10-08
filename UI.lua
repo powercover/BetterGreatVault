@@ -906,12 +906,13 @@ end
 
 -- What a reward's reel spins through: what its slot could have awarded (Rewards.ClaimIcons), and,
 -- while that's short (still loading), the vault's other rewards too, never Collect's currencies.
+-- `budget` is the pass's journal reading budget, shared by every reel it fills.
 local CLAIM_REEL_MIN = 8
 
-local function ClaimIcons(activityFrame, reward, held)
+local function ClaimIcons(activityFrame, reward, held, budget)
     local icons, pending = {}, false
     if BGV.Rewards and type(BGV.Rewards.ClaimIcons) == "function" then
-        local ok, list, loading = pcall(BGV.Rewards.ClaimIcons, activityFrame.info, reward.itemID)
+        local ok, list, loading = pcall(BGV.Rewards.ClaimIcons, activityFrame.info, reward.itemID, budget)
         if ok and type(list) == "table" then
             icons, pending = list, loading == true
         elseif not ok then
@@ -949,6 +950,23 @@ local function Shuffled(list)
     return out
 end
 
+-- One journal reading budget for a whole pass over the rewards (the reveal, and each pass that
+-- fills the reels after it): the pass reads about one budget's worth of the journal in all, not one
+-- per reward, so the frame it runs in stays short. Reels left short wait for the next pass.
+local function ReadBudget()
+    if BGV.Rewards and type(BGV.Rewards.NewReadBudget) == "function" then
+        return BGV.Rewards.NewReadBudget()
+    end
+end
+
+local function Clock()
+    return type(debugprofilestop) == "function" and debugprofilestop() or nil
+end
+
+-- What the last reveal cost, for /bgv perf: the frame the vault opened its rewards in, and the
+-- passes that filled the reels after it.
+UI.lastReveal = nil
+
 -- Rewards still loading: ask again shortly, for up to CLAIM_WAIT seconds, before opening any.
 local CLAIM_WAIT = 2
 local claimRetry = false
@@ -969,17 +987,25 @@ local function RefreshClaimReels(vault, held, since)
         if not vault:IsShown() or GetTime() - since > CLAIM_REEL_WAIT then
             return
         end
+        local budget, started = ReadBudget(), Clock()
         local waiting = false
         for _, entry in ipairs(held) do
             local activityFrame = entry.frame
             if activityFrame.bgvClaim and activityFrame.bgvClaim.itemDBID == entry.reward.itemDBID and entry.reelPending then
-                local icons, pending = ClaimIcons(activityFrame, entry.reward, held)
+                local icons, pending = ClaimIcons(activityFrame, entry.reward, held, budget)
                 if #icons > (entry.reelCount or 0) and Case.SetClaimIcons(activityFrame, Shuffled(icons)) then
                     entry.reelCount = #icons
                 end
                 entry.reelPending = pending
                 waiting = waiting or pending
             end
+        end
+        local reveal = UI.lastReveal
+        if started and reveal then
+            local spent = Clock() - started
+            reveal.passes = reveal.passes + 1
+            reveal.passTime = reveal.passTime + spent
+            reveal.passPeak = math.max(reveal.passPeak, spent)
         end
         if waiting then
             RefreshClaimReels(vault, held, since)
@@ -1031,6 +1057,7 @@ function ApplyClaim(vault)
     end
     local still = not AtVault()
     local reelsLoading, shown = false, {}
+    local budget, started, opened = ReadBudget(), Clock(), 0
     for _, entry in ipairs(held) do
         local activityFrame = entry.frame
         -- the week's progress view goes: the slot shows its reward now
@@ -1051,7 +1078,8 @@ function ApplyClaim(vault)
         local fresh = not (activityFrame.bgvClaim and activityFrame.bgvClaim.itemDBID == entry.reward.itemDBID)
         activityFrame.bgvClaim = entry.reward
         if fresh then
-            local icons, pending = ClaimIcons(activityFrame, entry.reward, held)
+            opened = opened + 1
+            local icons, pending = ClaimIcons(activityFrame, entry.reward, held, budget)
             if still then
                 shown[#shown + 1] = { frame = activityFrame, reward = entry.reward, icons = Shuffled(icons) }
             else
@@ -1067,6 +1095,9 @@ function ApplyClaim(vault)
     end
     if #shown > 0 then
         Case.ShowClaims(shown)
+    end
+    if opened > 0 and started then
+        UI.lastReveal = { open = Clock() - started, passes = 0, passTime = 0, passPeak = 0 }
     end
     if reelsLoading then
         RefreshClaimReels(vault, held, GetTime())

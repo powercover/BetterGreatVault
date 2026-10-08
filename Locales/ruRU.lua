@@ -300,6 +300,7 @@ BGV.Locale.Register("ruRU", {
     ["Last slot animation: %.3f ms a frame on average, %.3f ms at most, %d frames at %.0f fps"] = "Последняя анимация ячейки: в среднем %.3f мс на кадр, максимум %.3f мс, %d кадров при %.0f FPS",
     ["Point at an unlocked slot in the Great Vault, then run this again to see what its animation costs."] = "Наведите курсор на открытую ячейку Великого хранилища и выполните команду снова, чтобы увидеть, сколько стоит её анимация.",
     ["Last loot table load: %.1f ms in all, the longest redraw %.1f ms, redraws: %d"] = "Последняя загрузка таблицы добычи: всего %.1f мс, самая долгая перерисовка %.1f мс, перерисовок: %d",
+    ["Last reward reveal: the vault opened in %.1f ms, then %d reel passes, %.1f ms at most"] = "Последнее раскрытие наград: хранилище открылось за %.1f мс, затем %d проходов барабанов, не более %.1f мс",
     ["The AddOns list (Esc > AddOns) shows the same CPU figures for every addon."] = "Список модификаций (Esc > Модификации) показывает те же данные о ЦП для каждого аддона.",
     ["Could not read Great Vault data."] = "Не удалось прочитать данные Великого хранилища.",
     ["Last error: %s"] = "Последняя ошибка: %s",
