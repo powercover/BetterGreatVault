@@ -5,8 +5,31 @@ BGV.Minimap = {}
 local Utils = BGV.Utils
 local L = BGV.L
 local MEDIA = "Interface\\AddOns\\BetterGreatVault\\Media\\"
-local RADIUS = 80
+-- How far outside the minimap's edge the button's center sits. LibDBIcon-1.0, which most addons'
+-- minimap buttons use, places them the same way, so ours lines up with theirs.
+local EDGE_OFFSET = 5
+-- Before the minimap has a size (early in loading): the old minimap's edge.
+local FALLBACK_RADIUS = 80
 local DEFAULT_ANGLE = 220
+
+-- Which quarters of the minimap are round (GetMinimapShape, set by minimap addons): right-bottom,
+-- left-bottom, right-top, left-top. In a square quarter the button follows the edges instead.
+local MINIMAP_SHAPES = {
+    ["ROUND"] = { true, true, true, true },
+    ["SQUARE"] = { false, false, false, false },
+    ["CORNER-TOPLEFT"] = { false, false, false, true },
+    ["CORNER-TOPRIGHT"] = { false, false, true, false },
+    ["CORNER-BOTTOMLEFT"] = { false, true, false, false },
+    ["CORNER-BOTTOMRIGHT"] = { true, false, false, false },
+    ["SIDE-LEFT"] = { false, true, false, true },
+    ["SIDE-RIGHT"] = { true, false, true, false },
+    ["SIDE-TOP"] = { false, false, true, true },
+    ["SIDE-BOTTOM"] = { true, true, false, false },
+    ["TRICORNER-TOPLEFT"] = { false, true, true, true },
+    ["TRICORNER-TOPRIGHT"] = { true, false, true, true },
+    ["TRICORNER-BOTTOMLEFT"] = { true, true, false, true },
+    ["TRICORNER-BOTTOMRIGHT"] = { true, true, true, false },
+}
 
 local function ShowMinimap()
     return not BetterGreatVaultDB or BetterGreatVaultDB.showMinimap ~= false
@@ -207,9 +230,35 @@ local function Place()
     end
     local angle = BetterGreatVaultDB and BetterGreatVaultDB.minimapAngle or DEFAULT_ANGLE
     local rad = math.rad(angle)
+    local x, y = math.cos(rad), math.sin(rad)
+    -- Just outside the minimap's edge, whatever its size (the old minimap was 140 wide, today's
+    -- is about 198, and minimap addons resize it).
+    local width, height = Minimap:GetWidth(), Minimap:GetHeight()
+    local w = width and width > 0 and width / 2 + EDGE_OFFSET or FALLBACK_RADIUS
+    local h = height and height > 0 and height / 2 + EDGE_OFFSET or FALLBACK_RADIUS
+    local quarter = 1
+    if x < 0 then
+        quarter = quarter + 1
+    end
+    if y > 0 then
+        quarter = quarter + 2
+    end
+    local shape = type(GetMinimapShape) == "function" and GetMinimapShape() or "ROUND"
+    local round = MINIMAP_SHAPES[shape] or MINIMAP_SHAPES.ROUND
+    if round[quarter] then
+        x, y = x * w, y * h
+    else
+        x = math.max(-w, math.min(x * (math.sqrt(2 * w * w) - 10), w))
+        y = math.max(-h, math.min(y * (math.sqrt(2 * h * h) - 10), h))
+    end
     button:ClearAllPoints()
-    button:SetPoint("CENTER", Minimap, "CENTER", math.cos(rad) * RADIUS, math.sin(rad) * RADIUS)
+    button:SetPoint("CENTER", Minimap, "CENTER", x, y)
 end
+
+-- A minimap addon resizing the minimap moves the edge.
+Minimap:HookScript("OnSizeChanged", function()
+    Place()
+end)
 
 local placed = false
 local hovered = false
