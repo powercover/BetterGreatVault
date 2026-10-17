@@ -1,11 +1,8 @@
-# Better Great Vault 1.0.1
+# Better Great Vault 1.0.2
 
-- **Escape closes the loot table or loot database first.** The Great Vault stays open behind it;
-  a second Escape closes the vault. (In combat, Escape closes both, as the game forbids addons
-  to keep a key then.)
-- **Smoother reward reveal.** Opening the vault with rewards waiting reads the loot journal in
-  one small slice per pass, however many rewards there are, so the opening animations no longer
-  stutter the first time in a session.
-- **Smoother loot lists while they load.** Rows now move with their items as the list fills
-  instead of being repainted, so the row under the pointer keeps its tooltip.
-- `/bgv perf` reports what the last reward reveal cost.
+- **Best-in-Slot tiers for patch 12.1.5.** The tier colors and the loot table's Tier column now
+  follow Wowhead's guides as updated for 12.1.5, including the new Kith'ix trinkets, ring,
+  weapons and armor. The Warlock set's head piece now shows its tier too.
+- **The settings name the guides' patch and build.** Under the Best-in-Slot tiers option, a note
+  says which game version the list was read for (12.1.5, build 70448), so you can tell when it's
+  out of date.
