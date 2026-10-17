@@ -224,6 +224,7 @@ BGV.Locale.Register("deDE", {
     ["While you point at %s (a reward in place of an item), your completed slots look disappointed. The best reward's slot takes it hardest."] = "Solange du auf %s zeigst (eine Belohnung anstelle eines Gegenstands), schauen deine abgeschlossenen Plätze enttäuscht. Der Platz mit der besten Belohnung trifft es am härtesten.",
     ["Best-in-Slot tiers"] = "Best-in-Slot-Stufen",
     ["Colors items by their Best-in-Slot tier for your loot spec, from Wowhead's guides, and adds the loot table's Tier column."] = "Färbt Gegenstände nach ihrer Best-in-Slot-Stufe für deine Beutespezialisierung (aus Wowheads Guides) und ergänzt die Spalte „Stufe“ der Beutetabelle.",
+    ["List from Wowhead's guides for patch %s, build %s."] = "Liste aus Wowheads Guides für Patch %s, Build %s.",
     ["Click a slot for its loot table"] = "Platz anklicken öffnet die Beutetabelle",
     ["Left-click an unlocked slot to list every reward it can give."] = "Linksklick auf einen freigeschalteten Platz listet jede Belohnung, die er geben kann.",
     ["Loot spec button"] = "Schaltfläche für Beutespezialisierung",

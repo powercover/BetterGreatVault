@@ -783,6 +783,11 @@ local function BuildGreatVault()
         RefreshAccent()
     end)
     MakeNote(child, L["Colors items by their Best-in-Slot tier for your loot spec, from Wowhead's guides, and adds the loot table's Tier column."])
+    -- The game version the list was read for (Bis.lua), so players can tell a list from an older patch.
+    local bisSource = BGV.Bis and BGV.Bis.SOURCE
+    if bisSource then
+        MakeNote(child, string.format(L["List from Wowhead's guides for patch %s, build %s."], bisSource.patch, bisSource.build))
+    end
     MakeCheckbox(child, L["Click a slot for its loot table"], function()
         local saved = DB()
         return not saved or saved.openLootTable ~= false

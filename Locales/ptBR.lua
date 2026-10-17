@@ -224,6 +224,7 @@ BGV.Locale.Register("ptBR", {
     ["While you point at %s (a reward in place of an item), your completed slots look disappointed. The best reward's slot takes it hardest."] = "Enquanto você passa o cursor sobre %s (uma recompensa no lugar de um item), seus espaços concluídos parecem decepcionados. O da melhor recompensa sente mais.",
     ["Best-in-Slot tiers"] = "Níveis Best-in-Slot",
     ["Colors items by their Best-in-Slot tier for your loot spec, from Wowhead's guides, and adds the loot table's Tier column."] = "Colore os itens pelo nível Best-in-Slot para sua especialização de saque (dos guias do Wowhead) e adiciona a coluna Nível à tabela de saque.",
+    ["List from Wowhead's guides for patch %s, build %s."] = "Lista dos guias do Wowhead para o patch %s, build %s.",
     ["Click a slot for its loot table"] = "Clique em um espaço: sua tabela de saque",
     ["Left-click an unlocked slot to list every reward it can give."] = "Clique esquerdo em um espaço desbloqueado para listar todas as recompensas que ele pode dar.",
     ["Loot spec button"] = "Botão de especialização de saque",

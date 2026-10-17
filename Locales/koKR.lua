@@ -224,6 +224,7 @@ BGV.Locale.Register("koKR", {
     ["While you point at %s (a reward in place of an item), your completed slots look disappointed. The best reward's slot takes it hardest."] = "%s(아이템 대신 받는 보상)를 가리키는 동안 완료한 칸들이 실망한 표정을 짓습니다. 가장 좋은 보상이 든 칸이 가장 크게 실망합니다.",
     ["Best-in-Slot tiers"] = "BiS 등급",
     ["Colors items by their Best-in-Slot tier for your loot spec, from Wowhead's guides, and adds the loot table's Tier column."] = "전리품 전문화 기준 BiS 등급(Wowhead 가이드)에 따라 아이템에 색을 입히고, 전리품 표에 등급 열을 추가합니다.",
+    ["List from Wowhead's guides for patch %s, build %s."] = "Wowhead 가이드 목록: 패치 %s, 빌드 %s.",
     ["Click a slot for its loot table"] = "칸을 클릭해 전리품 표 열기",
     ["Left-click an unlocked slot to list every reward it can give."] = "잠금 해제된 칸을 왼쪽 클릭하면 받을 수 있는 모든 보상을 보여 줍니다.",
     ["Loot spec button"] = "전리품 전문화 버튼",

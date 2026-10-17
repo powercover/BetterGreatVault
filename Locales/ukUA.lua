@@ -224,6 +224,7 @@ BGV.Locale.Register("ukUA", {
     ["While you point at %s (a reward in place of an item), your completed slots look disappointed. The best reward's slot takes it hardest."] = "Поки ви наводите на «%s» (нагороду замість предмета), завершені комірки виглядають розчарованими. Найбільше — та, де найкраща нагорода.",
     ["Best-in-Slot tiers"] = "Тіри Best-in-Slot",
     ["Colors items by their Best-in-Slot tier for your loot spec, from Wowhead's guides, and adds the loot table's Tier column."] = "Забарвлює предмети за тіром Best-in-Slot для вашої спеціалізації здобичі (за гайдами Wowhead) і додає стовпець «Тір» до таблиці здобичі.",
+    ["List from Wowhead's guides for patch %s, build %s."] = "Список із гайдів Wowhead для патча %s, збірка %s.",
     ["Click a slot for its loot table"] = "Клік на комірці відкриває таблицю здобичі",
     ["Left-click an unlocked slot to list every reward it can give."] = "Клацніть лівою кнопкою по відкритій комірці, щоб побачити всі нагороди, які вона може дати.",
     ["Loot spec button"] = "Кнопка спеціалізації здобичі",

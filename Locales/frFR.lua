@@ -224,6 +224,7 @@ BGV.Locale.Register("frFR", {
     ["While you point at %s (a reward in place of an item), your completed slots look disappointed. The best reward's slot takes it hardest."] = "Tant que vous survolez %s (une récompense à la place d'un objet), vos emplacements terminés ont l'air déçus. Celui de la meilleure récompense le prend le plus mal.",
     ["Best-in-Slot tiers"] = "Rangs Best-in-Slot",
     ["Colors items by their Best-in-Slot tier for your loot spec, from Wowhead's guides, and adds the loot table's Tier column."] = "Colore les objets selon leur rang Best-in-Slot pour votre spécialisation du butin (guides de Wowhead) et ajoute la colonne Rang à la table du butin.",
+    ["List from Wowhead's guides for patch %s, build %s."] = "Liste issue des guides de Wowhead pour le patch %s, build %s.",
     ["Click a slot for its loot table"] = "Clic sur un emplacement : sa table du butin",
     ["Left-click an unlocked slot to list every reward it can give."] = "Clic gauche sur un emplacement débloqué pour lister toutes les récompenses qu'il peut donner.",
     ["Loot spec button"] = "Bouton de spécialisation du butin",

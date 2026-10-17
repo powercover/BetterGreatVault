@@ -224,6 +224,7 @@ BGV.Locale.Register("ruRU", {
     ["While you point at %s (a reward in place of an item), your completed slots look disappointed. The best reward's slot takes it hardest."] = "Пока вы наводите на «%s» (награду вместо предмета), завершённые ячейки выглядят разочарованными. Сильнее всех — та, где лучшая награда.",
     ["Best-in-Slot tiers"] = "Тиры Best-in-Slot",
     ["Colors items by their Best-in-Slot tier for your loot spec, from Wowhead's guides, and adds the loot table's Tier column."] = "Окрашивает предметы по тиру Best-in-Slot для вашей специализации добычи (по гайдам Wowhead) и добавляет столбец «Тир» в таблицу добычи.",
+    ["List from Wowhead's guides for patch %s, build %s."] = "Список из гайдов Wowhead для патча %s, сборка %s.",
     ["Click a slot for its loot table"] = "Клик по ячейке открывает таблицу добычи",
     ["Left-click an unlocked slot to list every reward it can give."] = "Щёлкните левой кнопкой по открытой ячейке, чтобы увидеть все награды, которые она может дать.",
     ["Loot spec button"] = "Кнопка специализации для добычи",

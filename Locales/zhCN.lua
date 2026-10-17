@@ -224,6 +224,7 @@ BGV.Locale.Register("zhCN", {
     ["While you point at %s (a reward in place of an item), your completed slots look disappointed. The best reward's slot takes it hardest."] = "指向%s（代替物品的奖励）时，已完成的格位会露出失望的表情。装着最好奖励的那个最难过。",
     ["Best-in-Slot tiers"] = "毕业装备等级",
     ["Colors items by their Best-in-Slot tier for your loot spec, from Wowhead's guides, and adds the loot table's Tier column."] = "按你拾取专精的毕业装备等级（来自 Wowhead 指南）为物品着色，并在战利品表中加入等级列。",
+    ["List from Wowhead's guides for patch %s, build %s."] = "列表来自 Wowhead 指南，补丁 %s，构建 %s。",
     ["Click a slot for its loot table"] = "点击格位打开战利品表",
     ["Left-click an unlocked slot to list every reward it can give."] = "左键点击已解锁的格位，列出它可能给予的所有奖励。",
     ["Loot spec button"] = "拾取专精按钮",
