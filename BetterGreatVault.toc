@@ -38,6 +38,7 @@ Faces.lua
 UI.lua
 ItemLinks.lua
 LootTable.lua
+SettingsPreview.lua
 Settings.lua
 Minimap.lua
 Core.lua

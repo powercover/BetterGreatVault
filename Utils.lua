@@ -515,12 +515,18 @@ local SPEC_ACCENT = {
     [73] = { 0.31, 0.48, 0.88 }, -- Protection #4F7BE0
 }
 
+-- The current spec's color as { r, g, b } (the default gold without a spec), whatever the
+-- settings pick.
+function Utils.SpecAccent()
+    local specID = Utils.CurrentSpecID()
+    return specID and SPEC_ACCENT[specID] or { 0.85, 0.65, 0.2 }
+end
+
 -- The addon's accent color as { r, g, b }: the current spec's color, or the custom color chosen
 -- in the settings, or the default gold.
 function Utils.AccentColor()
     if not BetterGreatVaultDB or BetterGreatVaultDB.useSpecAccent ~= false then
-        local specID = Utils.CurrentSpecID()
-        return specID and SPEC_ACCENT[specID] or { 0.85, 0.65, 0.2 }
+        return Utils.SpecAccent()
     end
     local saved = BetterGreatVaultDB.accentColor
     if type(saved) == "table" then
@@ -568,6 +574,9 @@ local FONT_TEMPLATES = {
     Disable = { template = "GameFontDisable" },
     -- The Great Vault slots' text: small and outlined.
     Vault = { template = "GameFontHighlightSmall", flags = "OUTLINE" },
+    -- The settings' sketches (SettingsPreview.lua): tiny, and the same at every text size, as the
+    -- sketch's boxes are.
+    Sketch = { template = "GameFontHighlightSmall", height = 8, fixed = true },
 }
 -- Like Blizzard's, each is a family with one font per alphabet, so every language's text shows,
 -- also when the language picked in the settings isn't the game's.
@@ -647,7 +656,7 @@ local function CreateAddonFont(key, spec)
 end
 
 -- The addon's font object for `key`: Highlight, Normal, HighlightSmall, NormalSmall,
--- NormalLarge, Disable or Vault.
+-- NormalLarge, Disable, Vault or Sketch.
 function Utils.Font(key)
     return fonts[key] or _G["GameFont" .. key] or GameFontHighlight
 end
@@ -672,7 +681,8 @@ function Utils.ApplyFontSize()
             if member.alphabet and type(font.GetFontObjectForAlphabet) == "function" then
                 target = font:GetFontObjectForAlphabet(member.alphabet) or font
             end
-            target:SetFont(member.file, math.max(4, member.height + offset), member.flags)
+            local height = (spec.height or member.height) + (spec.fixed and 0 or offset)
+            target:SetFont(member.file, math.max(4, height), member.flags)
         end
     end
 end

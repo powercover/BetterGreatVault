@@ -95,6 +95,15 @@ end
 
 local Pixel = BGV.Utils.Pixel
 
+-- Pointing at an option shows a sketch of where it applies (SettingsPreview.lua). `title`: a
+-- function giving the option's name as it reads now. `hideOnClick`: for a control that opens
+-- something over the sketch (a menu, the color picker); other clicks keep it, drawn anew.
+local function Sketch(frame, key, title, hideOnClick)
+    if frame and key and BGV.SettingsPreview then
+        BGV.SettingsPreview.Attach(frame, key, title, hideOnClick)
+    end
+end
+
 local function Edge(parent, target, point1, rel1, x1, y1, point2, rel2, x2, y2, horizontal)
     local line = Pixel(parent, "BORDER", 0.22, 0.22, 0.24, 1)
     line:SetPoint(point1, target or parent, rel1, x1, y1)
@@ -318,6 +327,10 @@ local function MakeCheckbox(parent, label, getter, setter, options)
         text:SetTextColor(0.92, 0.92, 0.92)
     end)
 
+    Sketch(row, options.sketch, function()
+        return text:GetText()
+    end)
+
     widgets[#widgets + 1] = row
     layout[#layout + 1] = { widget = row, x = PAD + 28 * (options.indent or 0), height = 26, stretch = true,
         resize = function(offset)
@@ -363,7 +376,8 @@ local function ConfirmClicks(button, text, question, action)
     button:SetScript("OnHide", Disarm)
 end
 
--- A row of flat buttons, each { text, width, onClick, confirm }. `options` as for checkboxes.
+-- A row of flat buttons, each { text, width, onClick, confirm, sketch, sketchHides }. `options`
+-- as for checkboxes.
 local function MakeButtons(parent, specs, options)
     options = options or {}
     local row = CreateFrame("Frame", nil, parent)
@@ -377,6 +391,9 @@ local function MakeButtons(parent, specs, options)
         else
             button:SetScript("OnClick", spec.onClick)
         end
+        Sketch(button, spec.sketch, function()
+            return button:GetText()
+        end, spec.sketchHides)
         row.buttons[index] = button
     end
     -- Wider and taller with the text size.
@@ -413,7 +430,7 @@ end
 
 -- A slider over whole steps from `min` to `max`, the default (0) marked on it. The stretch
 -- between the default and the value is drawn in the accent color. spec: { min, max, getter,
--- setter, format }.
+-- setter, format, sketch, title }.
 local SLIDER_W = 220
 local THUMB_W = 10
 
@@ -454,6 +471,9 @@ local function MakeSlider(parent, spec)
     local value = BGV.Utils.FontString(row, "OVERLAY", "Highlight")
     value:SetPoint("LEFT", slider, "RIGHT", 14, 0)
     row.slider, row.value = slider, value
+    Sketch(slider, spec.sketch, function()
+        return spec.title
+    end)
 
     local quiet = false
     local function Paint(current)
@@ -507,6 +527,11 @@ local function MakeColorRow(parent)
     color:SetPoint("TOPLEFT", swatch, "TOPLEFT", 1, -1)
     color:SetPoint("BOTTOMRIGHT", swatch, "BOTTOMRIGHT", -1, 1)
     BoxBorder(swatch, swatch)
+    row.swatch = swatch
+    -- the color picker opens over the sketch: a click closes it
+    Sketch(swatch, "accent", function()
+        return L["Accent color"]
+    end, true)
 
     local function Paint()
         local r, g, b = AccentRGB()
@@ -748,11 +773,11 @@ local function BuildGreatVault()
         DB().disableAnimations = not value
         RefreshAccent()
         BGV.Settings.Refresh()
-    end)
+    end, { sketch = "anim" })
     MakeNote(child, L["Pointing at an unlocked slot opens it onto a reel of the loot it can give."])
     local styleRow
     styleRow = MakeButtons(child, {
-        { text = StyleLabel(), width = 240, onClick = function(self)
+        { text = StyleLabel(), width = 240, sketch = "style", sketchHides = true, onClick = function(self)
             OpenStyleMenu(self, function(value)
                 DB().vaultStyle = value
                 styleRow.buttons[1]:SetText(StyleLabel())
@@ -774,14 +799,14 @@ local function BuildGreatVault()
         return not (saved and saved.disableCollectFaces == true)
     end, function(value)
         DB().disableCollectFaces = not value
-    end, { indent = 1, requires = AnimatedSlots })
+    end, { indent = 1, requires = AnimatedSlots, sketch = "sad" })
     MakeNote(child, string.format(L["While you point at %s (a reward in place of an item), your completed slots look disappointed. The best reward's slot takes it hardest."], collect), 2)
     MakeCheckbox(child, L["Best-in-Slot tiers"], function()
         return BGV.Utils.ShowBisTiers()
     end, function(value)
         DB().showBisTiers = value and true or false
         RefreshAccent()
-    end)
+    end, { sketch = "bis" })
     MakeNote(child, L["Colors items by their Best-in-Slot tier for your loot spec, from Wowhead's guides, and adds the loot table's Tier column."])
     -- The game version the list was read for (Bis.lua), so players can tell a list from an older patch.
     local bisSource = BGV.Bis and BGV.Bis.SOURCE
@@ -793,7 +818,7 @@ local function BuildGreatVault()
         return not saved or saved.openLootTable ~= false
     end, function(value)
         DB().openLootTable = value and true or false
-    end)
+    end, { sketch = "click" })
     MakeNote(child, L["Left-click an unlocked slot to list every reward it can give."])
     MakeCheckbox(child, L["Loot spec button"], function()
         local saved = DB()
@@ -804,14 +829,14 @@ local function BuildGreatVault()
         if BGV.LootTable and type(BGV.LootTable.Invalidate) == "function" then
             BGV.LootTable.Invalidate()
         end
-    end)
+    end, { sketch = "spec" })
     MakeNote(child, L["Shows and changes your loot spec, on the Great Vault and in the loot table."])
     MakeCheckbox(child, L["Reward reminder"], function()
         local saved = DB()
         return not saved or saved.remindRewards ~= false
     end, function(value)
         DB().remindRewards = value and true or false
-    end)
+    end, { sketch = "remind" })
     MakeNote(child, L["At login, a line in chat when rewards are waiting in the Great Vault."])
 end
 
@@ -828,17 +853,17 @@ local function BuildMinimap()
     end, function(value)
         DB().useCompartment = value and true or false
         CallIfThere(BGV.Minimap and BGV.Minimap.ApplyCompartment)
-    end)
+    end, { sketch = "compartment" })
     MakeNote(child, L["Lists the addon in Blizzard's addon menu on the minimap, with the same clicks. After installing or updating, it shows there after a game restart."])
     MakeCheckbox(child, L["Show the button"], ButtonShown, function(value)
         DB().showMinimap = value and true or false
         BGV.Minimap.Apply()
         BGV.Settings.Refresh()
-    end)
+    end, { sketch = "button" })
     MakeNote(child, L["Left-click: Great Vault. Middle-click: loot table. Shift + middle-click: loot database. Right-click: these settings."])
     local nested = { indent = 1, requires = ButtonShown }
     MakeButtons(child, {
-        { text = L["Reset position"], onClick = function()
+        { text = L["Reset position"], sketch = "reset", onClick = function()
             CallIfThere(BGV.Minimap and BGV.Minimap.ResetPosition)
         end },
     }, nested)
@@ -848,13 +873,13 @@ local function BuildMinimap()
     end, function(value)
         DB().minimapPopup = value and true or false
         BGV.Settings.Refresh()
-    end, nested)
+    end, { indent = 1, requires = ButtonShown, sketch = "popup" })
     MakeCheckbox(child, L["This week's slots"], function()
         local saved = DB()
         return not saved or saved.popupWeek ~= false
     end, function(value)
         DB().popupWeek = value and true or false
-    end, { indent = 2, requires = function()
+    end, { indent = 2, sketch = "week", requires = function()
         local saved = DB()
         return ButtonShown() and (not saved or saved.minimapPopup ~= false)
     end })
@@ -864,14 +889,14 @@ local function BuildMinimap()
         return saved and saved.lockMinimap == true
     end, function(value)
         DB().lockMinimap = value and true or false
-    end, nested)
+    end, { indent = 1, requires = ButtonShown, sketch = "lock" })
     MakeCheckbox(child, L["Keep on the minimap"], function()
         local saved = DB()
         return saved and saved.independentMinimap == true
     end, function(value)
         DB().independentMinimap = value and true or false
         BGV.Minimap.Apply()
-    end, nested)
+    end, { indent = 1, requires = ButtonShown, sketch = "keep" })
     MakeNote(child, L["Stops addons that gather minimap buttons, such as EllesmereUI, from moving it. Takes full effect after a reload."], 2)
     MakeCheckbox(child, L["Fade until hovered"], function()
         local saved = DB()
@@ -879,7 +904,7 @@ local function BuildMinimap()
     end, function(value)
         DB().fadeMinimap = value and true or false
         CallIfThere(BGV.Minimap and BGV.Minimap.UpdateFade)
-    end, nested)
+    end, { indent = 1, requires = ButtonShown, sketch = "fade" })
     MakeNote(child, L["The button stays faint until you point at it. It shows fully while rewards are waiting."], 2)
 end
 
@@ -963,6 +988,8 @@ local function BuildAppearance()
             return BGV.Utils.FontOffset()
         end,
         setter = SetTextSize,
+        sketch = "text",
+        title = L["Text size"],
         format = function(value)
             if value == 0 then
                 return L["Default"]
@@ -979,7 +1006,7 @@ local function BuildAppearance()
         DB().useSpecAccent = value and true or false
         BGV.Settings.Refresh()
         RefreshAccent()
-    end)
+    end, { sketch = "speccolor" })
     MakeNote(child, L["Highlights in your specialization's color. Off: pick your own below."])
     MakeColorRow(child)
     MakeNote(child, L["Used while your spec's color is off."])
@@ -1143,6 +1170,10 @@ end
 -- needs only the frame, registered at login, and most sessions never open the settings.
 local function BuildContent()
     scrollAnim = { play = false, from = 0, to = 0, t = 0 }
+    if BGV.SettingsPreview then
+        BGV.SettingsPreview.SetPage(panel)
+        panel:HookScript("OnHide", BGV.SettingsPreview.Hide)
+    end
 
     local left = CreateFrame("Frame", nil, panel)
     left:SetPoint("TOPLEFT")

@@ -48,6 +48,7 @@ local TIER_BACK = {
     A = { 0.55, 0.22, 0.78 },
     S = { 0.85, 0.62, 0.08 },
 }
+Case.TIER_BACK = TIER_BACK -- the settings' sketches color their reels the same way
 
 -- Frost Shatter's ice plate in pieces (Media\CaseFrostShards.tga, from make_case_media.py): each
 -- piece's place in the texture, its size and centre in the slot (UI units, up is +y), and where
@@ -3206,8 +3207,10 @@ local function PreviewPanel()
 end
 
 -- Plays `choice` (a style's id, Case.SPEC or Case.RANDOM) beside `anchor`, the menu entry being
--- pointed at: to the right of the menu when the screen has room, else to its left.
-function Case.ShowPreview(anchor, choice)
+-- pointed at: to the right of the menu when the screen has room, else to its left. `place`, when
+-- given, places the panel itself (the settings' preview card plays it inside its sketch); the
+-- preview ends when `anchor` hides. Returns true when it plays.
+function Case.ShowPreview(anchor, choice, place)
     if not anchor or AnimationsDisabled() then
         return
     end
@@ -3218,6 +3221,13 @@ function Case.ShowPreview(anchor, choice)
     local width = SLOT_W + 2 * PREVIEW_PAD
     panel:SetSize(width, SLOT_H + 3 * PREVIEW_PAD + 14)
     panel:ClearAllPoints()
+    if place then
+        place(panel)
+        panel:Show()
+        PreviewOpen(panel)
+        return true
+    end
+    panel:SetScale(1)
     -- Room right of the entry, in screen pixels (each frame's coordinates times its scale).
     local right, screen = anchor:GetRight(), UIParent:GetRight()
     local room = 0
