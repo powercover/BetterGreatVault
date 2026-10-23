@@ -624,6 +624,123 @@ function GreatVault.GetSnapshot()
     return cache
 end
 
+-- What to run next: the fewest activities that unlock a slot or raise a slot's reward, from the
+-- vault's own numbers (its thresholds, and the next item level C_WeeklyRewards gives a slot).
+local NEXT_ROWS = { "Raid", "Activities", "World" }
+local RAID_RANK = { [17] = 1, [14] = 2, [15] = 3, [16] = 4 }
+
+local function RowOf(slot)
+    for _, name in ipairs(NEXT_ROWS) do
+        if Utils.SameType(slot.type, Utils.ThresholdType(name)) then
+            return name
+        end
+    end
+end
+
+-- How many of this week's activities of the slot's row count at `level` or higher; nil when that
+-- can't be told.
+local function DoneAtLeast(row, slot, level)
+    local done = 0
+    if row == "Activities" then
+        for _, run in ipairs(CompletedRuns()) do
+            if run.level >= level then
+                done = done + 1
+            end
+        end
+        if level <= 0 then
+            local _, mythic = DungeonCounts()
+            done = done + mythic
+        end
+    elseif row == "Raid" then
+        local rank = RAID_RANK[level]
+        if not rank or type(slot.encounters) ~= "table" then
+            return nil
+        end
+        for _, encounter in ipairs(slot.encounters) do
+            if (RAID_RANK[encounter.difficultyID] or 0) >= rank then
+                done = done + 1
+            end
+        end
+    else
+        for _, tier in ipairs(WorldProgress()) do
+            if tier.difficulty >= level then
+                done = done + tier.count
+            end
+        end
+    end
+    return done
+end
+
+-- What counts toward the next level: "+10 or higher", "Heroic or higher", "Tier 8 or higher".
+local function LevelText(row, level)
+    if row == "Activities" then
+        if level >= 2 then
+            return string.format(L["+%d or higher"], level)
+        end
+        return L["Mythic dungeon"]
+    elseif row == "Raid" then
+        local name = Utils.DifficultyName(level)
+        return name and string.format(L["%s or higher"], name) or nil
+    elseif level > 1 then
+        return string.format(L["Tier %d or higher"], level)
+    end
+end
+
+-- The step: { slot, need, what, itemLevel (raising a reward) }, or nil when nothing is left to gain
+-- this week. The fewest activities win; for as many, unlocking a slot (one more choice) before
+-- raising one, then the higher item level.
+function GreatVault.NextStep(snapshot)
+    local best
+    local function Better(step)
+        if not best or step.need ~= best.need then
+            return not best or step.need < best.need
+        end
+        if (step.itemLevel == nil) ~= (best.itemLevel == nil) then
+            return step.itemLevel == nil
+        end
+        return step.itemLevel ~= nil and step.itemLevel > best.itemLevel
+    end
+    local lockedSeen = {}
+    for _, slot in ipairs(type(snapshot) == "table" and snapshot or {}) do
+        local row = type(slot) == "table" and RowOf(slot)
+        if row and Utils.IsUsableNumber(slot.threshold) and Utils.IsUsableNumber(slot.progress) then
+            local step
+            if not slot.unlocked then
+                -- only a row's first locked slot: the others need more
+                if not lockedSeen[row] then
+                    lockedSeen[row] = true
+                    local what = row == "Activities" and GreatVault.CategoryName(slot.type)
+                        or slot.unit or GreatVault.UnitName(slot)
+                    step = { slot = slot, need = slot.threshold - slot.progress, what = what }
+                end
+            elseif type(slot.upgrade) == "table" and Utils.IsUsableNumber(slot.upgrade.nextLevel)
+                and Utils.IsUsableNumber(slot.upgrade.itemLevel)
+                and not (Utils.IsUsableNumber(slot.itemLevel) and slot.upgrade.itemLevel <= slot.itemLevel) then
+                local done = DoneAtLeast(row, slot, slot.upgrade.nextLevel)
+                local what = LevelText(row, slot.upgrade.nextLevel)
+                if done and what and done < slot.threshold then
+                    step = { slot = slot, need = slot.threshold - done, what = what, itemLevel = slot.upgrade.itemLevel }
+                end
+            end
+            if step and step.need > 0 and type(step.what) == "string" and Better(step) then
+                best = step
+            end
+        end
+    end
+    return best
+end
+
+-- The step as two lines: what to run ("+10 or higher x1") and what it gives ("Dungeons, slot 2,
+-- rises to 272 item level").
+function GreatVault.NextStepText(step)
+    local what = string.format(L["%s x%d"], step.what, step.need)
+    local category = step.slot.category or GreatVault.CategoryName(step.slot.type)
+    if step.itemLevel then
+        return what, string.format(L["%s, slot %d, rises to %d item level"], category, step.slot.index, step.itemLevel)
+    end
+    return what, string.format(L["%s, slot %d, unlocks"], category, step.slot.index)
+end
+
 function GreatVault.ProgressText(slot)
     return string.format("%d / %d %s", slot.progress, slot.threshold, slot.unit)
 end

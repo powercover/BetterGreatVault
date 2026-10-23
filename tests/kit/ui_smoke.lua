@@ -810,6 +810,27 @@ ucheck(pop.actions[3].text.text == "Loot database, any class" and pop.actions[3]
 ucheck(pop.actions[4].key.textColor and pop.actions[4].key.textColor[1] == acc[1] and pop.actions[4].key.textColor[3] == acc[3], "mouse buttons in the accent")
 ucheck(pop.actions[4].text.textColor and pop.actions[4].text.textColor[1] == 0.9, "actions in light text")
 ucheck(pop.height and pop.height > 150, "popup height set: " .. tostring(pop.height))
+-- the next step: the fewest activities that unlock or raise a slot (one more raid boss here)
+ucheck(pop.nextHeading.shown and pop.nextHeading.text == "NEXT STEP", "next step heading: " .. tostring(pop.nextHeading.text))
+ucheck(pop.nextTitle.shown and pop.nextTitle.text == "Raid Bosses x1", "next step: what to run: " .. tostring(pop.nextTitle.text))
+ucheck(pop.nextText.text == "Raids, slot 2, unlocks", "next step: what it gives: " .. tostring(pop.nextText.text))
+ucheck(pop.nextBar.color and pop.nextBar.color[1] == acc[1], "next step's bar in the accent")
+do
+  local heightWith = pop.height
+  BetterGreatVaultDB.popupNext = false
+  Hover()
+  ucheck(not pop.nextHeading.shown and not pop.nextBox.shown and not pop.nextTitle.shown, "next step off: hidden")
+  ucheck(pop.height < heightWith, "and the popup shorter: " .. tostring(pop.height) .. " < " .. tostring(heightWith))
+  BetterGreatVaultDB.popupWeek = false
+  Hover()
+  ucheck(not pop.heading.shown and not pop.nextHeading.shown, "both off: neither")
+  BetterGreatVaultDB.popupNext = true
+  Hover()
+  ucheck(not pop.heading.shown and pop.nextHeading.shown, "the slots off, the next step on: only the step")
+  BetterGreatVaultDB.popupWeek = nil
+  BetterGreatVaultDB.popupNext = nil
+  Hover()
+end
 -- the week as chat lines (/bgv status) and in the data broker
 do
   local lines = BGV.Minimap.StatusLines()
@@ -818,6 +839,7 @@ do
   ucheck(text:find("This week: 3 of 9 unlocked", 1, true), "status: the week's count")
   ucheck(text:find("285", 1, true) and text:find("3/4", 1, true) and text:find("318", 1, true), "status: item levels and progress")
   ucheck(text:find("Weekly reset in 2d 3h", 1, true), "status: the reset")
+  ucheck(text:find("Next step: ", 1, true) and text:find("Raid Bosses x1", 1, true) and text:find("Raids, slot 2, unlocks", 1, true), "status: the next step")
   local objects = {}
   LibStub = setmetatable({}, { __call = function(_, name, silent)
     if name == "LibDataBroker-1.1" then
@@ -1182,7 +1204,12 @@ do
       frame.scripts.OnLeave(frame)
       count = count + 1
     end
-    ucheck(count == 18, "18 sketches, got " .. count)
+    ucheck(count == 19, "19 sketches, got " .. count)
+    local nextRow = Row("Next step")
+    Rest(nextRow)
+    ucheck(card.shown and card.title.text == "Next step" and card.caption.text:find("in the popup", 1, true) ~= nil,
+      "the next step's option shows its sketch: " .. tostring(card.caption.text))
+    nextRow.scripts.OnLeave(nextRow)
     -- a second round makes nothing new: every piece comes from the pools
     local t1, d1, l1 = BGV.SettingsPreview.PoolSizes()
     for key in pairs(BGV.SettingsPreview.SKETCHES) do

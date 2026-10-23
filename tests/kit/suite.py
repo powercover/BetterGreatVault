@@ -33,6 +33,7 @@ CHECKS = {
     "vault_ui": ([PY, "run51.py", "vault_ui_smoke.lua"], "vault ui checks passed", []),
     "emblem": ([PY, "run51.py", "emblem_smoke.lua"], "emblem checks passed", []),
     "utils": ([PY, "run51.py", "utils_smoke.lua"], "utils checks passed", []),
+    "next_step": ([PY, "run51.py", "next_step_smoke.lua"], "next step checks passed", []),
     "i18n": ([PY, "run51.py", "i18n_smoke.lua"], "i18n checks passed", []),
     "claim_reel": ([PY, "py51.py", "claim_reel_test.py"], "claim reel checks passed", []),
     "raid_ceiling": ([PY, "py51.py", "raid_ceiling_test.py"], "raid ceiling checks passed", []),

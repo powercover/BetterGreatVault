@@ -52,6 +52,11 @@ local function PopupWeek()
     return not BetterGreatVaultDB or BetterGreatVaultDB.popupWeek ~= false
 end
 
+-- The popup's next step: what to run to unlock a slot or raise a reward (settings).
+local function PopupNext()
+    return not BetterGreatVaultDB or BetterGreatVaultDB.popupNext ~= false
+end
+
 local function LoadVaultUI()
     BGV.Utils.LoadAddon("Blizzard_WeeklyRewards")
 end
@@ -505,6 +510,21 @@ local function BuildPopup()
         popup.rows[index] = row
     end
 
+    -- The next step: a heading, then a box with what to run and what it gives.
+    popup.nextHeading = Text("GameFontNormalSmall", 0.66, 0.66, 0.7)
+    popup.nextHeading:SetText(Utils.Upper(L["Next step"]))
+    popup.nextBox = Pixel(popup, "ARTWORK", 1, 1, 1, 0.05)
+    popup.nextBox:SetHeight(CALLOUT_H)
+    popup.nextBar = Pixel(popup, "ARTWORK", 1, 1, 1, 1)
+    popup.nextBar:SetDrawLayer("ARTWORK", 1)
+    popup.nextBar:SetWidth(2)
+    popup.nextBar:SetPoint("TOPLEFT", popup.nextBox, "TOPLEFT", 0, 0)
+    popup.nextBar:SetPoint("BOTTOMLEFT", popup.nextBox, "BOTTOMLEFT", 0, 0)
+    popup.nextTitle = Text("GameFontHighlight", 0.96, 0.96, 0.96)
+    popup.nextTitle:SetPoint("TOPLEFT", popup.nextBox, "TOPLEFT", 12, -7)
+    popup.nextText = Text("GameFontHighlightSmall", 0.7, 0.7, 0.74)
+    popup.nextText:SetPoint("TOPLEFT", popup.nextTitle, "BOTTOMLEFT", 0, -3)
+
     -- What each click does: the action, and its mouse button in the accent color.
     popup.divider = Pixel(popup, "ARTWORK", 1, 1, 1, 0.08)
     popup.divider:SetHeight(1)
@@ -694,6 +714,31 @@ local function LayoutWeek(y, accent, rows)
     return y + 4
 end
 
+-- The vault's next step (GreatVault.NextStep), as its two lines; nil when there's none.
+local function NextStepLines()
+    local vault = BGV.GreatVault
+    if not (vault and type(vault.GetSnapshot) == "function" and type(vault.NextStep) == "function") then
+        return nil
+    end
+    local ok, snapshot = pcall(vault.GetSnapshot)
+    local step = ok and vault.NextStep(snapshot)
+    if not step then
+        return nil
+    end
+    return vault.NextStepText(step)
+end
+
+local function LayoutNext(y, accent, what, gives)
+    PlaceAt(popup.nextHeading, PAD, y)
+    y = y + 18
+    PlaceAt(popup.nextBox, PAD, y)
+    popup.nextBox:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -PAD, -y)
+    popup.nextBar:SetVertexColor(accent[1], accent[2], accent[3], 1)
+    popup.nextTitle:SetText(what)
+    popup.nextText:SetText(gives)
+    return y + CALLOUT_H + 12
+end
+
 function LayoutPopup()
     local accent = Utils.AccentColor()
     local r, g, b = accent[1], accent[2], accent[3]
@@ -716,10 +761,13 @@ function LayoutPopup()
 
     -- Like the vault, the week's slots only while it shows the week's progress; and only if wanted.
     -- While rewards wait, only once something counts: a new week's empty slots say nothing then.
-    local week = ProgressWeek() == true and PopupWeek()
-    local rows = week and WeekRows()
-    if week and waiting and not AnyProgress(rows) then
-        week = false
+    local progressWeek = ProgressWeek() == true
+    local rows = progressWeek and (PopupWeek() or PopupNext()) and WeekRows() or {}
+    local quiet = waiting and not AnyProgress(rows)
+    local week = progressWeek and PopupWeek() and not quiet
+    local what, gives
+    if progressWeek and PopupNext() and not quiet then
+        what, gives = NextStepLines()
     end
     popup.heading:SetShown(week)
     if week then
@@ -737,8 +785,18 @@ function LayoutPopup()
         end
     end
 
-    popup.divider:SetShown(waiting or week)
-    if waiting or week then
+    local step = what ~= nil
+    popup.nextHeading:SetShown(step)
+    popup.nextBox:SetShown(step)
+    popup.nextBar:SetShown(step)
+    popup.nextTitle:SetShown(step)
+    popup.nextText:SetShown(step)
+    if step then
+        y = LayoutNext(y, accent, what, gives)
+    end
+
+    popup.divider:SetShown(waiting or week or step)
+    if waiting or week or step then
         PlaceAt(popup.divider, PAD, y)
         popup.divider:SetPoint("TOPRIGHT", popup, "TOPRIGHT", -PAD, -y)
         y = y + 11
@@ -768,6 +826,10 @@ function LayoutPopup()
         end
     end
     width = math.max(width, PAD * 2 + 24 + (popup.calloutText:GetStringWidth() or 0))
+    if step then
+        width = math.max(width, PAD * 2 + 24 + (popup.nextTitle:GetStringWidth() or 0),
+            PAD * 2 + 24 + (popup.nextText:GetStringWidth() or 0))
+    end
     width = math.max(width, PAD * 2 + 38 + (popup.subtitle:GetStringWidth() or 0))
     popup:SetWidth(math.ceil(width))
 end
@@ -874,6 +936,10 @@ function BGV.Minimap.StatusLines()
                     end
                 end
                 lines[#lines + 1] = BGV.GreatVault.CategoryName(slots[1].type) .. ":  " .. table.concat(parts, "   ")
+            end
+            local what, gives = NextStepLines()
+            if what then
+                lines[#lines + 1] = string.format("%s: %s%s|r - %s", L["Next step"], color, what, gives)
             end
         end
     end

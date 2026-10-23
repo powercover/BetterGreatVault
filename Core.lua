@@ -21,6 +21,7 @@ local function SavedDefaults()
         useCompartment = true,
         minimapPopup = true,
         popupWeek = true,
+        popupNext = true,
         independentMinimap = false,
         fadeMinimap = false,
         lockMinimap = false,

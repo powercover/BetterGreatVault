@@ -373,7 +373,7 @@ end
 local POPUP_W = 136
 
 local function Popup(o)
-    Rect(0, 0, POPUP_W, 128, o.lit and "lit" or "sk", 0)
+    Rect(0, 0, POPUP_W, 140, o.lit and "lit" or "sk", 0)
     Round(13, 13, 7, "raised", 2)
     Label(25, 10, "Better Great Vault", "LEFT", o.text and hl or nil, POPUP_W - 29)
     Rect(25, 17, 40, 3, "line", 2)
@@ -387,9 +387,17 @@ local function Popup(o)
             Rect(38 + slot * 31, 34 + row * 14, 27, 10, "raised", 4)
         end
     end
+    -- the next step: a box with an accent bar, what to run and what it gives
+    if o.next then
+        Rect(6, 80, POPUP_W - 12, 22, "lit", 2)
+    end
+    Rect(10, 84, POPUP_W - 20, 14, "raised", 3)
+    Rect(10, 84, 1.5, 14, o.accent and "litfill" or "line", 4)
+    Rect(16, 87, 62, 3, o.text and "litfill" or "line", 4)
+    Rect(16, 93, 92, 2, "line", 4)
     for line = 0, 3 do
-        Rect(10, 90 + line * 9, 54, 3, o.text and "litfill" or "line", 3)
-        Rect(POPUP_W - 38, 90 + line * 9, 28, 3, "line", 3)
+        Rect(10, 104 + line * 9, 54, 3, o.text and "litfill" or "line", 3)
+        Rect(POPUP_W - 38, 104 + line * 9, 28, 3, "line", 3)
     end
 end
 
@@ -579,6 +587,14 @@ local SKETCHES = {
         draw = function()
             Minimap({}, 232, 92)
             Window(30, 26, 1, Popup, { week = true })
+        end,
+    },
+    next = {
+        where = function() return L["Minimap popup"] end,
+        caption = function() return L["{The next step} in the popup: what to run to unlock a slot or raise a reward."] end,
+        draw = function()
+            Minimap({}, 232, 92)
+            Window(30, 26, 1, Popup, { next = true })
         end,
     },
     lock = {

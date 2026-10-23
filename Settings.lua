@@ -907,6 +907,16 @@ local function BuildMinimap()
         return ButtonShown() and (not saved or saved.minimapPopup ~= false)
     end })
     MakeNote(child, L["The popup's mini vault: each slot's item level, or its progress while locked."], 3)
+    MakeCheckbox(child, L["Next step"], function()
+        local saved = DB()
+        return not saved or saved.popupNext ~= false
+    end, function(value)
+        DB().popupNext = value and true or false
+    end, { indent = 2, sketch = "next", requires = function()
+        local saved = DB()
+        return ButtonShown() and (not saved or saved.minimapPopup ~= false)
+    end })
+    MakeNote(child, L["The fewest runs that unlock a slot or raise a reward, with the item level the vault gives."], 3)
     MakeCheckbox(child, L["Lock position"], function()
         local saved = DB()
         return saved and saved.lockMinimap == true
