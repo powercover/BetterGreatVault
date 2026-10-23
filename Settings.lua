@@ -623,6 +623,29 @@ local function MakeAboutCard(parent)
     card.meta:SetText(string.format(L["Version %s  •  by %s"], Metadata("Version", BGV.VERSION or "?"),
         Metadata("Author", BGV.AUTHOR or "?")))
     card.meta:SetTextColor(0.62, 0.62, 0.66)
+    -- The version opens What's new (News.lua), the only way it opens besides /bgv news.
+    local version = CreateFrame("Button", nil, card)
+    version:SetAllPoints(card.meta)
+    version:SetScript("OnClick", BGV.Utils.Protect("settings", function()
+        if BGV.News then
+            BGV.News.Show()
+        end
+    end))
+    version:SetScript("OnEnter", function(self)
+        card.meta:SetTextColor(0.96, 0.96, 0.96)
+        if GameTooltip then
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:SetText(L["What's new"], 1, 1, 1)
+            GameTooltip:Show()
+        end
+    end)
+    version:SetScript("OnLeave", function()
+        card.meta:SetTextColor(0.62, 0.62, 0.66)
+        if GameTooltip then
+            GameTooltip:Hide()
+        end
+    end)
+    card.version = version
     layout[#layout + 1] = { widget = card, x = PAD, height = 64, stretch = true,
         resize = function(offset)
             card:SetHeight(52 + offset)

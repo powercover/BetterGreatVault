@@ -46,6 +46,7 @@ place of its placeholder. All of them are 2560 x 1440 except the emblem.
 | `IMAGE_LOOT_TABLE` | [loot-table.png](loot-table.png): the loot table |
 | `IMAGE_DATABASE` | [database.png](database.png): the loot database |
 | `IMAGE_MINIMAP` | [minimap.png](minimap.png): the minimap button's popup |
+| `IMAGE_SETTINGS` | settings.png (to make): an in-game screenshot of the settings page with the pointer resting on an option and its sketch showing, framed like the other cards |
 
 The gallery's own order, best first: compare, openings, reveal, loot table, database, minimap.
 

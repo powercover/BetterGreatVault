@@ -175,6 +175,7 @@ The addon compartment entry and the data bar feed take the same clicks.
 | `/bgv refresh` | Read the Great Vault again |
 | `/bgv perf` | What the addon costs: CPU time a frame and slow frames (from the game's addon profiler, counted since the game started), memory, load time, and the last slot animation and loot table load |
 | `/bgv reset` | Reset settings, keeping what the addon learned about this season's rewards |
+| `/bgv news` | What's new in the addon (or click the version in the settings' About) |
 
 ### Key bindings
 
@@ -184,6 +185,8 @@ Vault, the loot table, the loot database and the settings. No keys are bound unt
 ## Settings
 
 Right-click the minimap button, or open the game's **Options → AddOns → Better Great Vault**.
+Rest the pointer on an option and a small sketch of the addon shows what it changes, lit in your
+accent color; the opening options play your opening animation in it. Pointing changes nothing.
 
 | Section | Options |
 | --- | --- |

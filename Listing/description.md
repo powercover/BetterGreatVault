@@ -21,6 +21,8 @@ specialization, so you know what to run next.
   with its name and item level. Choosing works exactly as in Blizzard's vault.
 - **Loot table and loot database.** Every reward at its exact item level, with search, slot and
   stat filters, set bonuses and item comparison.
+- **Settings that show where they apply.** Rest the pointer on an option and a small sketch of the
+  addon lights up exactly what it changes.
 - **Light by design.** Nothing runs every frame unless something on screen is moving. No other
   addons needed.
 - **11 languages**, including Ukrainian.
@@ -90,12 +92,22 @@ Mythic+ dungeon by keystone level, and world gear (delves, prey and world bosses
 
 ![The minimap button's popup: this week's vault at a glance](IMAGE_MINIMAP)
 
+## Settings that show where they apply
+
+Rest the pointer on an option in the settings and a small sketch of the addon shows what it
+changes, lit in your accent color: the vault, the loot table, the minimap and its popup, or the
+chat. The opening options play your opening animation right in the sketch. Pointing changes
+nothing; a click does, and the sketch follows it.
+
+![Pointing at an option shows where it applies](IMAGE_SETTINGS)
+
 ## Commands
 
 - `/bgv`: the version and the list of commands
 - `/bgv status`: this week's Great Vault in chat
 - `/bgv db`: open or close the loot database
 - `/bgv perf`: what the addon costs (CPU, memory, load time)
+- `/bgv news`: what's new in the addon
 
 Everything else is in **Options → AddOns → Better Great Vault**, or right-click the minimap button.
 

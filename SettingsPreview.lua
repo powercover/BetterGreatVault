@@ -49,6 +49,7 @@ local SHEETS = 4
 local sheets = {}
 local sheet -- the sheet being drawn on
 local nextSheet = 2 -- the sheet the next window takes
+local bare = false -- drawing small, for Preview.Draw: no labels (too small to read)
 
 local function SetLitColor(color)
     hl = color
@@ -226,6 +227,9 @@ end
 -- inside): a longer one is cut with "...", or wraps onto more lines with `wrap`. point: "LEFT"
 -- (starts at x), "CENTER", or "TOPLEFT" (for a wrapping one).
 local function Label(x, y, text, point, color, width, wrap)
+    if bare then
+        return
+    end
     local index = sheet.usedLabels + 1
     local label = sheet.labels[index]
     if not label then
@@ -814,6 +818,31 @@ local Redraw = Utils.Protect("settings preview", function(owner)
         Show(owner, shownFor.key, shownFor.title)
     end
 end)
+
+-- Paints the sketch `key` onto `frame`, a CANVAS_W x CANVAS_H surface (scale it with SetScale),
+-- still and without labels: the news popup's previews. `color`: the lit color (the accent).
+Preview.Draw = Utils.Protect("settings preview", function(frame, key, color)
+    local sketch = SKETCHES[key]
+    if not (frame and sketch) then
+        return
+    end
+    local ownCanvas, ownSheets = canvas, sheets
+    frame.bgvSheets = frame.bgvSheets or {}
+    canvas, sheets = frame, frame.bgvSheets
+    bare = true
+    local ok, err = pcall(function()
+        SetLitColor(color or Utils.AccentColor())
+        Clear()
+        sketch.draw()
+    end)
+    bare = false
+    canvas, sheets, sheet = ownCanvas, ownSheets, nil
+    ox, oy, sc, nextSheet = 0, 0, 1, 2
+    if not ok then
+        error(err, 0)
+    end
+end)
+Preview.CANVAS_W, Preview.CANVAS_H = CANVAS_W, CANVAS_H
 
 -- The settings page, which the card lines up with.
 function Preview.SetPage(frame)

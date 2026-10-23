@@ -147,6 +147,7 @@ local function PrintHelp()
     Utils.Print("/bgv debug - " .. L["debug mode, and print the Great Vault's slots"])
     Utils.Print("/bgv refresh - " .. L["read the Great Vault again"])
     Utils.Print("/bgv perf - " .. L["what the addon costs: CPU, memory and animations"])
+    Utils.Print("/bgv news - " .. L["what's new in the addon"])
     Utils.Print("/bgv reset - " .. L["reset settings"])
 end
 
@@ -311,6 +312,10 @@ local function HandleSlash(message)
         BGV.PrintPerformance()
     elseif command == "reset" then
         BGV.ResetSettings()
+    elseif command == "news" then
+        if BGV.News then
+            BGV.News.Show()
+        end
     else
         Utils.Print(L["Unknown command."])
         PrintHelp()

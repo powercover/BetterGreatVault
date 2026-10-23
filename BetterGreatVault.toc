@@ -40,5 +40,6 @@ ItemLinks.lua
 LootTable.lua
 SettingsPreview.lua
 Settings.lua
+News.lua
 Minimap.lua
 Core.lua
