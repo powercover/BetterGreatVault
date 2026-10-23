@@ -92,3 +92,18 @@ Both IDs go into the TOC (`## X-Curse-Project-ID` and `## X-Wago-ID`) for automa
 `logo.png`, `logo-transparent.png`, `emblem.gif` and `emblem.webp` are the addon's own emblem,
 drawn at full size from the same art as its textures; the animation replays the settings page's
 spin frame by frame.
+
+## Gallery addresses
+
+The images as uploaded to each site's gallery: `description-curseforge.md` and `description-wago.md`
+are `description.md` with these in place of the placeholders (no emblem at the top on either site).
+
+| Placeholder | CurseForge | Wago |
+| --- | --- | --- |
+| `IMAGE_COMPARE` | https://media.forgecdn.net/attachments/2011/266/compare-png.png | https://cdn.wago.io/gallery/4YJCWppVUXiVVI4Ixt0WaTVyai0x6OgnTrgnrZ8B.png |
+| `IMAGE_REVEAL` | https://media.forgecdn.net/attachments/2011/268/reveal-png.png | https://cdn.wago.io/gallery/CMgb1uqoBKBFwuINBZSFslIilhIarey4Ctkj6K2C.png |
+| `IMAGE_OPENINGS` | https://media.forgecdn.net/attachments/2011/267/openings-png.png | https://cdn.wago.io/gallery/WCyn3erycerOfC9CEumLEscA3yqiv4oa5pws3nTX.png |
+| `IMAGE_LOOT_TABLE` | https://media.forgecdn.net/attachments/2011/269/loot-table-png.png | https://cdn.wago.io/gallery/0oqKWoqEj5YSBRPWStabAz4921ybiFPXe9iV3iAH.png |
+| `IMAGE_DATABASE` | https://media.forgecdn.net/attachments/2011/270/database-png.png | https://cdn.wago.io/gallery/cupfw3j4O8ZyF6oKF0wHrbnYFGAPWH8HfZaFo1AC.png |
+| `IMAGE_MINIMAP` | https://media.forgecdn.net/attachments/2011/271/minimap-png.png | https://cdn.wago.io/gallery/e1kJ3fK1E0UPOHheWDdyiqBXC136q7zw8iObvNE6.png |
+| `IMAGE_SETTINGS` | https://media.forgecdn.net/attachments/2096/208/settings-png.png | https://cdn.wago.io/gallery/2o23tWaJlfhYRWyAmVFtNfwwDa17rWZs37mVv0It.png |
