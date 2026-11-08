@@ -1702,10 +1702,14 @@ local function InClassBis(itemID, specs)
     return false
 end
 
+-- The season set's pieces for `classID`, and whether the journal is still loading the sets'
+-- pieces. Another class's sets are listed at once but come without their pieces at first (the
+-- Item Sets tab waits for LOOT_JOURNAL_ITEM_UPDATE): read so early, they'd seem to hold no set, so
+-- they're read again for a few seconds before no set is kept.
 local function SeasonSetItems(classID)
     local known = tierSetItems[classID]
     if known then
-        return known
+        return known, false
     end
     local journal = C_LootJournal
     if not (journal and type(journal.GetItemSets) == "function" and type(journal.GetItemSetItems) == "function")
@@ -1719,11 +1723,15 @@ local function SeasonSetItems(classID)
     end
     -- The set with the most pieces named, then the highest item level, then the newest.
     local best, bestNamed, bestLevel, bestSetID, bestName
+    local unloaded = false
     for _, set in ipairs(sets) do
         local level = Utils.IsUsableNumber(set.itemLevel) and set.itemLevel or 0
         local setID = Utils.IsUsableNumber(set.setID) and set.setID or 0
         local pieces, slots, named = {}, {}, 0
         local items = Utils.Call(journal.GetItemSetItems, setID)
+        if type(items) ~= "table" or #items == 0 then
+            unloaded = true
+        end
         for _, item in ipairs(type(items) == "table" and items or {}) do
             local itemID = type(item) == "table" and item.itemID
             if Utils.IsUsableNumber(itemID) then
@@ -1743,6 +1751,11 @@ local function SeasonSetItems(classID)
             best, bestNamed, bestLevel, bestSetID, bestName = pieces, named, level, setID, set.name
         end
     end
+    local tryKey = "tierset:" .. tostring(classID)
+    if not best and unloaded and not GiveUp(tryKey, FAILED_READ_TRIES, ITEM_WAIT_SECONDS) then
+        return {}, true
+    end
+    readAttempts[tryKey] = nil
     -- Kept even when no set is named, so the sets aren't read again on every pass.
     tierSetItems[classID] = best or {}
     tierSetNames[classID] = best and Utils.IsUsableString(bestName) and bestName or nil
@@ -1756,8 +1769,9 @@ local function TierEntries(classIDs)
     for _, classID in ipairs(classIDs) do
         local entries = tierEntries[classID]
         if not entries then
-            local built, missing = {}, false
-            for _, itemID in ipairs(SeasonSetItems(classID)) do
+            local built = {}
+            local setItems, missing = SeasonSetItems(classID)
+            for _, itemID in ipairs(setItems) do
                 if IsVaultGear(itemID) then
                     local equipLoc, icon, name, quality = ItemFields(itemID)
                     if icon and icon ~= 0 and type(name) == "string" and name ~= "" then

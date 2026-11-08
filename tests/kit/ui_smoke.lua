@@ -1933,9 +1933,12 @@ do
   }
   local PIECES = { [10] = 7101, [20] = 7201, [30] = 7301, [40] = 7401, [50] = 7501, [60] = 7601 }
   local SLOTS = { "INVTYPE_HEAD", "INVTYPE_SHOULDER", "INVTYPE_CHEST", "INVTYPE_HAND", "INVTYPE_LEGS" }
+  -- as in the game, another class's set comes without its pieces the first time it's read
+  local mageRead = false
   C_LootJournal = {
     GetItemSets = function(classID) return SETS[classID] or {} end,
     GetItemSetItems = function(setID)
+      if setID == 40 and not mageRead then mageRead = true; return {} end
       local items = {}
       for index = 1, (setID == 30 and 3 or 5) do items[index] = { itemID = PIECES[setID] + index - 1, icon = 9, invType = index } end
       return items
@@ -1975,6 +1978,8 @@ do
   ucheck(#ids == 5 and set[1].itemID == 7201 and set[5].itemID == 7205,
     "the season's full set (the one the BiS lists name, not the Arena set above it): " .. table.concat(ids, ","))
   ucheck(sources["Warrior"] and levels[334] and not levels[344], "raid Mythic set pieces at 334, not the ceiling, grouped by class")
+  local _, setPending = R.DatabaseItems("tier", "mplus:10", 0, 0)
+  ucheck(setPending, "a class set whose pieces haven't loaded yet: still loading, not kept as no set")
   ids, sources, levels = Tier(R.DatabaseItems("tier", "mplus:10", 0, 0))
   ucheck(#ids == 10 and sources["Warrior"] and sources["Mage"] and levels[318], "all classes at +10: a group per class: " .. #ids)
   -- a class whose Best-in-Slot lists name none of its sets' pieces shows no set, not its Arena set
